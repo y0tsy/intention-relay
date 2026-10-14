@@ -24,16 +24,13 @@ use intention_proto::{
     WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, ThemeDto, TimestampDto,
-    ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto, UsageDto, run_status_is_terminal,
+    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, TimestampDto, UsageDto,
+    run_status_is_terminal,
 };
 
 mod sqlite;
 
 pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
-
-/// The maximum durable tool result content size in bytes.
-const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
 
 /// The maximum durable user turn content size in bytes.
 ///
@@ -49,120 +46,6 @@ const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
 /// are reported through the projection's omitted count instead of being
 /// materialised.
 const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
-
-/// Typed durable evidence of one committed local tool result.
-///
-/// `content` carries the bounded canonical projection of the typed result as
-/// selected by the caller; it never carries credentials, absolute workspace
-/// roots, or backend resources. `metadata` carries approved credential-free
-/// structured entries such as truncation or process-exit evidence.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolResultEvidenceDto {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: String,
-    status: ToolResultStatusDto,
-    content: String,
-    metadata: Vec<ToolResultMetadataEntryDto>,
-    occurred_at: TimestampDto,
-}
-
-impl ToolResultEvidenceDto {
-    /// Creates typed tool result evidence with bounded canonical content.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the tool identity is blank, the content
-    /// is blank, oversized, or contains interior NUL bytes, or the metadata keys
-    /// are duplicated.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The flat durable tool-result payload keeps one validating constructor."
-    )]
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: impl Into<String>,
-        status: ToolResultStatusDto,
-        content: impl Into<String>,
-        metadata: Vec<ToolResultMetadataEntryDto>,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        let tool_id = tool_id.into();
-        let content = content.into();
-        if tool_id.trim().is_empty() || content.trim().is_empty() || content.contains('\0') {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "tool result needs a tool identity and non-empty safe content",
-            ));
-        }
-        if content.len() > MAX_TOOL_RESULT_CONTENT_BYTES {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "tool result content exceeds the durable canonical size limit",
-            ));
-        }
-        let mut seen_keys = std::collections::HashSet::with_capacity(metadata.len());
-        if metadata.iter().any(|entry| !seen_keys.insert(entry.key())) {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_metadata",
-                "tool result metadata keys must be unique",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            status,
-            content,
-            metadata,
-            occurred_at,
-        })
-    }
-    /// Returns the owning durable session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the run that executed the tool call.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the identified tool invocation.
-    #[must_use]
-    pub const fn call_id(&self) -> ToolCallId {
-        self.call_id
-    }
-    /// Returns the wire tool identity that produced the result.
-    #[must_use]
-    pub fn tool_id(&self) -> &str {
-        &self.tool_id
-    }
-    /// Returns the terminal outcome recorded for the result.
-    #[must_use]
-    pub const fn status(&self) -> ToolResultStatusDto {
-        self.status
-    }
-    /// Returns the bounded canonical durable result content.
-    #[must_use]
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-    /// Returns the approved structured metadata entries.
-    #[must_use]
-    pub fn metadata(&self) -> &[ToolResultMetadataEntryDto] {
-        &self.metadata
-    }
-    /// Returns the durable evidence event time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
 
 /// Immutable outcome for an accepted user turn after committing it durably.
 #[expect(
@@ -462,36 +345,6 @@ pub trait StorageRepositoryDto {
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto>;
 
-    /// Commits one tool result with its answering transcript row in one
-    /// transaction and returns the committed row.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the answering row is not a `tool_result`
-    /// row for the same session, run, call, and tool identity, a not-found or
-    /// conflict error when the scoped call cannot record its result, or an
-    /// unavailable error when storage fails.
-    fn write_tool_result(
-        &self,
-        evidence: ToolResultEvidenceDto,
-        message: NewMessageDto,
-    ) -> DtoResult<MessageProjectionDto>;
-
-    /// Loads typed evidence durably recorded for one tool call.
-    ///
-    /// # Errors
-    ///
-    /// Returns `tool_result_not_found` when no durable evidence exists for the
-    /// supplied identity, or `tool_result_unavailable` when durable evidence
-    /// cannot be read. No partial evidence, credentials, or backend resources
-    /// cross this DTO-only boundary on failure.
-    fn load_tool_result(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-    ) -> DtoResult<ToolResultEvidenceDto>;
-
     /// Loads the persisted credential-free configuration selected for a matching run.
     ///
     /// # Errors
@@ -631,26 +484,6 @@ pub trait StorageRepositoryDto {
         let messages = self.load_recent_messages(session_id, message_limit)?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
-
-    /// Loads the durable terminal theme override.
-    ///
-    /// `None` means no override was ever stored: the caller answers from the
-    /// resolved configuration instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when durable storage cannot be read.
-    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>>;
-
-    /// Commits the durable terminal theme override in exactly one transaction.
-    ///
-    /// The settings row is a singleton, so a later set replaces the earlier
-    /// value instead of recording a second row.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the override cannot be committed.
-    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()>;
 
     /// Records an already credential-free configuration revision snapshot.
     ///

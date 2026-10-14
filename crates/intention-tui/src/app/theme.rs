@@ -1,62 +1,98 @@
-//! The colour theme one terminal session renders its palette from, and the
-//! picker transitions that select it.
+//! The colour themes one terminal session renders its palette from, the
+//! preference that selects one, and the picker transitions that move it.
 //!
-//! The theme is the terminal's own value: the light theme is the warm
-//! off-white surface every session starts in, and the dark theme is the
-//! neutral graphite surface for a terminal that paints on a dark background.
-//! The two names are the whole vocabulary here; the palette module turns one
-//! of them into the roles a frame paints, so no view reads the theme itself.
+//! Two vocabularies describe the terminal's colour here. [`Theme`] is the
+//! palette a frame paints: the light theme is the warm off-white surface, and
+//! the dark theme is the neutral graphite surface for a terminal that paints on
+//! a dark background. [`ThemePreference`] is what the user asked for - one of
+//! those palettes, or [`ThemePreference::Auto`], which leaves the palette to
+//! the launch's own environment detection.
 //!
-//! [`Theme::ALL`] is the whole vocabulary: the registry derives `/theme`'s
-//! declared values from it, so a name this type does not carry is not a name
-//! the command surface can declare, and a declared value always applies its
-//! theme.
+//! [`ThemePreference::ALL`] is the whole preference vocabulary: the registry
+//! derives `/theme`'s declared values from it and the picker draws one row per
+//! entry, so a name this type does not carry is not a name either surface can
+//! declare, and a declared value always applies its preference.
+//! [`ThemePreference::parse`] reads the durable `auto`/`light`/`dark` spelling
+//! the front end's local settings file stores.
 //!
-//! The committed theme is the daemon's value, never the terminal's guess: the
-//! settings read and every selection round trip through the daemon, and only
-//! the accepted reply moves it. A preview is the one local value - the picker's
-//! live candidate - and it is never persisted.
+//! The committed preference is this front end's value: a selection applies it
+//! in memory at once and asks for its local rewrite, and only the picker's live
+//! preview sits beside it, never persisted.
 
-use intention_proto::{ErrorDto, ThemeDto};
+use intention_proto::{DtoResult, ErrorDto};
 
 use super::{AppState, Effect, Screen};
 
-/// The colour theme a terminal front end renders its palette from.
-///
-/// The default is [`Theme::Light`], the theme the terminal has always drawn:
-/// a session that was never told otherwise keeps its warm off-white surface.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// The colour palette a terminal front end renders with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Theme {
-    /// The warm off-white theme every session starts in.
-    #[default]
+    /// The warm off-white palette.
     Light,
-    /// The neutral graphite theme for a terminal that paints on a dark
-    /// background.
+    /// The neutral graphite palette.
     Dark,
 }
 
 impl Theme {
-    /// Every theme, in the order the picker draws its rows.
+    /// Every palette, in the order the vocabulary is declared.
     pub const ALL: [Self; 2] = [Self::Light, Self::Dark];
+}
 
-    /// Returns the wire vocabulary value that spells this theme.
+/// The theme a user asked for: one palette, or detection.
+///
+/// The default is [`ThemePreference::Auto`]: a launch that stores no preference
+/// keeps asking the environment, so a terminal that changes with the desktop
+/// carries the front end with it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ThemePreference {
+    /// Leave the palette to the launch's own environment detection.
+    #[default]
+    Auto,
+    /// Paint the light palette whatever the environment answers.
+    Light,
+    /// Paint the dark palette whatever the environment answers.
+    Dark,
+}
+
+impl ThemePreference {
+    /// Every preference, in the order the picker draws its rows.
+    pub const ALL: [Self; 3] = [Self::Auto, Self::Light, Self::Dark];
+
+    /// Returns the durable spelling of this preference.
     ///
-    /// The conversion is const so a registry derived from [`Self::ALL`] takes
-    /// its declared spelling from [`ThemeDto::as_str`], and the `From<Theme>`
-    /// conversion delegates here, so a theme and its wire value are matched in
-    /// one place.
+    /// The spelling is what the local settings file stores and what the
+    /// `/theme` command declares, so the file, the command surface, and the
+    /// picker can never disagree about what the three preferences are called.
     #[must_use]
-    pub const fn dto(self) -> ThemeDto {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Light => ThemeDto::Light,
-            Self::Dark => ThemeDto::Dark,
+            Self::Auto => "auto",
+            Self::Light => "light",
+            Self::Dark => "dark",
         }
     }
 
-    /// Returns the theme's display name, as the picker's row spells it.
+    /// Parses the durable spelling of one preference.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error when `value` is not a declared spelling.
+    pub fn parse(value: &str) -> DtoResult<Self> {
+        match value {
+            "auto" => Ok(Self::Auto),
+            "light" => Ok(Self::Light),
+            "dark" => Ok(Self::Dark),
+            _ => Err(ErrorDto::validation(
+                "invalid_tui_theme",
+                "tui theme must be \"auto\", \"light\", or \"dark\"",
+            )),
+        }
+    }
+
+    /// Returns the preference's display name, as the picker's row spells it.
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::Auto => "Auto",
             Self::Light => "Light",
             Self::Dark => "Dark",
         }
@@ -66,57 +102,59 @@ impl Theme {
     #[must_use]
     pub const fn description(self) -> &'static str {
         match self {
+            Self::Auto => "follow the terminal's own background",
             Self::Light => "the warm off-white surface",
             Self::Dark => "the neutral graphite surface",
         }
     }
 
-    /// Returns the theme one picker row above this one, stopping at the first.
+    /// Returns the preference one picker row above this one, stopping at the
+    /// first.
     ///
-    /// The picker walks its two rows without wrapping, exactly as the command
+    /// The picker walks its three rows without wrapping, exactly as the command
     /// band's highlight and the sessions browser's cursor walk theirs.
     #[must_use]
     pub const fn previous(self) -> Self {
         match self {
-            Self::Light => Self::Light,
+            Self::Auto => Self::Auto,
+            Self::Light => Self::Auto,
             Self::Dark => Self::Light,
         }
     }
 
-    /// Returns the theme one picker row below this one, stopping at the last.
+    /// Returns the preference one picker row below this one, stopping at the
+    /// last.
     #[must_use]
     pub const fn next(self) -> Self {
         match self {
+            Self::Auto => Self::Light,
             Self::Light => Self::Dark,
             Self::Dark => Self::Dark,
         }
     }
-}
 
-impl From<ThemeDto> for Theme {
-    /// Returns the theme one wire value names.
-    fn from(theme: ThemeDto) -> Self {
-        match theme {
-            ThemeDto::Light => Self::Light,
-            ThemeDto::Dark => Self::Dark,
+    /// Returns the palette this preference paints.
+    ///
+    /// `detected` is what the launch's environment detection answered; it
+    /// decides for [`ThemePreference::Auto`] and is ignored by a preference
+    /// that names a palette itself.
+    #[must_use]
+    pub const fn theme(self, detected: Theme) -> Theme {
+        match self {
+            Self::Auto => detected,
+            Self::Light => Theme::Light,
+            Self::Dark => Theme::Dark,
         }
     }
 }
 
-impl From<Theme> for ThemeDto {
-    /// Returns the wire value one theme is spelled as.
-    fn from(theme: Theme) -> Self {
-        theme.dto()
-    }
-}
-
 impl AppState {
-    /// Opens the theme picker on the committed theme.
+    /// Opens the theme picker on the committed preference.
     ///
     /// The picker is a screen of the same one window: it takes the region above
     /// the input block out of the transcript, so the input block and the detail
     /// line keep their rows. A preview from an earlier visit is dropped, so the
-    /// picker always opens showing what the daemon accepted, and a notice a
+    /// picker always opens showing the committed preference, and a notice a
     /// chat command left does not outlive the chat screen it belonged to.
     pub(super) fn request_theme_picker(&mut self) -> Vec<Effect> {
         self.screen = Screen::Theme;
@@ -125,50 +163,50 @@ impl AppState {
         Vec::new()
     }
 
-    /// Applies the daemon's effective terminal settings.
+    /// Reports a local rewrite of a selected theme that failed.
     ///
-    /// The daemon is the authority for the committed theme: whether this
-    /// answers the startup read or a selection, the accepted value becomes the
-    /// committed theme, and a fresh answer settles any local preview.
-    pub(super) fn apply_settings_received(&mut self, theme: ThemeDto) -> Vec<Effect> {
-        self.theme = Theme::from(theme);
-        self.theme_preview = None;
-        self.error = None;
-        Vec::new()
-    }
-
-    /// Reports a settings read or theme selection the daemon rejected.
-    ///
-    /// A rejected selection never reaches the committed theme, and the
-    /// candidate it previewed is dropped with the failure, so the screen
-    /// returns to the theme the daemon still carries while the error line
-    /// names why.
-    pub(super) fn apply_settings_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
-        self.theme_preview = None;
+    /// The selection itself already moved the committed preference - the local
+    /// file is what carries it to the next start - so the failure becomes the
+    /// error line and never a rollback of the theme on screen.
+    pub(super) fn apply_theme_persist_failed(&mut self, error: &ErrorDto) -> Vec<Effect> {
         self.apply_failure(error)
     }
 
-    /// Selects one theme: the daemon is asked to persist it.
+    /// Selects one theme preference: it applies at once and its local file is
+    /// rewritten.
     ///
-    /// The committed theme never moves optimistically - it changes only when
-    /// the accepted reply arrives as [`super::Action::SettingsReceived`] - and
-    /// the selection previews while the round trip is in flight, so the screen
-    /// already shows the candidate. The picker closes on its own Enter: the
-    /// selection is that screen's commit.
-    pub(super) fn apply_theme_selected(&mut self, theme: Theme) -> Vec<Effect> {
-        self.theme_preview = Some(theme);
+    /// The preference is this front end's own value, so the committed theme
+    /// moves with the selection instead of waiting for a round trip; the effect
+    /// asks the front end to rewrite the local settings file, so the choice
+    /// survives the next start. Selecting [`ThemePreference::Auto`] stores the
+    /// request to follow detection and clears any spelled-out palette. The
+    /// picker closes on its own Enter: the selection is that screen's commit.
+    /// Selecting the preference already committed asks for nothing, because
+    /// there is nothing to write.
+    pub(super) fn apply_theme_selected(&mut self, preference: ThemePreference) -> Vec<Effect> {
+        self.theme_preview = None;
         if self.screen == Screen::Theme {
             self.screen = Screen::Chat;
         }
-        vec![Effect::PersistTheme(theme)]
+        if self.theme_preference == preference {
+            return Vec::new();
+        }
+        self.theme_preference = preference;
+        self.theme = preference.theme(self.detected_theme);
+        vec![Effect::PersistTheme(preference)]
     }
 
-    /// Previews one theme while the picker's highlight sits on it.
+    /// Previews one preference while the picker's highlight sits on it.
     ///
     /// The preview is local and never persisted: it is what makes the whole
-    /// window repaint through the candidate before the daemon has been asked.
-    pub(super) const fn apply_theme_previewed(&mut self, theme: Theme) -> Vec<Effect> {
-        self.theme_preview = Some(theme);
+    /// window repaint through a candidate before the picker's Enter commits it.
+    /// [`ThemePreference::Auto`] previews as the palette detection answered, so
+    /// the whole-window repaint shows what returning to detection would paint.
+    pub(super) const fn apply_theme_previewed(
+        &mut self,
+        preference: ThemePreference,
+    ) -> Vec<Effect> {
+        self.theme_preview = Some(preference);
         Vec::new()
     }
 
@@ -187,46 +225,98 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::Theme;
+    use super::{Theme, ThemePreference};
 
     #[test]
     fn the_picker_rows_walk_without_wrapping() {
         assert_eq!(
-            Theme::ALL,
-            [Theme::Light, Theme::Dark],
-            "the rows are the two themes in picker order"
+            ThemePreference::ALL,
+            [
+                ThemePreference::Auto,
+                ThemePreference::Light,
+                ThemePreference::Dark
+            ],
+            "the rows are the three preferences in picker order"
         );
         assert_eq!(
-            Theme::Light.previous(),
-            Theme::Light,
+            ThemePreference::Auto.previous(),
+            ThemePreference::Auto,
             "the first row is the top"
         );
-        assert_eq!(Theme::Light.next(), Theme::Dark);
-        assert_eq!(Theme::Dark.previous(), Theme::Light);
+        assert_eq!(ThemePreference::Auto.next(), ThemePreference::Light);
+        assert_eq!(ThemePreference::Light.previous(), ThemePreference::Auto);
+        assert_eq!(ThemePreference::Light.next(), ThemePreference::Dark);
+        assert_eq!(ThemePreference::Dark.previous(), ThemePreference::Light);
         assert_eq!(
-            Theme::Dark.next(),
-            Theme::Dark,
+            ThemePreference::Dark.next(),
+            ThemePreference::Dark,
             "the last row is the bottom"
         );
     }
 
     #[test]
-    fn every_theme_carries_its_own_row_vocabulary() {
-        for theme in Theme::ALL {
-            assert!(!theme.label().trim().is_empty());
+    fn every_preference_carries_its_own_row_vocabulary() {
+        for preference in ThemePreference::ALL {
+            assert!(!preference.label().trim().is_empty());
             assert!(
-                !theme.label().chars().any(char::is_whitespace),
-                "a label stays one word: {theme:?}"
+                !preference.label().chars().any(char::is_whitespace),
+                "a label stays one word: {preference:?}"
             );
             assert!(
-                !theme.description().trim().is_empty(),
-                "a row describes the theme it offers: {theme:?}"
+                !preference.description().trim().is_empty(),
+                "a row describes the preference it offers: {preference:?}"
             );
         }
         assert_ne!(
-            Theme::Light.description(),
-            Theme::Dark.description(),
-            "the two rows do not describe the same surface"
+            ThemePreference::Light.description(),
+            ThemePreference::Dark.description(),
+            "the two palette rows do not describe the same surface"
         );
+        assert_ne!(
+            ThemePreference::Auto.description(),
+            ThemePreference::Light.description(),
+            "the detection row does not describe a palette of its own"
+        );
+    }
+
+    #[test]
+    fn every_preference_parses_from_its_own_durable_spelling() {
+        for preference in ThemePreference::ALL {
+            assert_eq!(
+                ThemePreference::parse(preference.as_str()).expect("a declared spelling parses"),
+                preference,
+                "the durable spelling names its preference"
+            );
+        }
+        for value in ["", "Light", "midnight", " dark"] {
+            let error = ThemePreference::parse(value).expect_err("an undeclared spelling fails");
+            assert_eq!(error.code(), "invalid_tui_theme", "{value:?} is rejected");
+        }
+    }
+
+    #[test]
+    fn auto_paints_what_detection_answered_and_a_spelled_palette_paints_its_own() {
+        assert_eq!(
+            ThemePreference::Auto.theme(Theme::Light),
+            Theme::Light,
+            "detection decides for auto"
+        );
+        assert_eq!(
+            ThemePreference::Auto.theme(Theme::Dark),
+            Theme::Dark,
+            "detection decides for auto whatever it answers"
+        );
+        for detected in Theme::ALL {
+            assert_eq!(
+                ThemePreference::Light.theme(detected),
+                Theme::Light,
+                "a spelled light palette never follows detection"
+            );
+            assert_eq!(
+                ThemePreference::Dark.theme(detected),
+                Theme::Dark,
+                "a spelled dark palette never follows detection"
+            );
+        }
     }
 }

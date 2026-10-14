@@ -8,12 +8,6 @@
 //! the same durable run is replayed as current state without re-executing the
 //! tool.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Client end-to-end fixtures use assertion conveniences for precise diagnostics."
-)]
-
 use std::process::Child;
 use std::time::{Duration, Instant};
 
@@ -21,7 +15,7 @@ use intention_client::{SessionStreamClient, SessionStreamSubscription, StreamSte
 use intention_proto::{
     CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
     RunModeDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto,
-    ThemeDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
+    ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{
@@ -890,39 +884,4 @@ async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
     );
     assert_eq!(host.provider.request_count(), 2);
     assert_eq!(host.provider.excess_count(), 0);
-}
-
-#[tokio::test]
-async fn tui_theme_survives_a_daemon_restart() {
-    let mut host = E2eHost::new(None, "{}");
-    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
-
-    // The fixture configuration document declares no [tui] section, so the
-    // first answer is the resolved light default.
-    assert_eq!(
-        client.tui_settings().await.expect("settings read").theme(),
-        ThemeDto::Light
-    );
-    let accepted = client
-        .set_tui_theme(ThemeDto::Dark)
-        .await
-        .expect("the daemon accepts the theme");
-    assert_eq!(accepted.theme(), ThemeDto::Dark);
-    assert_eq!(
-        client.tui_settings().await.expect("settings read").theme(),
-        ThemeDto::Dark
-    );
-
-    // The restarted process answers the durable override, not the document.
-    host.restart_daemon();
-    let client = wait_until_ready(&host.endpoint, Instant::now() + Duration::from_secs(20)).await;
-    assert_eq!(
-        client
-            .tui_settings()
-            .await
-            .expect("settings read after the restart")
-            .theme(),
-        ThemeDto::Dark,
-        "the stored theme survives a daemon restart"
-    );
 }

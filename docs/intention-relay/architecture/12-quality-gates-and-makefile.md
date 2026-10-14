@@ -1,112 +1,148 @@
 # Quality Gates and Makefile
 
 **Current policy.** The pinned Rust toolchain and external-tool manifest, the root `Makefile`, Cargo configuration and
-committed lockfile, machine-readable policies, quality checkers, and the CI workflow are implemented and blocking, and
-the policy below is the v1 quality policy. Future milestones extend it only when they add a crate, feature combination,
-adapter, quality tool, or an explicitly approved stronger check.
+committed lockfile, the machine-readable policies, the lint configuration, and the CI workflow are implemented and
+blocking, and the policy below is the v1 quality policy. Future milestones extend it only when they add a crate, feature
+combination, adapter, or an explicitly approved stronger check.
 
 ## Scope
 
 The policy covers pinned toolchains and external quality tools; formatting and strict pragmatic linting; per-crate
-coverage tiers; tests, doctests, documentation, and architecture checks; dependency,
-license, advisory, unused-dependency, stale-dependency, and manifest hygiene; the Makefile contract and CI entry point;
-and explicit, reviewable exception handling. It complements, and does not replace, [Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract, architecture,
-failure-path, or outcome tests.
+coverage floors; tests, doctests, and rustdoc; dependency, license, advisory, and manifest hygiene; the Makefile
+contract and CI entry point; and explicit, reviewable exception handling. Architecture rules that no mechanism
+can decide are review responsibilities rather than gates. The policy complements, and does not replace, [Test-Driven
+Delivery and Verification](10-test-driven-delivery-and-verification.md): numeric coverage never replaces contract,
+architecture, failure-path, or outcome tests.
 
 ## Quality model
 
 - `make quick` is the fast inner-loop signal: tools check, `fmt-check`, lint, and the test suite.
 - `make check` is the complete non-mutating source gate; `make verify` adds coverage and the dependency/supply-chain
   gates; `make ci` aliases the full gate so local and CI behavior cannot drift.
-- `.github/workflows/quality.yml` runs the blocking gate as parallel matrix jobs through the per-job aliases:
-  `ci-lint-arch` (formatting, lint, docs, architecture, and the checker self-tests) and `ci-test` on Linux and Windows,
-  `ci-coverage-default` and `ci-deps` on Linux. Branch protection requires the six resulting status checks.
-- CI installs exact tool releases through checksum-verified actions, scopes tools per job, uses `rust-cache`, the mold
-  linker on Linux jobs whose flags request it, and sccache for coverage builds.
+- `.github/workflows/quality.yml` runs the blocking gate in four parallel matrix jobs through the per-job aliases:
+  `ci-lint-arch` on Linux (formatting, native lint, the Windows cross-target lint, doctests, and rustdoc),
+  `ci-coverage-default` and `ci-deps` on Linux, and `ci-test` on Windows. Linux test execution belongs to
+  `ci-coverage-default`, which runs the same instrumented suite `make test` would, so no separate Linux test job
+  duplicates it. The Windows job runs `PLATFORM_TESTS`, the subset whose behavior differs by platform, because the
+  Linux run already covers the rest and the Windows-target cross-lint compiles every Windows code path. Branch
+  protection requires the four resulting status checks.
+- CI installs exact tool releases through checksum-verified actions, installs per job only the tools that job runs,
+  and caches per phase according to what that phase reuses. `lint-arch`, `test`, and `coverage-default` build a target
+  tree and keep it warm under one stable key per phase, so each run replaces its phase's entry instead of adding
+  another generation and the repository cache budget is not consumed by copies of the same tree. The coverage job's
+  entry is its instrumented tree: `cargo llvm-cov --no-report` leaves that tree in place, so a restored cache turns the
+  gate's build into a no-op, and sccache remains the fallback that serves the compiled objects when the tree is cold.
+  `deps` compiles nothing and needs only a lockfile-keyed crate-source entry. `mold` comes from its own pinned action,
+  and only the jobs whose flags select it install it and pass `-fuse-ld=mold`, so it is never made the system default
+  linker; the Windows job selects LLD with `-C linker=` instead of the MSVC `link.exe`. The MinGW cross compiler and
+  `nasm` remain host prerequisites of the Windows-target lint alone.
 - The `cache-cleanup` workflow prunes every non-`main` Actions cache and every `main` cache older than seven days after
-  each merge and on a weekly schedule, so the shared rust-cache/sccache space cannot fill and start failing new writes.
-- The opt-in `real-api-e2e` workflow supports the gate without ever being part of it.
+  each merge, on a weekly schedule, and on demand, so the shared cache space cannot fill and start failing new writes.
+- The opt-in live-provider run is a local target, `make e2e-real-api`, and never part of the gate.
 - The gates never install tools, update the lockfile, or resolve dependencies differently from the committed state.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
-targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `test`, `docs-check`, `architecture`,
-`quality-tests`, `coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job
-aliases, and the opt-in `e2e-real-api`.
+targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `lint-windows`, `test`, `doctest`,
+`doc`, `coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the
+opt-in `e2e-real-api`.
 
 ## Reproducible tooling
 
 - `make bootstrap-tools` is the sole installer for external quality tools; it is explicitly mutating and networked, and
   it installs only exact pinned versions.
-- `make tools-check` validates the pinned Rust version, required components, and external tool availability with exact
-  versions; it is non-mutating and CI scopes it per job through `check_tools.py --scope`.
+- `make tools-check` validates the pinned Rust version, the pinned components, and every pinned tool at its exact
+  version; it is non-mutating. Each gate validates the subset it runs by passing its pins to `check_tools.py`
+  (`--component`, `--tool`), so a gate fails on a missing tool it needs and never on one it does not.
 - Pinned versions and invocation policy live in `quality/tools.toml`; the toolchain is pinned by `rust-toolchain.toml`;
   the lockfile is committed and gates run with `--locked`. A missing or mismatched tool is a typed quality-gate failure,
   never an implicit install.
-- The pinned nightly is single-sourced: the Python runners read it from `quality/tools.toml` through
-  `quality/toolchains.py`, and `make tools-check` fails when a workflow `toolchain:` literal or a pinned tool's
-  `+nightly-*` selector drifts from that value.
+- The pinned stable toolchain is single-sourced: the Python runners read it from `quality/tools.toml`, and
+  `make tools-check` fails when a workflow `toolchain:` literal drifts from that value.
+- The pinned toolchain also carries the `x86_64-pc-windows-gnu` target, so the cross-target lint has one declared
+  source. MinGW (`gcc-mingw-w64-x86-64`) and `nasm` are host prerequisites of that pass alone; CI installs them for the
+  lint job, and locally they are needed only to run `make lint-windows` or `make ci-lint-arch` by hand.
 
 ## Formatting and lint policy
 
 - `rustfmt` is mandatory; `make fmt-check` fails on formatting drift and never modifies files.
 - All warnings are errors in every non-mutating verification target. `unsafe` is
-  denied by default, and production code denies unreviewed `unwrap`, `expect`, `panic`, `todo!`, `unimplemented!`,
-  `dbg!`, direct stdout/stderr printing, direct process termination, and memory-forget patterns.
+  denied by default, and production code denies unreviewed `unwrap`, `todo!`, `unimplemented!`, `dbg!`, direct process
+  termination, and memory-forget patterns. `expect`, `panic`, and direct stdout/stderr printing are allowed: the
+  daemon's and terminal's own logs are an observable surface, and a human-readable `expect` message beats a silent
+  error path.
 - A lint suppression uses a narrow local scope with a mandatory `reason` that explains why it is safe; test-only
   exceptions are also local and reasoned.
-- The strict pragmatic Clippy baseline (Clippy defaults, `nursery`, the selected `pedantic` and `restriction` lints) is
-  configured in the root Cargo lint configuration. The policy deliberately does not deny all `pedantic` or all
-  `restriction` lints, because some are subjective or ergonomically harmful.
-- `make architecture` enforces the architectural protections encoded in `quality/architecture.toml` and implemented by
-  `quality/check_architecture.py`: the per-crate role, responsibility, and named integration test target declarations,
-  the exact allowed cross-crate edge and external dependency sets (including the non-production test crates), the
-  acyclic production dependency graph, private provider-SDK ownership, DTO-only boundaries, no process-CWD fallback,
-  forbidden escape hatches, and the closed ordering-authority set. Every declared set is compared for equality against
-  Cargo metadata, so an undeclared edge or dependency fails exactly like a stale declaration. Development-dependency
-  edges follow Cargo and are excluded from cycle detection: a shared test-fixture crate may depend on the crate under
-  test without closing a production cycle, while a production dependency cycle still fails.
-- `make docs-check` resolves Markdown links across `docs/` and the root documents (`README.md`, `AGENTS.md`,
-  `THIRD_PARTY_NOTICES.md`), checks code-fence balance and Mermaid diagram headers, verifies that every `MAX_*`/`MIN_*`
-  bound a current-policy document names exists in `crates/`, rejects a removed wire name still spelled under `docs/`
-  or `crates/`, verifies that a placeholder constant a `@todo(core)` convention sentence names exists under `crates/`,
-  and rejects secret-shaped assignments. Prose counts, tables, code-path claims, and cross-document contradictions
-  remain review responsibilities.
-- `make quality-tests` runs the checkers' own focused self-tests over synthetic inputs, and it is part of `make check`.
+- The Clippy baseline denies `clippy::all`, the selected `pedantic` and `restriction` lints, and the five named
+  `nursery` lints kept for readability, logic, and clarity (`use_self`, `redundant_clone`, `option_if_let_else`,
+  `suspicious_operation_groupings`, `unused_peekable`); it is configured in the root Cargo lint configuration. The
+  `nursery` group itself is not denied, because it is unstable and churns between releases, and the policy
+  deliberately does not deny all `pedantic` or all `restriction` lints, because some are subjective or ergonomically
+  harmful.
+- The Windows target is linted beside the native one: `make lint-windows` runs the same Clippy command with
+  `--target x86_64-pc-windows-gnu`, so `#[cfg(windows)]` code, Windows-gated dependencies, and Windows-only items are
+  checked exactly like their Unix counterparts. Clippy stops before linking, so the pass needs the target's standard
+  library and a C compiler for the bundled C dependencies (`libsqlite3-sys`, `libmimalloc-sys`, `aws-lc-sys`, `ring`),
+  never a Windows linker; the target is pinned in `rust-toolchain.toml`, and CI installs MinGW for the pass. Local
+  `make quick`, `make check`, and `make verify` stay free of that prerequisite.
+- Two source rules are enforced by the compiler rather than by a text scan, through the root `clippy.toml` and the
+  denied `clippy::disallowed_types` and `clippy::disallowed_methods` lints: production code never names
+  `serde_json::Value` or `serde_json::Map` (DTO-first), and no code reaches for the process working directory instead
+  of `WorkspaceRoot`. Test targets and in-source test modules carry one reasoned `#[expect]` each where they decode raw
+  JSON by shape, and the headless line writer is the single allowed production site; because the attribute is an
+  expectation rather than an allowance, it fails as unfulfilled as soon as its last use disappears.
+- The structural boundary rules are enforced without a text scan: a crate that names a foreign implementation crate, a
+  provider SDK outside `intention-providers`, or a composition-only concrete implementation outside the daemon's
+  composition root fails to compile, and `cargo metadata` reports the same edges the manifests declare. Provider-SDK
+  ownership, DTO-only public boundaries, the acyclic production dependency graph, and the closed ordering-authority set
+  are review responsibilities, checked against the crate map and the dependency manifests rather than by a checker.
+- Documentation is verified by rustdoc: `make doc` builds the workspace documentation with `-D warnings`, so a broken
+  intra-doc link or an undocumented public item fails the gate. Markdown links, prose counts, tables, code-path claims,
+  and cross-document consistency are review responsibilities.
 
 ## Coverage policy
 
 Coverage is a blocking guardrail from the moment a crate contains production code; there is no grace baseline and no
-gradual ramp. Every collected crate gets one line-only `cargo llvm-cov` pass under the workspace's single feature
-configuration, and its own report must reach its tier floor; the workspace aggregate report is informational and never
-a threshold authority.
+gradual ramp. `make coverage` runs the instrumented workspace suite once, then writes one JSON report and checks every
+floor against it. `cargo llvm-cov report` merges the whole profiling set on each invocation, so asking it for one crate
+at a time pays that merge once per crate; the report carries every file's line summary, and a crate's line coverage is
+the covered-over-total ratio over its own files, so `quality/check_coverage_floors.py` computes the floors from the one
+artifact instead. The same artifact is the CI upload.
 
-`quality/coverage.toml` declares the numeric ladder and assigns every crate:
+`PLATFORM_TESTS` in the root `Makefile` selects the suites whose outcome can differ on Windows, and it is the whole
+set the Windows CI job runs: the named-pipe transport (`intention-transport`), the Windows process API and process
+lifecycle boundary (`intention-tools`, `intention-test-support`), the `APPDATA`/`LOCALAPPDATA`/`XDG_*` resolution and
+native absolute-path validation in `intention-client`, `intention-config`, and `intention-proto`, and the daemon's
+cross-process `client_e2e` suite, which is the one run that proves a real daemon serves over that transport. The
+remaining suites — `intention-storage`'s SQLite contracts, `intention-providers`, `intention-engine`, `intention-tui`,
+and the daemon's platform-independent suites — assert logic no platform-conditional branch reaches, so the Linux
+coverage run verifies them once and the cross-target lint compiles them for Windows. A new test that reaches a
+platform-conditional branch belongs in `PLATFORM_TESTS`; one that does not stays out.
 
-| Tier | Minimum line coverage | Crates |
-| --- | ---: | --- |
-| `core` | 75% | `intention-transport`, `intention-storage`, `intention-engine` |
-| `standard` | 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
-| `edge` | 20% | `intention-tui`, `intention-client` |
-| `exempt` | 0% (not collected) | `intention-proto` |
+The instrumented build tree is a cache, not a scratch artifact: `cargo llvm-cov --no-report` leaves it in place, so a
+second `make coverage` reuses it and only recompiles what changed. `make coverage-artifacts-clean` reports its size and
+removes it, and is not part of any gate.
 
-- A coverage decrease below a crate's tier floor fails `make coverage` and `make verify`.
-- Generated code and technically unmeasurable code may be excluded only through a versioned policy entry with
-  rationale, owner, and equivalent test evidence, and exclusions cannot hide core runtime, policy, provider
-  translation, persistence, redaction, or security logic. Coverage reports are stored as CI artifacts, and test code
-  must not inflate the production denominator.
-- The one enabled exclusion is `intention-daemon/src/main.rs`: a thin process adapter whose real-binary bootstrap
-  fixtures are accepted as equivalent evidence, while all daemon library behavior stays under the `standard` floor.
-- `quality/run_coverage.py` makes one line-only pass per collected crate under the workspace's single feature
-  configuration (`--all-features`, which enables the daemon's non-production `test-support` feature); `intention-daemon`
-  and `intention-tools` run through `cargo test` so their library harnesses merge. Test executability comes from the
-  Cargo metadata snapshot the runner already writes, not from a source-text marker, so a crate whose only tests use an
-  async test attribute is collected like any other. A collected crate is skipped only when Cargo declares no
-  test-executing target for it and the crate is listed in `quality/coverage.toml` under `[policy].unexecutable_crates`;
-  an undeclared skip, a stale declaration, or a collected crate absent from the snapshot fails the run.
-- The tool contract families' move into the exempt `intention-proto` is a coverage-position change, not a policy change:
-  `quality/coverage.toml` keeps its tiers, floors, and exclusions, and the moved families' cases are carried by
-  `intention-proto`'s declared `contracts`, `m3_contracts`, and `protocol_contracts` targets.
+`COVERAGE_FLOORS` in the root `Makefile` is the whole policy — one `crate=floor` pair per measured crate:
+
+| Floor | Crates |
+| ---: | --- |
+| 75% | `intention-transport`, `intention-storage`, `intention-engine` |
+| 60% | `intention-tools`, `intention-config`, `intention-daemon`, `intention-providers` |
+| 20% | `intention-tui`, `intention-client` |
+
+- A coverage decrease below a crate's floor fails `make coverage` and `make verify`.
+- The floors are a guardrail over the crates that carry production logic, not a registry every crate must be entered
+  into. A crate absent from `COVERAGE_FLOORS` is not measured; adding one to the list is how a new crate becomes
+  measured, and the crate map entry ([01 Workspace and Crate Map](01-workspace-and-crate-map.md)) states its
+  responsibility and test targets in the same change.
+- There is no exclusion mechanism. `intention-daemon`'s `main.rs` is a thin process adapter whose lines sit inside the
+  daemon's own 60% floor rather than being subtracted from it, so no crate needs a carve-out and none exists.
+- One line-only `cargo llvm-cov` run covers the workspace under its single feature configuration (`--all-features`,
+  which enables the daemon's non-production `test-support` feature), and every measured crate's report comes from that
+  one run. A floor whose crate contributes no file to the report fails the gate rather than being skipped, so a renamed
+  or removed crate cannot drop out silently. Coverage reports are stored as CI artifacts.
+- `intention-proto` and `intention-test-support` carry no floor: the first is types and contract fixtures, the second is
+  the non-production fixture crate, and neither carries product logic that a line floor would protect.
 
 ## Cargo feature policy
 
@@ -116,109 +152,89 @@ adapter, or feature extends that one configuration instead of adding a profile m
 
 ## Makefile contract
 
-The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows, including the
-quality checkers' own self-tests (`make quality-tests`, which `make check` runs). Recipes use strict
-shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`,
-then removes only the generated LLVM coverage target; coverage reports remain available for CI upload. `make ci`,
+The root `Makefile` is the sole supported orchestration surface for local and CI quality workflows. Recipes use strict
+shell behavior and label each command as mutating or non-mutating. `make verify` runs `check`, `coverage`, and `deps`;
+the instrumented coverage tree stays on disk so a later run reuses it, and `make coverage-artifacts-clean` reports its
+size and removes it when the four gigabytes are wanted back. `make ci`,
 `make ci-lint-arch`, `make ci-test`, `make ci-coverage-default`, and `make ci-deps` are thin aliases for the gate
-sequences CI runs. `make check`, `make verify`, and `make ci` fail rather than modify source, update the lockfile,
-install tools, or resolve dependencies differently from committed state.
+sequences CI runs: `ci-lint-arch` composes `fmt-check`, `lint`, the Windows cross-target `lint-windows`, the standalone
+`doctest` stage, and `doc`; `ci-test` runs `PLATFORM_TESTS` and the doctests on Windows; `ci-coverage-default` runs the
+full instrumented suite; and `check` keeps the doctests inside `test`. `make check`, `make verify`, and `make ci`
+fail rather than modify source, update the lockfile, install tools, or resolve dependencies differently from committed
+state.
 
 An ordinary `cargo build`, `cargo run`, or destructive `cargo clean` is not an independent required quality gate when
 the compile and test contracts are already covered.
 
 ## Supply-chain and dependency hygiene
 
-`make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `make notices-check`,
-which regenerates `THIRD_PARTY_NOTICES.md` from `Cargo.lock`, `quality/about.toml`, and the notice template through
-pinned `cargo-about` and compares it byte for byte, falling back to comparing which license every crate reference is
-rendered under when the bytes differ only because the local registry cache grouped or attributed identical license texts
-differently, so the check does not depend on which machine ran it while a changed graph, version, or license name still
-fails; `cargo deny check` for advisories, licenses, banned crates, allowed sources,
-and duplicate-version policy, using the policy expression in `deny.toml`; `cargo audit` as an independent advisory
-source; `cargo udeps` for unused dependencies; `cargo machete` for manifest hygiene; and `cargo outdated` for stale
-direct dependencies under the policy in `quality/outdated.toml`.
+`make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `cargo deny check` for
+advisories, licenses, banned crates, allowed sources, and duplicate-version policy, using the policy expression in
+`deny.toml`; `cargo machete` for manifest hygiene; and `make notices-check`, which regenerates `THIRD_PARTY_NOTICES.md`
+from `Cargo.lock`, `quality/about.toml`, and the notice template through pinned `cargo-about` and compares it byte for
+byte, falling back to comparing which license every crate reference is rendered under when the bytes differ only
+because the local registry cache grouped or attributed identical license texts differently, so the check does not
+depend on which machine ran it while a changed graph, version, or license name still fails.
+
+`cargo deny` is the single advisory and license authority: it reads the RustSec database and the `deny.toml` policy,
+which is what a separate `cargo audit` pass would re-read. Stale direct dependencies are not a gate either: a
+dependency releasing a patch would fail the build without any change to this repository, so freshness is dependabot's
+work rather than a blocking check.
+
+Duplicate versions are reviewed, not eliminated. Every duplicate family in the graph is owned by the two provider SDKs
+and their HTTP/TLS stacks, and neither SDK offers a release that would collapse one: `async-openai` 0.42.2 requires
+`reqwest` 0.13 with `base64` 0.22 and `getrandom` 0.3, while `openrouter-rs` 0.19.0 requires `reqwest` 0.12 with
+`thiserror` 1 and `dotenvy`, whose macro brings `syn` 1; `futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4,
+and `hyper-util` brings `base64` 0.23. `deny.toml`'s `[bans] skip` list carries each one with its owning chain, and
+`cargo deny` fails on any duplicate that list does not name, so a new family is a blocking finding rather than an
+accretion. The diagnostic needs `--workspace`: the root `Cargo.toml` declares `default-members`, so a bare
+`cargo tree -d` inspects only `intention-proto` and `intention-config` and reports nothing.
+
+That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-unic` entries is a review
+responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one
+is a decision to review, and the accompanying `reason` is what makes it reviewable.
 
 `THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
 `publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
 blocking supply-chain failure, not an inferred pass.
 
-`revue` 3.9.1 is vendored at `vendor/revue` and selected through the root `[patch.crates-io]` entry. The copy was
-taken for two reasons: the released crate quit the `App` event loop on Ctrl+C with no builder option, and it pulled the
-unmaintained `unic-emoji-char` probe. The first reason is settled upstream — 3.10.0 adds `App::prevent_default`, which
-the terminal's layered Ctrl+C adopts when this copy is dropped — and the second is what keeps the copy here: registry
-3.10.0 still depends on `unic-emoji-char`, whose unmaintained advisories the advisory policy resolves instead of
-acknowledging, and a `cargo deny check advisories` probe against that graph fails. Upstream plans to replace the probe's
-source (hawk90/revue#950); the upgrade, the `prevent_default` switch, and the deletion of this copy land together in one
-change. The vendored copy is 3.9.1 upstream source with `tests/`, `benches/`, `examples/`, and `docs/` dropped and their
-manifest targets stripped, plus two changes: an `AppBuilder::quit_key(Option<KeyEvent>)` option whose default, Ctrl+C,
-is the pre-patch behavior, and the removal of the `unic-emoji-char` probe, which only served the public
-`CharWidthTable` while `unicode-width` reports the same width for all but the 26 regional-indicator code points. The
-copy is excluded from the workspace, so format, lint, coverage, and architecture policy stay scoped to `crates/`, and
-`quality/check_architecture.py` skips `vendor/` in its raw-text scans; `vendor/revue/PATCH.md` records the patch, its
-files, and the conditions that drop the vendored copy.
+`revue` is an ordinary crates.io dependency of `intention-tui`, pinned at `3.10.0`. Two of its properties are visible
+here. Its event loop quits on Ctrl+C after the handler returns, while Ctrl+C is the shared core's layered action, so
+`handle_event` calls `App::prevent_default` for the press the core consumes. It also depends on `unic-emoji-char`,
+whose whole `rust-unic` family is archived: five `unmaintained` advisories with no safe upgrade
+(RUSTSEC-2025-0075, -0080, -0081, -0090, -0098) reachable only through that probe. Those five are the complete
+`advisories.ignore` set in `deny.toml`; every other advisory is resolved by upgrading the graph, and entries there
+carry the reason the acknowledgement is allowed to stand. Upstream plans to replace the probe's source
+(hawk90/revue#950); the acknowledgement goes away with that release.
 
 The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
 short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
 dependency through the generated `THIRD_PARTY_NOTICES.md`.
 
-## Required quality-gate failure tests
-
-Controlled fixtures prove that the quality system fails correctly. The intent of each fixture is recorded here; the
-fixtures themselves live with their checkers.
-
-| Intentional defect | Gate that fails |
-| --- | --- |
-| Formatting drift | `make fmt-check`. |
-| Compiler or Clippy warning | `make lint`. |
-| Unreasoned or broad lint suppression | `make lint` or `make architecture`. |
-| Missing/mismatched pinned tool | `make tools-check`. |
-| Missing, stale, or hand-edited third-party notices | `make notices-check` and `make deps`. |
-| Missing, conflicting, or incomplete crate classification metadata | `make architecture`. |
-| Undeclared or stale workspace, external, or named-test-target declaration | `make architecture`. |
-| Forbidden crate dependency or import | `make architecture`. |
-| Untyped-decode import shape hidden from the raw-text scan | `make architecture` (the `[forbidden] source_patterns` shapes and the checker's own `self_test_source_patterns` fixture). |
-| DTO/SDK implementation leak | `make architecture`. |
-| Coverage below a crate's tier floor | `make coverage`. |
-| Undeclared or stale coverage skip declaration | `make coverage`. |
-| Unapproved coverage exclusion metadata | `make coverage`. |
-| Documented bound that no crate defines | `make docs-check`. |
-| Removed wire name still spelled in a document or a crate | `make docs-check`. |
-| Documented placeholder constant that no crate defines | `make docs-check`. |
-| Dependency advisory/license/source/ban/duplicate violation | `make deps`. |
-| Unused, stale, or manifest-only dependency | `make deps`. |
-| Recognizable fake secret in output fixture | `make test` and `make verify`. |
+The terminal's local theme resolution adds three direct dependencies, and none of them adds a package to the locked
+graph: `toml` parses and writes the local `tui.toml` (whose `theme` key stores `auto`, `light`, or `dark`), and the
+`cfg(unix)` pair `crossterm` (raw mode) and `mio`
+(readiness on the terminal's own input) serve the `OSC 11` background probe, bounded at 15 ms, skipped when standard
+input or output is not a terminal, and never run at all when the terminal exports `COLORFGBG`. `crossterm` and `mio` were already
+locked as the backend and event source of `revue 3.10.0`, and `toml` was already locked through the same graph, so the
+declared set changed without a new package, license, or advisory entering it.
 
 ## Test-first integration
 
-Every production boundary is activated with its machine-readable architecture and coverage policies
-updated in the same change, together with focused expected-failure architecture fixtures and outcome evidence.
-A focused test suite is not a substitute for the full gates.
+Every production boundary is activated with its crate-map entry, its declared test targets, and its coverage floor
+updated in the same change, together with outcome evidence. A focused test suite is not a substitute for the full gates.
 
 ## Opt-in live-provider e2e
 
-The manual `real-api-e2e` workflow and `make e2e-real-api` run the ignored `real_api_e2e` daemon integration test against
-a real provider API, taking the credential only from the repository secret `REAL_API_E2E_PROVIDER_KEY`; the mode is
+The manual `make e2e-real-api` target runs the ignored `real_api_e2e` daemon integration test against
+a real provider API, taking the credential only from `INTENTION_REAL_API_KEY` in the environment or a local gitignored
+`.env`; the mode is
 mutating, networked, and opt-in, and it is never part of the blocking gate. The obligation itself is owned by
 [Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md), scenario J.
 
-## Slice 1.5 quality evidence
-
-Slice 1.5 (the current-state core) changes the evidence base without lowering it:
-
-- the storage contract suite is rebuilt for the nine-table current-state schema and the one-transaction rule, and the
-  event/snapshot/replay contract blocks are deleted with their surfaces;
-- the engine tests cover commit-and-publish without events or replays, and tool tests cover one transaction per call and
-  the pre-effect identity rejection;
-- protocol contract fixtures cover the reduced current-state surface (current-state session snapshots and
-  `SessionFrameDto` notifications, no cursors or resync);
-- deleted-surface tests are deleted without replacement; per-crate coverage tiers in `quality/coverage.toml` stay as
-  declared, and a merged crate inherits the strictest source floor;
-- `intention-tui`'s declared `edge` floor is enforced again: the runner decides executability from Cargo metadata, so
-  the crate's async contract suite is collected instead of skipped, and no collected crate can be skipped without a
-  policy declaration.
-
 ## Non-goals
 
-An aggregate coverage threshold; per-file coverage bars; denying all `pedantic` or all `restriction` lints; a second
-quality toolset or Makefile surface; hidden installs inside the gates; weakening a gate to make a change pass.
+An aggregate coverage threshold; per-file coverage bars; a coverage exclusion mechanism; a central registry every crate
+must be entered into; a policy checker that re-asserts what a pinned tool already enforces; denying all `pedantic` or all
+`restriction` lints; a second quality toolset or Makefile surface; hidden installs inside the gates; weakening a gate to
+make a change pass.

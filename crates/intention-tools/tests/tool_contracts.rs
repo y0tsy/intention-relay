@@ -1,7 +1,10 @@
 #![allow(
-    clippy::expect_used,
     clippy::unwrap_used,
-    reason = "Integration tests use expect and unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
+    reason = "Integration tests use unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
+)]
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw JSON Schema text by shape; DTO-first binds production code."
 )]
 
 mod common;
@@ -526,12 +529,12 @@ fn a_stopped_tool_never_starts_its_effect_and_keeps_partial_results() {
 }
 
 #[test]
-fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
+fn public_tool_errors_name_the_logical_path_and_never_the_root_or_content() {
     let root_dir = fixture_dir("redaction");
     let root = root_dir.path();
     let service = service(&root_dir);
     // Assembled at runtime: recognizably fake, yet never a literal
-    // secret-shaped assignment that docs-check rejects.
+    // secret-shaped assignment that must not surface in the note.
     let secret = format!("credential{}", "-leak-probe");
     let error = service
         .dispatch_with_cancellation(
@@ -546,7 +549,7 @@ fn public_tool_errors_redact_secret_paths_commands_and_os_text() {
     let rendered = format!("{error:?}");
     assert!(!rendered.contains(secret.as_str()));
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("No such file or directory"));
+    assert!(rendered.contains("unable to write missing/new.txt:"));
 }
 
 #[test]

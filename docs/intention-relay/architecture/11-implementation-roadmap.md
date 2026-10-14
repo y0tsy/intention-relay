@@ -5,8 +5,7 @@
 This is a dependency-aware delivery roadmap, not a time estimate. The first implementation milestone is the reproducible
 quality foundation. Every later milestone begins with failing tests and is accepted only after its applicable `make
 verify` evidence passes. This roadmap owns milestone order, dependencies, activation, and status only: required quality
-commands, pinned tools, the coverage policy, lint policy,
-architecture checks, and supply-chain gates live in [Quality Gates and
+commands, pinned tools, the coverage policy, the lint policy, and supply-chain gates live in [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification rules live in [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md).
 
@@ -20,7 +19,8 @@ M0-M5 are closed. Their per-milestone sections and the `docs/intention-relay/clo
 removed as dead historical artifacts by `eeff780`, and both remain recoverable from repository history:
 `git show eeff780^:docs/intention-relay/architecture/11-implementation-roadmap.md` for the sections and
 `git show eeff780^:docs/intention-relay/closeout/` for the evidence. The milestones below therefore record the
-remaining plan (M6-M11); the delivered behavior of M0-M5 is described by the architecture documents themselves.
+remaining plan (M6-M8 and M10-M11); the delivered behavior of M0-M5 is described by the architecture documents
+themselves.
 
 ## Dependency graph
 
@@ -57,21 +57,21 @@ flowchart TD
 
 Every milestone after Milestone 0 follows the test-first rules of [Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md) and the quality policy of [Quality Gates and
-Makefile](12-quality-gates-and-makefile.md): new production crates meet the tier floor declared for them before merge,
+Makefile](12-quality-gates-and-makefile.md): new production crates meet the line floor declared for them before merge,
 new optional Cargo features extend the single feature
 configuration in the same change, only pinned dependencies and tools are used, `make quick` runs during
 development and `make verify` before acceptance, and any policy exception is recorded in a reviewed, versioned policy
 file with rationale and equivalent test evidence.
 
-The coverage policy is the per-crate tiers declared in `quality/coverage.toml`
+The coverage policy is the per-crate line floors in the root `Makefile`'s `COVERAGE_FLOORS`
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 5+: Post-M5 retrospective alignment
 
-**Activation home for the complete post-M5 stack; hard prerequisite for M6-M8 and M10-M11.** Owner directive
-2026-10-12: Slice 3 absorbs the former M7 milestone — except the optional implementation handoff, delivered by Slice 6 —
-and the `sub_agent` tool path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7,
-the former M9 is M8, the former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
+**Activation home for the complete post-M5 stack; hard prerequisite for M6-M8 and M10-M11.** Slice 3 absorbs the
+former M7 milestone — except the optional implementation handoff, delivered by Slice 6 — and the `sub_agent` tool
+path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7, the former M9 is M8, the
+former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
 the remaining milestones in the dependency graph and activates only foundation work, including the terminal presentation
 foundation and the Slice 3 agent-operation scope, never their direct boundary implementation. The remaining post-M4
 package implementations are not part of its slices: they are delivered by Milestones 10 and 11, which consume this
@@ -82,11 +82,10 @@ milestone's foundation. The activation decision is the Milestone 5+ package, ext
 
 ### Slices
 
-The seven slices are approved together as one package and delivered in this order; no slice ships half-ready, and later
-slices consume only contracts activated by earlier slices. Every direction stays bound to its slice,
-and every retrospective change to M0-M5 code required by those directions activates inside its slice with its own
-contract, transaction, and outcome test. Each direction's activating specification is accepted at the start of the
-milestone that implements it.
+The seven slices are sections of one activating specification accepted for this milestone, and later slices consume only
+contracts activated by earlier slices. Every direction stays bound to its slice, and every retrospective change to
+M0-M5 code required by those directions activates inside its slice with its own contract, transaction, and outcome
+test.
 
 -  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation, whose
 JSON-RPC 2.0 local wire, method/notification table, hello handshake, and per-payload version fields were later
@@ -109,8 +108,9 @@ feature crates are created at their milestones. The target
 keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
 crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
 system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
-replaced by the nine current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`tool_results`, `configuration_revisions`, `tui_settings`); `messages` and `tool_results` are the transcript; identity
+replaced by the seven current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+`configuration_revisions`); the transcript is `messages` rows, and a completed tool call commits one
+tool-result message row carrying its status and metadata in its projection; identity
 is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
 `IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain
 indices and mutating operations by `IdempotencyKey`; every state change commits in one SQLite transaction and the
@@ -125,107 +125,32 @@ sequence of identity check, durable call row, workspace binding, dispatch, and d
 the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
 where a stamp bump discards and recreates the database with no migration or compatibility path.
 -  **Slice 2 — Terminal UX — closed.** The terminal application over the existing typed client and daemon
-([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three modes — a
-full-screen revue-based TUI, a mandatory interactive REPL, and a headless command that invokes one prompt with prompt
-text, workspace, session continuation, run mode, streaming output, timeout, and a script-friendly output format; the
-model, system-prompt, and provider-profile parameters are deliberately absent and arrive with Slices 3 and 4. The TUI
-delivers one window — the chat panel and the sessions panel docked to the window's bottom rows, never an overlay — over
-one light/dark palette system that is the sole colour system, with a welcome surface (the product lockup and the
-version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open — a launch opens no session, not even the most
-recent one — a multi-line input block that grows with its buffer up to its share of the panel, user cards and assistant answers rendered as
-markdown, committed reasoning as its own block, the leading-slash command registry with the hint band it feeds above
-the input block (a ranked, filtered `/new`, `/sessions`, and `/theme` list whose registry declares each command's
-arguments, so the argument word lists the declared `light`/`dark` values in the same three columns; the input history
-and `Tab` returning to the line only once the band is closed, while `Enter` on a word that already spells its command
-or value runs the line instead of appending the row's trailing space; and the band as `Esc`'s innermost layer), the theme
-picker (which `/theme` opens with no argument: a panel in the chat panel's band region whose rows carry each theme's
-name and description, the committed row marked with the browser's `> ` cursor, live `Up`/`Down` previews of the whole
-window, `Enter` committing through the daemon, and `Esc` reverting), the daemon-owned effective theme (the optional
-`[tui] theme` configuration default and the single-row `tui_settings` override, neither of which records a
-configuration revision), a committed transcript laid out once and cached per pane width, theme, and transcript
-version, a
-wheel-driven transcript, and layered `Ctrl+C` and `Esc` (an arming press, then
-a consecutive stopping, history-pushing, or quitting press; a single `Esc` stops a live run). Session creation
-resolves the
-durable workspace binding of its root, so one root carries an unbounded number of sessions. The slice also froze the
-terminal client contract: TUI, REPL, and headless modes are contract-equivalent over one `intention-client` surface,
-the headless exit-status set is closed and typed (0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or
-failed run, 4 timeout with no observed terminal status, 5 interrupted run), and no presentation logic enters the daemon.
-The step's answer and reasoning stream as channel-tagged transient `TextDelta` frames that are never persisted and
-never replayed;
-the committed assistant row replaces both channels, and the live tail lays out through the same block functions the
-committed rows use. Session branching and forks remain Slice 6 work; desktop presentation remains Milestone 6 work.
-The slice also carries the retrospective tool-execution corrections: `execute` runs one shell command through the
-private platform shell adapter (`bash -c` on Unix, `cmd /C` on Windows) with optional typed `cwd`, `env`, and
-`timeout_seconds` parameters, the fixed thirty-second ceiling is removed so a call without a declared timeout is
-bounded by cancellation alone and by one pipe-collection window after the direct child is reaped, a pathless `grep`
-searches from the workspace root, and a failed or undecodable call commits one durable `Failed` result whose bounded
-model-visible guidance answers the call before the loop continues. The slice also makes the declared deadline its own
-observable interruption: a fired `timeout_seconds` commits a `Partial` result whose notice names the timeout and whose
-durable evidence records `tool_timed_out` with the declared value, so a deadline never reads as lost evidence. One more
-correction closes the slice's reasoning
-gap: every completed step commits one assistant row whenever it produced text or reasoning, a reasoning-only row
-commits before its own step's tool rows carrying an empty `text` and the step's whole reasoning, and the context
-rebuild skips it, so a live transcript keeps a tool round's reasoning above its exchange and a reload shows that same
-order. The last correction gives the slice a terminal stop and a liveness rule: `run.cancel` ends an exact active run
-`Interrupted` at its execution's next boundary with `[The run was stopped before a final answer.]` committed first, so a
-stop is durable and never silently does nothing while committed work stays committed; every terminal front end reaches
-it — `Esc` in one press, `Ctrl+C` on the arm's second press, and SIGINT in the line front ends (the REPL stops the run
-and returns to its prompt, `run <PROMPT>` reports the interrupted outcome) — and a run counts as live only while a live
-subscription observes it, so a daemon that died cannot hold a front end's stop, clear, and exit arms. The slice's
-closing correction makes that one live channel follow the session instead of one run:
-`SubscribeSession` returns the session snapshot and then carries every committed row, the active run's projection, and
-the active run's transient text, so two windows on one session both show a turn sent in either one, a window opened while
-the session was idle stays live into the next run, and either window can stop the run they both observe; a lost stream
-asks for exactly one reconnect through the session it has open and reports a failed reconnect's typed error instead of
-retrying in a loop. The slice's tool-projection correction completes the retrospective tool work: the typed tool
-contract — the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection —
-lives in `intention-proto`, the engine decodes the model's arguments document once and commits the typed row, and the
-pane renders that projection with no JSON decode and no result re-parse. That correction is adapter-facing only: it
-activates no registry, admission, bridge, or MCP contract, so Slice 5's tool-layer contracts stay unactivated. The
-slice's projection-fields correction carries the committed run facts to the terminal: the run projection gains the
-durable `started_at`/`finished_at` times, the terminal outcome's usage, and the count of committed tool calls no
-committed result answers (storage's read-time pairing); the session projection gains the effective provider model the
-daemon fills from the run's resolved configuration in the one snapshot read behind both the one-shot request and the
-subscription reply; and the status row and the badge render those facts instead of the front-end stubs they replace —
-the committed duration reads `Answered in 13s` from the projection's own times, the committed usage reads
-`ctx in 1200 out 300` (or `ctx not reported`), the badge names the session's model, and the half-second working word
-follows the projection's open-call count, so no front end pairs rows or measures a committed fact itself. The slice's
-run-mode correction moves the vocabulary and its default into the core: `RunModeDto::ALL` declares the closed two-mode
-set, `RunModeDto::DEFAULT` is `Build`, the engine resolves an absent create-command mode to that constant, and the
-command grammar renders its usage and rejection text from the declared set, so an absent `--mode` leaves the durable
-policy to the core. The slice's create-and-first-turn correction makes a first prompt one command:
-`CreateSessionCommandDto` carries the optional `first_turn`, the durable session commits before that turn, a same-key
-replay returns the recorded outcome, a same-key retry with different content is a typed conflict, and a rejected first
-turn leaves the caller's durable session plus the typed rejection instead of a parked prompt. The slice's client-surface
-correction declares the endpoint instance and the daemon program in `intention-client`: discovery prefers a declared
-instance and falls back to the platform-default endpoint, and the launcher resolves the terminal binary's sibling
-`intention-daemon` program, so the binary carries no environment read and no installation-path inference of its own.
-
-  The slice is closed. It merged into `main` as one squash commit, `0fd8ad5` (PR #67), with all six CI jobs green on the
-  merged head, `make quick` observing 877 tests run, 877 passed, and 2 skipped across 44 binaries, and `make check`
-  clean; the delivered behavior and the corrective pass that followed it are recorded by
-  [architecture 03](03-daemon-transport-and-adapters.md) and [Test-Driven Delivery and
-  Verification](10-test-driven-delivery-and-verification.md). The quality phase keeps its `slice2` name: closing a slice
-  changes no crate classification, so `quality/architecture.toml`, `quality/coverage.toml`, and the checker that pins the
-  live slice move together only when Slice 3 activates its own.
+([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three
+contract-equivalent modes — the full-screen TUI, the mandatory interactive REPL, and the headless command — over one
+`intention-client` surface, with the closed typed exit-status set (0 completed, 1 usage, 2 daemon or transport,
+3 typed rejection or failed run, 4 timeout with no observed terminal status, 5 interrupted run) and no presentation
+logic in the daemon. The delivered behavior, including the slice's retrospective corrections, is owned by
+[architecture 03](03-daemon-transport-and-adapters.md)'s Slice 2 terminal model (closed); acceptance evidence
+obligations are unchanged ([Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md)).
+Slice 2 is closed: it merged into `main` as one squash commit, `0fd8ad5` (PR #67), with the full quality gate green on
+the merged head. Closing a slice changes no crate classification, so the crate map and the coverage floors move together
+only when Slice 3 adds its own crates.
 -  **Slice 3 — Agent operation — not activated.** The instruction channel of
-[architecture 30](30-instruction-sources-and-system-context.md): the closed instruction source kinds and scopes, the
-deployment instruction profile adapted from the legacy Antibusy static prompt set, user-authored fragments at user,
-project, and session scope edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
+[architecture 30](30-instruction-sources-and-system-context.md): the code-owned base instruction text, one
+user-authored fragment list edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
 `WorkspaceRoot` anchor, and the
-reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; immutable profile revisions with typed
-identity; deterministic assembly and the effective instruction projection, frozen at admission, delivered through the
-existing `system_context` channel, materialized into fork, plan, and handoff records, and recorded as safe usage
-provenance; closed safe failures, channel closure, and safe observability. The slice also carries the Plan/Build half of
+reserved `Mode` and `Vfr` contributions owned by architectures 07 and 06; deterministic assembly and the frozen
+instruction text, delivered through the
+existing `system_context` channel, and materialized into fork, plan, and handoff records; closed safe failures,
+channel closure, and safe observability. The slice also carries the Plan/Build half of
 [architecture 07](07-plan-and-build-modes.md): the Plan/Build run policy, with Build Autopilot as the single
-user-authorized unrestricted Build policy; physical plan artifacts at
-`<AppData>/sessions/<session-id>/plans/<plan-number>/plan.md` with zero-based per-session numbers, controlled hidden
-YAML frontmatter, and committed revisions; the plan submission, approval, rejection, and supersede lifecycle, where an
-approval pins one exact revision and, by default, immediately starts a fresh same-Session Build Autopilot run with a new
-`RunId`; ordinary project `write`/`edit` denied in Plan mode while `execute` stays available, advisory-guided, and
-audited, its focus instruction being the `Mode` contribution this same slice assembles; and the `intention-plans` crate
-with the `plan_submit` ToolId variant, its own spec, and its typed input. The optional implementation handoff to a new
+user-authorized unrestricted Build policy; body-only plan artifacts in the daemon-defined global plans directory,
+named by the model's requested file name (`plan_name_conflict` on a taken name), with zero-based per-session numbers
+and committed revisions tracked in SQLite; the `drafting | approved | abandoned` lifecycle, where approval pins one
+exact revision and, by default, immediately starts a fresh same-Session Build Autopilot run with a new `RunId`;
+ordinary project `write`/`edit` denied in Plan mode while `execute` stays available, advisory-guided, and audited, its
+focus instruction being the `Mode` contribution this same slice assembles; and the `intention-plans` crate with the
+`plan_submit` ToolId variant, its own spec, and its typed input carrying the requested file name. The optional implementation handoff to a new
 Session stays Slice 6 work. The slice also carries the `sub_agent` tool path of
 [architecture 15](15-tool-registry-and-model-tool-loop.md): the closed `ToolId` variant whose typed input carries the
 bounded markdown task and the selected mode; `Sync` holds the call open until the child run's terminal markdown answer,
@@ -234,20 +159,20 @@ run with its own lifecycle, tool loop, cancellation, and no-resume rules, and it
 child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model request. The
 `sub_agent` tool activates on the live six-tool admission path and activates no registry, bridge, or MCP contract: the
 frozen tool selection, tool admission, and Gateway/RLM bridge stay with Milestone 10. Its activating specification
-declares the instruction contract families as typed serde JSON contracts, activates the `sub_agent` tool contract and
+declares the instruction-channel contracts as typed serde JSON contracts, activates the `sub_agent` tool contract and
 the Plan/Build policy on the live tool path, and changes no earlier slice.
--  **Slice 4 — Control plane — not activated.** The cluster and provider session selection (architectures 25/29/22):
-controlled live reload, credential rotation, provider health checks, model discovery, pricing policy, provider profile
-UI and raw-TOML/configuration editing, arbitrary authentication headers, session defaults and per-turn/fork overrides,
-the provider profiles protocol, pending-removal and degraded recovery, and the provider reasoning/catalog surface. The
-unconsumed-surface audit (2026-09) removed the unconsumed
-typed preservation-control, server-side-parser, Responses reasoning-mode, reasoning-usage, and model-capability-envelope
-contracts, the protocol-only reasoning/header/parser duplicates, the eight producer-less control-plane event DTOs, and
-the `provider_profile_tombstoned` wire code.
+-  **Slice 4 — Provider configuration and typed configuration editing — not activated.** Discovery (architecture 25),
+the typed configuration-editing surface (architecture 25), and the session-selection layer (architectures 29/22): the
+named provider-entry list with its global default, the session selection command and query, the bounded provider list,
+the typed editing surface, discovery as an ordinary non-authorizing read, and the optional named authentication header,
+with the entries built at startup. Controlled live reload, in-process credential rotation, provider health checks,
+pricing and budget policy, raw-TOML editing, per-turn and fork provider overrides, opaque catalog pagination, catalog
+tombstones, user-declared kinds, and the typed cross-run reasoning-transfer surface were removed from the slice
+(architectures 22, 25, 29).
 -  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
-15](15-tool-registry-and-model-tool-loop.md), the bridge-invocation and
-MCP-method-catalog selections (architectures 19/18), and work/requeue after client disconnection. The 2026 corrective
+15](15-tool-registry-and-model-tool-loop.md), the bridge invocation and MCP connection-record contracts (architectures
+19/18), and work/requeue after client disconnection. The 2026 corrective
 pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
 committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
 tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
@@ -256,19 +181,21 @@ deleted instead of deferring them: the composed `session_stream_closed`, `sessio
 fallbacks went with the client's own closed-stream classification and its typed continue failure in
 `intention-client`, so no front end composes a session condition; the pre-deletion anchors were
 `crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
--  **Slice 6 — UI foundation — last slice; not activated.** Session branching, reasoning/catalog delivery, and adapter
-boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification list): `session_fork_v1`;
-normalized reasoning delivery; and the exact typed client/protocol surface M6 consumes. It also carries the optional
-implementation handoff after plan approval, which creates an independent Session from a frozen safe context,
-materializes the instruction projection into its frozen records, and may start a fresh Build Autopilot run
+-  **Slice 6 — UI foundation — last slice; not activated.** Session branching and regeneration, reasoning/catalog
+delivery, and adapter boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification
+list): the fork, preview, branch-level, rename, archive, and restore DTOs plus the ordinary same-session regeneration
+run start bound to the parent `RunId` it regenerates; normalized reasoning delivery; and the exact typed
+client/protocol surface M6 consumes. It also carries
+the optional implementation handoff after plan approval, which creates an independent Session from a frozen safe
+context, materializes the frozen instruction text into its frozen records, and may start a fresh Build Autopilot run
 (architecture 23);
 cross-workspace clone/rebind (architecture 23); and the physical deletion/GC retention policy for historical work under
 architecture 04's retention rules.
 
 ### Exit criteria
 
--  M5+ exit proves M6, M7, M8, M10, and M11 can each begin against stable contracts without any retroactive protocol,
-DTO, schema, crate-boundary, migration, or quality-policy change.
+-  Every remaining milestone (M6, M7, M8, M10, and M11) has an accepted activating specification before its
+implementation starts.
 -  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
 SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
@@ -276,61 +203,47 @@ stamp bump discards and recreates the database with no migration or compatibilit
 semantics keep their recorded law.
 -  The Slice 2 terminal keeps one `intention-tui` binary whose three modes stay contract-equivalent over one
 `intention-client` surface, exit with the closed typed status set, and carry no presentation logic into the daemon.
--  The Slice 4 health, discovery, and pricing surfaces are non-authorizing: they create no RunId, tool
-permission, MCP capability, bridge grant, kernel epoch, context projection, or branch, and the activating
+-  The Slice 4 discovery and typed configuration-editing surfaces are non-authorizing: they create no RunId, tool
+permission, kernel epoch, context projection, or branch, and the activating
 specification must prove that non-authority.
--  Applicable crates meet their declared tier floors without excluding policy or boundary logic; every activated slice
-passes `make quick`, `make verify`, and Linux/Windows CI.
--  No slice ships half-ready: every activated contract ships with its version, owner, tests, policy mapping,
-storage/schema treatment, and evidence together.
+-  Applicable crates meet their declared line floors without excluding policy or boundary logic.
+-  Every activated contract ships with its version, owner, tests, policy mapping, storage/schema treatment, and
+evidence.
 -  No remaining-milestone boundary behavior is implemented, and no second runtime, registry, persistence authority, or
 sandbox is introduced.
--  The third slice proves instruction text is advisory-only, typed, and materialized for frozen context, that Plan-mode
+-  The third slice proves instruction text is advisory-only and materialized for frozen context, that Plan-mode
 mutation denial is enforced and audited while Plan `execute` stays advisory-guided, and that a `sub_agent` child run
 stays an ordinary run, with no untrusted material entering the instruction channel and no authority created
 ([architecture 30](30-instruction-sources-and-system-context.md), [architecture 07](07-plan-and-build-modes.md)).
 -  Milestones 10 and 11 are this milestone's successors for the remaining post-M4 packages; their activating
 specifications, contracts, and evidence stay owned by those milestones. M7 consumes only the declared `Vfr`
 contribution, the third slice consumes the declared `Mode` contribution, and M11 keeps the Skill and
-context-disclosure boundary.
+context-selection boundary.
 
 ### Failure semantics
 
 - Each slice fails closed before effect when its contract is unsupported or inconsistent; no partial contract or partial
   projection is delivered.
 - Recovery never resumes, retries, reattaches, or reruns work under any slice.
-- A slice that cannot be completed atomically (contracts, tests, policy, and evidence together) is not accepted; the
-  milestone remains on the prior accepted slice.
 
-### Open decisions
+### Known deferrals
 
-The 2026 corrective pass closes the second business-logic rot audit; every fact it does not deliver is recorded here as
-an explicit open decision ([architecture 10](10-test-driven-delivery-and-verification.md)), consolidated from the ledger
-rows each wave recorded with its own commits. Each row names the fact, its owner — a slice this milestone still holds,
-or none — the anchor the deferring wave recorded (a live `@todo(core)` marker and the boundary-table row that documents
-it, or the site a wave deleted, marked *removed*) with the base the anchor was read at, and the re-audit verdict the W7
-five-lane re-audit recorded: `re-audited: L<n> <sha>`, the lane and the tip that read it. Every row below carries one.
+Facts this milestone leaves open are recorded here as known deferrals, each with its owner when one exists
+([architecture 10](10-test-driven-delivery-and-verification.md)).
 
-| Open fact | Owner | Anchor (base) | Re-audit |
-| --- | --- | --- | --- |
-| the execute-call fact on the session summary (the browser's `Exec` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:563`; live `crates/intention-tui/src/app/browser.rs:15-16` (base `5b33729`) | re-audited: L5 79082b4 |
-| a durable session title and its rename command (the title column, its filter, and the `Ctrl+R` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:564`; live `crates/intention-tui/src/app/browser.rs:35-37,276,402` (base `5b33729`) | re-audited: L5 79082b4 |
-| a durable favorite flag (the `Favorites` tab) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:565`; live `crates/intention-tui/src/app/browser.rs:19-21` (base `5b33729`) | re-audited: L5 79082b4 |
-| a durable archive flag and its command (the `Archived` tab and its `Ctrl+X` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) | `03-daemon-transport-and-adapters.md:566`; live `crates/intention-tui/src/app/browser.rs:24-26,40-43` (base `5b33729`) | re-audited: L5 79082b4 |
-| a session list paged past its bounded window (the row counter's `+N omitted`) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:567`; live `crates/intention-tui/src/tui/screens/sessions.rs:566-570` (base `5b33729`) | re-audited: L5 79082b4 |
-| a notice code or severity (a notice block's text-only body) | no owner — deferred by owner on 2026-10-11 | `03-daemon-transport-and-adapters.md:572`; live `crates/intention-tui/src/tui/panes/transcript.rs:440` (re-read at `0227953`) | re-audited: L5 79082b4 |
-| durable committed-row identity for streamed text (the durable `messages.step`/`MessageProjectionDto.step` alternative to the client-derived supersession; OD-10) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/headless.rs:785` and `03-daemon-transport-and-adapters.md:573` (base `99973a8`) | re-audited: L5 79082b4 |
-| the run-captured provider model, the model that served each run (the alternative to the session projection's effective model; OD-13) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/input.rs:63,127` and `03-daemon-transport-and-adapters.md:549` (base `62ce771`) | re-audited: L5 79082b4 |
-| live per-round usage (the alternative to publishing usage with the committed terminal outcome; OD-15) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/tui/panes/status.rs:77` and `03-daemon-transport-and-adapters.md:548` (base `62ce771`) | re-audited: L5 79082b4 |
-| the in-UI rendering of a launch failure, a launch-failure `--continue` shown in the running front end instead of exiting 3 (OD-23) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/repl.rs:60-65` and `crates/intention-tui/src/headless.rs:372` (base `99973a8`) | re-audited: L5 79082b4 |
-| the sessionless `--continue` launch, the alternative to the typed `no_sessions_to_continue` failure and exit 3 (OD-7) | no owner — deferred by owner on 2026-10-11 | *removed* `crates/intention-tui/src/app/state.rs:222` and `crates/intention-tui/src/headless.rs:161-167` (base `99973a8`); live spelling `crates/intention-client/src/lib.rs:391-399,1178-1184` (re-read at `0227953`) | re-audited: L5 79082b4 |
-
-Not entries, because the pass decided or delivered them: the endpoint instance and the daemon program (OD-16 declares
-them), the long-run `terminal_e2e` fixture (OD-20 measured it feasible and assigned it), the execute process exit status
-(delivered as the typed `ToolProcessStatus`), the configurable run-mode default (OD-5 chose the core constant; the
-config key is a rejected design, not a deferral), the non-terminal interrupt stop (OD-9 chose the terminal stop), and
-the acknowledged interrupt (OD-24 closed it: the committed terminal status frame acknowledges the stop). The composed
-adapter session fallbacks the pass deleted are not entries either: they are recorded above in the Slice 5 bullet.
+| Deferred fact | Owner |
+| --- | --- |
+| the execute-call fact on the session summary (the browser's `Exec` tab) | no owner yet |
+| a durable session title and its rename command (the title column, its filter, and the `Ctrl+R` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
+| a durable favorite flag (the `Favorites` tab) | no owner yet |
+| a durable archive flag and its command (the `Archived` tab and its `Ctrl+X` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
+| a session list paged past its bounded window (the row counter's `+N omitted`) | no owner yet |
+| a notice code or severity (a notice block's text-only body) | no owner yet |
+| durable committed-row identity for streamed text (the durable `messages.step`/`MessageProjectionDto.step` alternative to the client-derived supersession) | no owner yet |
+| the run-captured provider model, the model that served each run (the alternative to the session projection's effective model) | no owner yet |
+| live per-round usage (the alternative to publishing usage with the committed terminal outcome) | no owner yet |
+| the in-UI rendering of a launch failure, a launch-failure `--continue` shown in the running front end instead of exiting 3 | no owner yet |
+| the sessionless `--continue` launch, the alternative to the typed `no_sessions_to_continue` failure and exit 3 | no owner yet |
 
 ## Milestone 6: Tauri bridge and primary desktop UI
 
@@ -345,7 +258,7 @@ agent-operation slices.
 activity-journal and notification projections;
 - TUI/REPL remains a contract-equivalent client;
 -  post-M4 activity-journal and notification contracts are delivered by the Milestone 5+ UI-foundation slice and
-consumed here, while the durable `SessionProviderProfileChanged` delivery stays reserved to M6.
+consumed here.
 
 ### Tests first
 
@@ -360,38 +273,41 @@ consumed here, while the durable `SessionProviderProfileChanged` delivery stays 
 - no Tauri crate imports application/runtime/storage implementation APIs;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
-## Milestone 7: VFR and Headroom extensions
+## Milestone 7: VFR and Headroom modules
 
-Goal: independently enabled extensions over the base tool pipeline.
+Goal: independently enabled transforms over the base tool pipeline, delivered as modules of `intention-tools`.
 
 ### Deliver
 
--  The VFR extension, mapping, expansion/raw tools, and model instructions as the `Vfr` contribution of [architecture
-30](30-instruction-sources-and-system-context.md);
-- The Headroom extension, CCR retention contract, and retrieve tool;
+-  The VFR module: mapping, expansion/raw tools (`expand` and the raw-read path as future `ToolId` variants), and model
+instructions as the `Vfr` contribution of [architecture 30](30-instruction-sources-and-system-context.md);
+- The Headroom module: the CCR retention contract and the retrieve tool;
 - deterministic composition with the workspace/tool pipeline;
-- adapter/model representation policy.
+- adapter/model representation policy;
+- retention, rotation, and expiry recorded as `@todo(vfr)`/`@todo(headroom)` markers in the modules until an
+activating specification selects the deferred values.
 
 ### Tests first
 
 - VFR transform/expand/raw fixtures;
 - Headroom retention/retrieval/expiry fixtures;
-- full extension-order integration test;
+- full pipeline-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors
+-  coverage fixtures for transform, expiry, retrieval, and error paths under the `intention-tools` line floor
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
--  VFR and Headroom operate as independently enabled extensions; `retrieve` returns retained content while valid,
+-  VFR and Headroom operate as independently enabled modules; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
-- base tools do not import VFR or Headroom implementation crates;
--  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+- base tools stay free of transform behavior, and no separate extension crate exists;
+-  The modules meet `intention-tools`' declared line floor ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 8: Hardening and acceptance verification
 
 **Final hardening gate for every milestone in this roadmap, including Milestones 10 and 11.** It closes the v1 outcome
-scenarios, the open policy decisions, and the documentation reconciliation for every delivered milestone.
+scenarios and the documentation reconciliation for every delivered milestone; the speculative hardening decisions are
+explicit v1 non-goals below.
 
 ### Deliver
 
@@ -399,15 +315,22 @@ scenarios, the open policy decisions, and the documentation reconciliation for e
 redaction hardening; the restart/reconnect/cancellation smoke suite;
 -  documentation reconciliation against implemented public contracts, including ownership of the architecture index and
 its owner paragraphs (`architecture/README.md`);
--  closure of the parked contract-enforcement card: decode-time version and validation enforcement for the public DTOs
-that declare invariants beyond their field types (architecture 02);
--  closure of the open implementation decisions of architecture 03: idle shutdown, explicit stop, daemon-upgrade
-coordination, and stale-listener recovery;
--  closure of the open policy decisions of architecture 09: event/log retention and diagnostic-export policy, TOML
-include/import policy, and non-Unix configuration permissions;
 - the post-M4 evidence obligations of architecture 10 for the remaining post-M4 packages; and
 -  the removal-program evidence anchor for the single-version policy across every versioned system
 ([architecture 00](00-principles-and-scope.md)).
+
+### v1 non-goals
+
+These speculative decisions are explicit v1 non-goals, not deferred work:
+
+- daemon-upgrade coordination: no live upgrade path; the daemon is stopped and restarted;
+- stale-listener recovery: the listener ownership safeguards stay; no recovery policy beyond them;
+- idle shutdown: a daemon runs until it is stopped;
+- TOML include or import: configuration is exactly one TOML document;
+- non-Unix configuration permissions: v1 defines no configuration file-permission policy;
+- diagnostic export and retention: logs stay operational diagnostics; no export or retention policy exists;
+- decode-time DTO validation enforcement: DTOs stay validated at admission; no decode-time enforcement beyond field
+types.
 
 ### Tests first
 
@@ -447,10 +370,9 @@ direction. It starts only when an activating specification per [architecture
 
 -  the frozen tool selection and tool admission over the live six-tool `ToolId` set and its code-owned spec match, where
 a new tool id stays a new `ToolId` variant with its own spec (architecture 15);
--  bridge attachment and typed handshake, the ephemeral daemon-issued grant, immutable bridge-contract selection,
-durable operation correlation, the one-path ingress into selection admission and tool-loop facts (including the
-already-delivered `sub_agent` ingress), re-subscription reading current state, cancellation propagation, recovery, and
-the closed `bridge_*` failures (architecture 19);
+-  the spawned kernel child's typed-client ingress into the one-path selection admission and tool-loop facts
+(including the already-delivered `sub_agent` ingress), re-subscription reading current state, cancellation
+propagation, recovery, and the closed `bridge_*` failures (architecture 19);
 -  worker/process supervision topology, never a second runtime, registry, persistence authority, or sandbox (architecture 03);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
@@ -459,8 +381,7 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 
 - frozen-selection and tool-admission fixtures, plus the ordered-group shape matrix and effect-evidence fault injection
 over the live loop;
-- bridge grant, operation correlation, re-subscription reading current state, cancellation, slow-peer, and no-bypass
-fixtures;
+- kernel-child ingress, re-subscription reading current state, cancellation, slow-peer, and no-bypass fixtures;
 - supervision-topology fixtures;
 - M3/M4 tool denial, ordinary workspace addressing, and retained RLM preservation fixtures.
 
@@ -474,8 +395,7 @@ publication;
 
 ### Exit criteria
 
--  the activating specification's contracts, tests, coverage, and evidence are recorded and pass `make quick`, `make
-verify`, and Linux/Windows CI;
+-  the activating specification's contracts, tests, coverage, and evidence are recorded;
 -  no two capability paths or registries exist, and supervision is topology only, never a second runtime or sandbox;
 - M3/M4 bytes and retained RLM history remain unchanged;
 - the milestone's activation evidence is recorded.
@@ -485,45 +405,42 @@ verify`, and Linux/Windows CI;
 **Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
 project script library of [architecture
 20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
-not activated: the `responses` driver, `SafeHeader` live wire injection, and the
-user-kind parser. It starts only when an activating specification per [architecture
+not activated: the `responses` driver and the optional named authentication header. It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
 typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 
 ### Deliver
 
--  typed MCP source, discovery, capability, selection, and invocation semantics under the fixed `mcp` ToolId, run-local
-capability acquisition, schema normalization, private resources, idempotency, safe projection, disposal, and no-resume
-recovery (architecture 18);
--  run-scoped private kernel epochs, foreground cells, safe output, verified checkpoints, background-task restrictions,
-cancellation, recovery, and no-resume semantics (architecture 20);
+-  MCP connection records with discovery and bounded per-connection method lists, direct invocation under the fixed
+`mcp` ToolId, private resources, idempotency, safe projection, disposal, and no-resume recovery (architecture 18);
+-  session-scoped private kernels with run-scoped namespaces, foreground cells, safe output, verified checkpoints,
+background-task restrictions, cancellation, recovery, and no-resume semantics (architecture 20);
 -  the project script library (`.ir/scripts`): agent-authored modules persisted as ordinary project files through the
 frozen tool descriptors, an exact import surface, bounded script-import evidence published as run facts, and no
 executable payload in checkpoint payload or metadata ([architecture 20](20-ipython-kernel-lifecycle.md));
 -  rich MIME/raw kernel output projection, bounded and credential-free, never substituting for the closed text-only safe
 projection;
--  scoped Goal acceptance and evidence, immutable untrusted Skill selection and progressive disclosure, admission-source
-context manifests, model-step safe projections, typed memory, and immutable compaction over exact completed history
+-  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
+selection, model-step context, and immutable compaction over exact completed history
 (architecture 21), with the Goal domain itself owned by architecture 28;
--  the canonical `responses` provider driver, `SafeHeader` live wire injection, and the user-kind parser (architecture
-22);
+-  the canonical `responses` provider driver and the optional named authentication header (architecture 22);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
 ### Tests first
 
-- MCP discovery, selection, invocation, disposal, and safe-projection fixtures;
+- MCP connection-record, method-list discovery, invocation, disposal, and safe-projection fixtures;
 - kernel epoch, cell, checkpoint, restore, cancellation, and recovery fixtures;
 -  `.ir/scripts` import-surface fixtures (missing library, unaddressable library path, and kernel-side scope cases),
 reuse by reading the file in a fresh epoch, and bounded script-import evidence without source text or absolute paths;
 - kernel output projection fixtures without raw frames, MIME payloads, binary objects, or credentials;
-- Skill selection, context manifest, projection, memory, and compaction fixtures plus no-current-state reconstruction;
+- Skill selection, context-source selection, and compaction fixtures plus no-current-state reconstruction;
 - provider driver, header-injection, and parser wire fixtures;
 - M3/M4 and retained IPython/RLM/provider/context preservation fixtures.
 
 ### Acceptance outcomes
 
--  no MCP capability, kernel epoch, script module, or context family gains authority beyond its own contract;
+-  no MCP connection record, kernel epoch, script module, or context family gains authority beyond its own contract;
 -  the kernel imports exactly the referenced library directory, a fresh run reuses a module only by reading the file,
 and checkpoint payload and metadata carry no script source;
 -  an unrepresentable import-evidence list fails before publication with `kernel_script_library_unavailable` and is
@@ -532,8 +449,8 @@ never truncated or stringified;
 
 ### Exit criteria
 
--  the activating specification's contracts, tests, coverage, and evidence are recorded and pass `make quick`, `make
-verify`, and Linux/Windows CI, and the kernel families' typed serde JSON contracts are declared in the same change;
+-  the activating specification's contracts, tests, coverage, and evidence are recorded, and the kernel families'
+typed serde JSON contracts are declared in the same change;
 -  no second runtime, registry, persistence authority, or sandbox is introduced, and no module, capability, or context
 record gains authority;
 - the milestone's activation evidence is recorded.

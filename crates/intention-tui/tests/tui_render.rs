@@ -8,11 +8,6 @@
 //! revue's pilot exposes cells and characters, not styles, and the palette's
 //! own unit tests guard the colour values.
 
-#![allow(
-    clippy::expect_used,
-    reason = "Render tests build typed fixture states and assert the rendered text directly."
-)]
-
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;
@@ -27,7 +22,7 @@ use intention_proto::{
     WorkspaceRootDto, WriteResult,
 };
 use intention_tui::app::{
-    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme,
+    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme, ThemePreference,
     TranscriptScroll, short_identifier,
 };
 use intention_tui::tui::RevueView;
@@ -1516,13 +1511,16 @@ fn the_band_lists_an_arguments_values_in_its_own_three_cells() {
     let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
     let (band_x, band_row) = find_text(&app, "╭─ arguments");
     let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(band_row + 1, "> light");
-    pilot.assert_line_contains(band_row + 1, Theme::Light.description());
+    pilot.assert_line_contains(band_row + 1, "> auto");
+    pilot.assert_line_contains(band_row + 1, ThemePreference::Auto.description());
     pilot.assert_line_contains(band_row + 1, "theme");
-    pilot.assert_line_contains(band_row + 2, "dark");
-    pilot.assert_line_contains(band_row + 2, Theme::Dark.description());
+    pilot.assert_line_contains(band_row + 2, "light");
+    pilot.assert_line_contains(band_row + 2, ThemePreference::Light.description());
     pilot.assert_line_contains(band_row + 2, "theme");
-    pilot.assert_cell(band_x, band_row + 3, '╰');
+    pilot.assert_line_contains(band_row + 3, "dark");
+    pilot.assert_line_contains(band_row + 3, ThemePreference::Dark.description());
+    pilot.assert_line_contains(band_row + 3, "theme");
+    pilot.assert_cell(band_x, band_row + 4, '╰');
     pilot.assert_contains("the committed answer");
     pilot.assert_contains("enter sends");
 }
@@ -1531,7 +1529,7 @@ fn the_band_lists_an_arguments_values_in_its_own_three_cells() {
 fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
     let closed = typed_state("");
     let mut opened = picker_state();
-    opened.update(Action::ThemePreviewed(Theme::Dark));
+    opened.update(Action::ThemePreviewed(ThemePreference::Dark));
     let mut app = TestApp::with_size(RevueView::new(&opened), WINDOW_WIDTH, WINDOW_HEIGHT);
     let (panel_x, panel_row) = find_text(&app, "╭─ Theme");
     let (_, cursor_row) = find_text(&app, "█");
@@ -1540,12 +1538,14 @@ fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
         "the picker sits above the input block, not over it: {panel_row} < {cursor_row}"
     );
     let pilot = Pilot::new(&mut app);
-    pilot.assert_cell(panel_x, panel_row + 4, '╰');
-    pilot.assert_line_contains(panel_row + 1, "Light");
-    pilot.assert_line_contains(panel_row + 1, Theme::Light.description());
-    pilot.assert_line_contains(panel_row + 2, "> Dark");
-    pilot.assert_line_contains(panel_row + 2, Theme::Dark.description());
-    pilot.assert_line_contains(panel_row + 3, "enter apply | esc revert");
+    pilot.assert_cell(panel_x, panel_row + 5, '╰');
+    pilot.assert_line_contains(panel_row + 1, "Auto");
+    pilot.assert_line_contains(panel_row + 1, ThemePreference::Auto.description());
+    pilot.assert_line_contains(panel_row + 2, "Light");
+    pilot.assert_line_contains(panel_row + 2, ThemePreference::Light.description());
+    pilot.assert_line_contains(panel_row + 3, "> Dark");
+    pilot.assert_line_contains(panel_row + 3, ThemePreference::Dark.description());
+    pilot.assert_line_contains(panel_row + 4, "enter apply | esc revert");
     pilot.assert_contains("the committed answer");
 
     // The panel spends the transcript's rows and no other's: the input block
@@ -1565,25 +1565,25 @@ fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
 fn the_theme_picker_marks_the_committed_row_until_the_preview_moves_it() {
     let committed = picker_state();
     let mut app = TestApp::with_size(RevueView::new(&committed), WINDOW_WIDTH, WINDOW_HEIGHT);
-    let (_, row) = find_text(&app, "> Light");
+    let (_, row) = find_text(&app, "> Auto");
     let pilot = Pilot::new(&mut app);
     pilot.assert_not_contains("> Dark");
     assert!(
         row > 0,
-        "the committed theme's row is inside the panel: {row}"
+        "the committed preference's row is inside the panel: {row}"
     );
 
     let mut previewed = picker_state();
-    previewed.update(Action::ThemePreviewed(Theme::Dark));
+    previewed.update(Action::ThemePreviewed(ThemePreference::Dark));
     assert_eq!(
-        previewed.theme(),
-        Theme::Light,
-        "a preview never commits the theme it shows"
+        previewed.theme_preference(),
+        ThemePreference::Auto,
+        "a preview never commits the preference it shows"
     );
     let mut app = TestApp::with_size(RevueView::new(&previewed), WINDOW_WIDTH, WINDOW_HEIGHT);
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("> Dark");
-    pilot.assert_not_contains("> Light");
+    pilot.assert_not_contains("> Auto");
 }
 
 #[test]
@@ -2471,10 +2471,11 @@ fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for()
 
 #[test]
 fn the_same_screen_paints_its_characters_under_both_themes() {
-    for theme in [Theme::Light, Theme::Dark] {
+    for preference in [ThemePreference::Light, ThemePreference::Dark] {
+        let theme = preference.theme(Theme::Light);
         // The welcome surface: its lockup and its overview are the two
         // theme-sensitive blocks it carries.
-        let welcome = welcome_state().with_theme(theme);
+        let welcome = welcome_state().with_theme(preference, Theme::Light);
         let welcome_app = TestApp::with_size(RevueView::new(&welcome), WINDOW_WIDTH, WINDOW_HEIGHT);
         let welcome_text = welcome_app.screen_text();
         assert!(
@@ -2509,7 +2510,7 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
             MessageKindDto::Assistant,
             "the committed answer",
         ));
-        let mut state = open_state(session_id, messages).with_theme(theme);
+        let mut state = open_state(session_id, messages).with_theme(preference, Theme::Light);
         for character in "/se".chars() {
             state.update(Action::InputChar(character));
         }

@@ -1,7 +1,5 @@
 #![allow(
     clippy::await_holding_lock,
-    clippy::expect_used,
-    clippy::panic,
     reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 
@@ -28,8 +26,7 @@ use intention_proto::{
     ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunProjectionDto,
     RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
     SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
-    encode_request,
+    TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
 };
 use intention_proto::{
     DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, WorkspaceId,
@@ -879,94 +876,6 @@ async fn continue_session_reports_no_sessions_to_continue() {
     assert_eq!(error.category(), ErrorCategoryDto::NotFound);
     assert_eq!(error.retry(), ErrorRetryDto::Never);
     server.await.expect("empty list fixture server completes");
-}
-
-#[tokio::test]
-async fn tui_settings_and_theme_selection_round_trip_and_validate_the_reply() {
-    let _guard = fixture_guard();
-    let settings = TuiSettingsDto::new(ThemeDto::Dark);
-    let settings_endpoint = endpoint();
-    let server = start_fixture_server(
-        settings_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TuiSettings(settings)),
-    );
-    let received = client(
-        settings_endpoint,
-        FixtureResponse::Result(ProtocolResultDto::TuiSettings(settings)),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .tui_settings()
-    .await
-    .expect("typed terminal settings are returned");
-    assert_eq!(received, settings);
-    assert_eq!(received.theme(), ThemeDto::Dark);
-    server.await.expect("settings fixture server completes");
-
-    // Another result kind is not the settings answer.
-    let invalid_endpoint = endpoint();
-    let invalid =
-        ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(SessionId::new(), TurnId::new()));
-    let server = start_fixture_server(
-        invalid_endpoint.clone(),
-        FixtureResponse::Result(invalid.clone()),
-    );
-    assert_eq!(
-        client(
-            invalid_endpoint,
-            FixtureResponse::Result(invalid),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .tui_settings()
-        .await
-        .expect_err("a non-settings result is not this request's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server
-        .await
-        .expect("invalid settings fixture server completes");
-
-    // A theme selection round-trips its accepted theme.
-    let accepted = TuiThemeAcceptedDto::new(ThemeDto::Dark);
-    let accepted_endpoint = endpoint();
-    let server = start_fixture_server(
-        accepted_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TuiThemeSet(accepted)),
-    );
-    let received = client(
-        accepted_endpoint,
-        FixtureResponse::Result(ProtocolResultDto::TuiThemeSet(accepted)),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .set_tui_theme(ThemeDto::Dark)
-    .await
-    .expect("typed theme acceptance is returned");
-    assert_eq!(received, accepted);
-    assert_eq!(received.theme(), ThemeDto::Dark);
-    server.await.expect("theme fixture server completes");
-
-    // An acceptance that names another theme is not this command's answer.
-    let mismatch_endpoint = endpoint();
-    let mismatch = ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Light));
-    let server = start_fixture_server(
-        mismatch_endpoint.clone(),
-        FixtureResponse::Result(mismatch.clone()),
-    );
-    assert_eq!(
-        client(
-            mismatch_endpoint,
-            FixtureResponse::Result(mismatch),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .set_tui_theme(ThemeDto::Dark)
-        .await
-        .expect_err("an acceptance of another theme is not this command's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server
-        .await
-        .expect("mismatched theme fixture server completes");
 }
 
 #[test]

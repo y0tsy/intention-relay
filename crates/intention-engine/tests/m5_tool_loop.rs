@@ -1,11 +1,6 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Execution fixtures use expect to provide precise failures."
-)]
-
 mod common;
 
-use std::{collections::VecDeque, future, sync::PoisonError, sync::mpsc, time::Duration};
+use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
 
 use common::{
     FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort,
@@ -35,7 +30,6 @@ fn tool_definition() -> ModelToolDefinitionDto {
         "Read bounded text from a workspace file.",
         r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
     )
-    .expect("fixture tool definition is valid")
 }
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
@@ -352,7 +346,7 @@ fn tool_call_executes_tool_and_completes() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -370,14 +364,14 @@ fn tool_call_executes_tool_and_completes() {
         repository
             .tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "the dispatched tool path owns the tool-result transaction"
     );
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -385,7 +379,7 @@ fn tool_call_executes_tool_and_completes() {
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -478,7 +472,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "a tool round without assistant text commits no transcript row"
     );
@@ -591,7 +585,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -809,7 +803,7 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -855,7 +849,7 @@ fn a_reasoning_only_final_step_commits_its_reasoning_row() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -907,7 +901,7 @@ fn an_interrupted_reasoning_only_step_commits_its_reasoning_without_a_cut_marker
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -978,7 +972,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "an empty reasoning presence carries no text and commits no durable assistant row"
     );
@@ -1026,7 +1020,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -1037,7 +1031,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -1082,7 +1076,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1
     );
@@ -1090,7 +1084,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -1161,7 +1155,7 @@ fn tool_failure_continues_with_guidance_without_retry() {
         let finishes = repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         assert_eq!(finishes.len(), 1, "a tool failure never retries");
         assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -1170,7 +1164,7 @@ fn tool_failure_continues_with_guidance_without_retry() {
             repository
                 .tool_results
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .expect("the fixture mutex is not poisoned")
                 .is_empty(),
             "the tool path committed the failed result row"
         );
@@ -1212,7 +1206,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("tool_execution_failed"));
@@ -1225,7 +1219,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
         repository
             .tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "the port owns the durable failed result row"
     );
@@ -1298,7 +1292,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1363,7 +1357,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_broken"));
@@ -1402,7 +1396,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     repository
         .cancel_after_append
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .replace((1, signal.clone()));
     let clock = ImmediateTime::new();
 
@@ -1599,7 +1593,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -1669,7 +1663,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1749,14 +1743,14 @@ fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1, "the run commits one terminal outcome");
     assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1846,14 +1840,14 @@ fn a_stop_during_a_tool_batch_ends_the_run_after_the_results_commit() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1941,7 +1935,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -2009,7 +2003,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
         clock
             .sleeps
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"
@@ -2017,7 +2011,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -2102,7 +2096,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -2118,7 +2112,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     repository
         .pending
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .push_back(pending_user_message(session_id, run_id, "pending message"));
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -2162,14 +2156,14 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         *repository
             .pending_consumes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner),
+            .expect("the fixture mutex is not poisoned"),
         2
     );
     assert!(
         repository
             .pending
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -2183,7 +2177,7 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     repository
         .pending
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .push_back(pending_user_message(
             session_id,
             run_id,
@@ -2228,7 +2222,7 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         finishes.len(),

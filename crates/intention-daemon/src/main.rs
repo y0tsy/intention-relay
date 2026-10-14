@@ -2,7 +2,6 @@
 
 #![allow(
     clippy::exit,
-    clippy::print_stderr,
     reason = "The thin daemon binary must report a safe startup failure and return a process status."
 )]
 

@@ -17,7 +17,8 @@ implementation, tools, or provider implementations.
 -  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
 `ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
 startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
-is applied only at daemon startup; live reload remains deferred.
+is applied only at daemon startup, and live reload is not an accepted direction, so startup stays the only activation
+path.
 -  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
 active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
 -> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
@@ -42,8 +43,8 @@ tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace
 the application path but does not select implementations. No registry or reserved slot exists: the tool set is the
 closed six-variant `ToolId`, and any other tool name is rejected as `unknown_tool` before effect.
 
-The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+The M1-M5 activation notes are historical records: the coverage policy is now the per-crate line floors in the root
+`Makefile`'s `COVERAGE_FLOORS` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Pre-collapse crate map (historical)
 
@@ -62,7 +63,7 @@ named here (`intention-domain`, `intention-protocol`, `intention-application`, `
 | `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
 | `intention-vfr` (created at M7) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
 | `intention-headroom` (created at M7) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
-| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
+| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, plan lifecycle records, Plan/Build policy. | Tools, storage contracts, domain, types. |
 | `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
 | `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
 | `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
@@ -71,8 +72,8 @@ named here (`intention-domain`, `intention-protocol`, `intention-application`, `
 
 ## Pre-collapse dependency direction (historical)
 
-This diagram records the pre-collapse dependency direction. The live edges are the ones declared in
-`quality/architecture.toml` and shown by the activated crate map below.
+This diagram records the pre-collapse dependency direction. The live edges are the ones the crate manifests declare and
+the activated crate map below shows.
 
 ```mermaid
 flowchart BT
@@ -112,8 +113,8 @@ flowchart BT
 ## Slice 1.5 crate map (activated)
 
 Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
-below is the live crate map, and the exact permitted edges and coverage tiers are declared
-by `quality/architecture.toml` under phase `slice2`.
+below is the live crate map; each crate's permitted dependency direction is the one its manifest declares, and the
+root `Makefile`'s `COVERAGE_FLOORS` declares the line floor of every measured crate.
 
 | Target crate | Absorbs | Owns |
 | --- | --- | --- |
@@ -129,8 +130,11 @@ by `quality/architecture.toml` under phase `slice2`.
 
 Retained outside the nine production crates: the `intention-tui` adapter crate — since Slice 2 the terminal
 application, one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared
-client — and the non-production `intention-test-support` fixture crate. The future crates are created at their
-milestones: `intention-tauri` (M6), `intention-plans` (M5+ Slice 3), and `intention-vfr` and `intention-headroom` (M7).
+client, and the owner of its own terminal theme, which it stores locally — a `--theme auto|light|dark` flag, else the
+`tui.toml` preference, else environment detection, else the dark palette — so no theme state crosses the
+wire — and the non-production `intention-test-support` fixture crate. The future crates are created at their
+milestones: `intention-tauri` (M6) and `intention-plans` (M5+ Slice 3); VFR and Headroom arrive at M7 as modules of
+`intention-tools`, not as separate crates.
 
 Rules the target map fixes:
 
@@ -206,7 +210,7 @@ implementations; the binary owns process lifecycle.
 
 For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
 Base tools remain primitive implementations; the engine owns lifecycle/result persistence and publication, and the
-future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
+future plan owner and the VFR/Headroom modules attach as ordinary calls when activated, not as extension points.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 
@@ -233,11 +237,12 @@ The workspace must have tests that fail when these rules are broken:
 4. only `intention-daemon` selects concrete storage/provider/tool extension implementations;
 5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
 6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
-7. every planned crate has a stated test target before implementation begins;
-8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
+7. every planned crate states its test targets in this crate map before implementation begins;
+8. every boundary a mechanism can decide is enforced by the crate manifests, by rustc, and by the lint configuration;
+   the rest is a review responsibility.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate line floors),
 lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals

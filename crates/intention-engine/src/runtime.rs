@@ -129,8 +129,8 @@ pub trait ModelTextDeltaPort: Send + Sync {
 /// The port selects the bounded, credential-free content the runtime commits as
 /// the call's durable result and delivers to the model. A `Failed` outcome
 /// carries its safe error classification plus the bounded guidance the run
-/// delivers as the call's tool message; `Completed`, `Partial`, `Cancelled`,
-/// and `Failed` all keep the run going with the returned content.
+/// delivers as the call's tool message; `Completed`, `Partial`, and `Failed`
+/// all keep the run going with the returned content.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolResultOutcomeDto {
     /// The call completed with bounded model-visible content.
@@ -142,11 +142,6 @@ pub enum ToolResultOutcomeDto {
     /// output with its interruption notice.
     Partial {
         /// The bounded captured output with its interruption notice.
-        content: String,
-    },
-    /// The call was cancelled before it produced a final result.
-    Cancelled {
-        /// The bounded, credential-free content answering the call.
         content: String,
     },
     /// The call failed safely; content explains the failure to the model.
@@ -177,17 +172,6 @@ impl ToolResultOutcomeDto {
     /// Returns a validation error when the content is blank.
     pub fn partial(content: impl Into<String>) -> DtoResult<Self> {
         Ok(Self::Partial {
-            content: tool_result_content(content.into())?,
-        })
-    }
-
-    /// Creates a cancelled tool outcome with non-blank content.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the content is blank.
-    pub fn cancelled(content: impl Into<String>) -> DtoResult<Self> {
-        Ok(Self::Cancelled {
             content: tool_result_content(content.into())?,
         })
     }
@@ -806,10 +790,6 @@ where
                             }
                             ToolResultOutcomeDto::Partial { content, .. } => {
                                 state.mark_interrupted_tool();
-                                messages
-                                    .push(ModelMessageDto::tool_result(call.call_id(), content)?);
-                            }
-                            ToolResultOutcomeDto::Cancelled { content, .. } => {
                                 messages
                                     .push(ModelMessageDto::tool_result(call.call_id(), content)?);
                             }

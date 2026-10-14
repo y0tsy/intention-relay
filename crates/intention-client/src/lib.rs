@@ -19,10 +19,9 @@ use intention_proto::{
     GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto,
     ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId,
     RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SetTuiThemeCommandDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
-    TuiThemeAcceptedDto, TurnId, decode_response, encode_request, parse_session_frame,
-    run_status_is_terminal,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_response,
+    encode_request, parse_session_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -396,41 +395,6 @@ impl IntentionClient {
         match sessions.sessions().first() {
             Some(summary) => Ok(summary.session_id()),
             None => Err(no_sessions_to_continue()?),
-        }
-    }
-
-    /// Reads the effective terminal settings.
-    ///
-    /// The daemon answers its stored theme override or, before any set, the
-    /// theme the resolved configuration selected.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not terminal settings.
-    pub async fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
-        match self.request(ClientRequestDto::GetTuiSettings).await? {
-            ProtocolResultDto::TuiSettings(settings) => Ok(settings),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    /// Selects and stores the terminal theme.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not the acceptance of the
-    /// requested theme.
-    pub async fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
-        match self
-            .request(ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(
-                theme,
-            )))
-            .await?
-        {
-            ProtocolResultDto::TuiThemeSet(accepted) if accepted.theme() == theme => Ok(accepted),
-            _ => Err(invalid_response()),
         }
     }
 
@@ -1228,11 +1192,6 @@ fn startup_lock_timeout() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Unit fixtures use direct assertions for precise diagnostics."
-    )]
 
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

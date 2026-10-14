@@ -340,10 +340,6 @@ fn as_width(columns: usize) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "The pane unit tests build typed fixtures and assert rendered cells directly."
-    )]
 
     use revue::testing::TestApp;
 

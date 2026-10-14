@@ -5,10 +5,6 @@
     reason = "Each integration target compiles this module and uses a different subset of its fixtures."
 )]
 #![allow(
-    clippy::expect_used,
-    reason = "Shared fixtures fail loudly with local context when deterministic setup breaks."
-)]
-#![allow(
     clippy::must_use_candidate,
     reason = "Shared fixtures are called for their effect on the fixture, not for the returned value alone."
 )]

@@ -7,22 +7,24 @@
 //! and the input paints no panel at all rather than taking the input's rows.
 //!
 //! The panel is drawn in the sessions browser's own vocabulary, minimal: its
-//! rounded frame carries the `Theme` title, one row per theme carries the
-//! theme's name, its one-line description, and - on the effective theme's row -
+//! rounded frame carries the `Theme` title, one row per preference carries the
+//! preference's name, its one-line description, and - on the highlighted row -
 //! the browser's `> ` cursor marker on the selected wash, and its own last
-//! inner row carries the `enter apply | esc revert` legend.
+//! inner row carries the `enter apply | esc revert` legend. The first row is
+//! `Auto`, the request to follow the terminal's own background, so returning to
+//! detection never needs a hand-edited file.
 
 use revue::text::char_width;
 use revue::widget::{Border, Card, RichText, Span, Stack, Style, Text, vstack};
 
-use crate::app::{AppState, Theme};
+use crate::app::{AppState, ThemePreference};
 use crate::tui::palette::Palette;
 
 /// The rows the panel's frame takes.
 const PANEL_FRAME: u16 = 2;
 
-/// The rows the theme rows take: one per theme.
-const THEME_ROWS: u16 = 2;
+/// The rows the preference rows take: one per preference.
+const THEME_ROWS: u16 = ThemePreference::ALL.len() as u16;
 
 /// The rows the panel's own legend takes.
 const LEGEND_ROWS: u16 = 1;
@@ -43,8 +45,8 @@ const CELL_GAP: &str = "  ";
 /// The columns the panel pads its rows with.
 const PANEL_PADDING: u16 = 2;
 
-/// Returns the rows the picker panel occupies: its frame, one row per theme,
-/// and its own legend row.
+/// Returns the rows the picker panel occupies: its frame, one row per
+/// preference, and its own legend row.
 #[must_use]
 pub(in crate::tui) const fn panel_rows() -> u16 {
     PANEL_FRAME + THEME_ROWS + LEGEND_ROWS
@@ -67,18 +69,21 @@ pub(in crate::tui) fn picker_panel(
     vstack().child_sized(panel(state, width, palette), rows)
 }
 
-/// Returns the framed panel: one rounded frame titled `Theme` around the theme
-/// rows and the legend.
+/// Returns the framed panel: one rounded frame titled `Theme` around the
+/// preference rows and the legend.
 ///
-/// The rows read the effective theme, so the marker rides the row the picker is
-/// previewing: the whole window has already repainted through that theme by the
-/// time this frame is drawn.
+/// The rows read the highlighted preference, so the marker rides the row the
+/// picker is previewing: the whole window has already repainted through the
+/// palette that preference names by the time this frame is drawn.
 fn panel(state: &AppState, width: u16, palette: &'static Palette) -> Border {
     let content = usize::from(width.saturating_sub(PANEL_CHROME_COLUMNS));
-    let effective = state.effective_theme();
+    let highlighted = state.highlighted_preference();
     let mut body = vstack();
-    for theme in Theme::ALL {
-        body = body.child_sized(theme_row(theme, theme == effective, content, palette), 1);
+    for preference in ThemePreference::ALL {
+        body = body.child_sized(
+            preference_row(preference, preference == highlighted, content, palette),
+            1,
+        );
     }
     Border::rounded()
         .min_size(width, panel_rows())
@@ -95,12 +100,25 @@ fn panel(state: &AppState, width: u16, palette: &'static Palette) -> Border {
         )
 }
 
-/// Returns one theme row: its marker, its name, and its one-line description.
-fn theme_row(theme: Theme, effective: bool, content: usize, palette: &'static Palette) -> Text {
-    let marker = if effective { CURSOR_MARKER } else { ROW_MARKER };
-    let line = format!("{marker}{}{CELL_GAP}{}", theme.label(), theme.description());
+/// Returns one row: its marker, its name, and its one-line description.
+fn preference_row(
+    preference: ThemePreference,
+    highlighted: bool,
+    content: usize,
+    palette: &'static Palette,
+) -> Text {
+    let marker = if highlighted {
+        CURSOR_MARKER
+    } else {
+        ROW_MARKER
+    };
+    let line = format!(
+        "{marker}{}{CELL_GAP}{}",
+        preference.label(),
+        preference.description()
+    );
     let line = pad(&truncate(&line, content), content);
-    if effective {
+    if highlighted {
         Text::new(line)
             .fg(palette.accent_deep)
             .bg(palette.row_selected_bg)
@@ -185,7 +203,7 @@ mod tests {
     use revue::testing::TestApp;
 
     use super::{PANEL_FRAME, display_width, legend, pad, panel_rows, picker_panel};
-    use crate::app::{Action, AppState, Theme};
+    use crate::app::{Action, AppState, ThemePreference};
     use crate::tui::palette::Palette;
 
     /// The light palette every fixture renders with.
@@ -198,8 +216,8 @@ mod tests {
     fn the_panel_counts_its_frame_its_rows_and_its_legend() {
         assert_eq!(
             panel_rows(),
-            PANEL_FRAME + 3,
-            "two theme rows and the legend sit inside the frame"
+            PANEL_FRAME + 4,
+            "three preference rows and the legend sit inside the frame"
         );
     }
 
@@ -210,37 +228,43 @@ mod tests {
         let text = app.screen_text();
         assert!(text.contains("Theme"), "the frame carries the title");
         assert!(
-            text.contains("Light"),
-            "the first row names the light theme"
+            text.contains("Auto"),
+            "the first row is the request to follow detection"
         );
         assert!(
-            text.contains(Theme::Light.description()),
-            "the first row describes the surface it paints"
+            text.contains(ThemePreference::Auto.description()),
+            "the first row describes what detection does"
         );
-        assert!(text.contains("Dark"), "the second row names the dark theme");
-        assert!(text.contains(Theme::Dark.description()));
+        assert!(
+            text.contains("Light"),
+            "the second row names the light theme"
+        );
+        assert!(text.contains(ThemePreference::Light.description()));
+        assert!(text.contains("Dark"), "the third row names the dark theme");
+        assert!(text.contains(ThemePreference::Dark.description()));
         assert!(
             text.contains("enter apply | esc revert"),
             "the legend is the panel's own last inner row"
         );
         assert!(
-            app.get_line(1).contains("> Light"),
-            "the committed theme's row is the marked one: {}",
+            app.get_line(1).contains("> Auto"),
+            "the committed preference's row is the marked one: {}",
             app.get_line(1)
         );
+        assert!(!text.contains("> Light"));
         assert!(!text.contains("> Dark"));
     }
 
     #[test]
     fn the_panel_marks_the_previewed_row() {
         let mut state = AppState::new(None);
-        state.update(Action::ThemePreviewed(Theme::Dark));
+        state.update(Action::ThemePreviewed(ThemePreference::Dark));
         let panel = picker_panel(&state, WIDTH, panel_rows(), LIGHT);
         let app = TestApp::with_size(panel, WIDTH, panel_rows());
         assert!(
-            app.get_line(2).contains("> Dark"),
+            app.get_line(3).contains("> Dark"),
             "the marker follows the preview: {}",
-            app.get_line(2)
+            app.get_line(3)
         );
         assert!(
             !app.get_line(1).contains("> "),

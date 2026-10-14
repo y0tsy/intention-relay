@@ -21,7 +21,7 @@ use intention_proto::{
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
-use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
+use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto};
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolService, WorkspaceRoot, partial_tool_result_content,
     render_tool_result_content, tool_failure_guidance,
@@ -289,12 +289,12 @@ where
         Ok(committed)
     }
 
-    /// Commits one terminal tool result with its answering transcript row, then
+    /// Commits one terminal tool result as its answering transcript row, then
     /// hands that committed row to the commit sink.
     ///
-    /// Exactly one transaction writes the `tool_results` row and the
-    /// `tool_result` message the model reads; the message carries the same
-    /// typed status, payload, and metadata the evidence row stores.
+    /// Exactly one transaction appends the `tool_result` message the model
+    /// reads; the row's own typed projection carries its status, payload, and
+    /// metadata, so the message is the result's single durable home.
     ///
     /// # Errors
     ///
@@ -315,23 +315,13 @@ where
         metadata: Vec<ToolResultMetadataEntryDto>,
         occurred_at: TimestampDto,
         publisher: &P,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+    ) -> DtoResult<MessageProjectionDto> {
         let projection = ToolResultRowDto::new(
             call_id,
             ToolIdentityDto::parse(tool_id)?,
             status,
             result,
-            metadata.clone(),
-        )?;
-        let evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id.to_owned(),
-            status,
-            content.clone(),
             metadata,
-            occurred_at,
         )?;
         let message = NewMessageDto::new(
             session_id,
@@ -341,11 +331,9 @@ where
             None,
             Some(ToolRowDto::Result(projection)),
         )?;
-        let committed = self
-            .repository
-            .write_tool_result(evidence.clone(), message)?;
-        publisher.observe_session_commit(&SessionCommitDto::Content(committed));
-        Ok(evidence)
+        let committed = self.repository.append_message(message, occurred_at)?;
+        publisher.observe_session_commit(&SessionCommitDto::Content(committed.clone()));
+        Ok(committed)
     }
 
     /// Creates an application facade around a DTO-only durable repository.
@@ -644,7 +632,7 @@ fn schedule_from_context(
         messages,
         None,
     )?
-    .with_tools(advertised_tool_definitions()?)?;
+    .with_tools(advertised_tool_definitions())?;
     // The constructed request must agree with the requested run identity and
     // the durable starting-run selection before it becomes executable work.
     if request.run_id() != run_id
@@ -675,6 +663,11 @@ fn schedule_from_context(
 /// An assistant row without answer text carries only the reasoning of a step
 /// that issued calls without answering; reasoning is never replayed, so the row
 /// contributes no model message.
+///
+/// @todo(provider): a gateway with the DeepSeek contract requires every previous
+/// turn's reasoning back once the request carries `tools`, and this rebuild is
+/// where that replay would read the durable `messages.reasoning` column into a
+/// request-scoped attachment.
 ///
 /// A call whose result never committed cannot replay: an assistant tool-call
 /// message whose answer is missing is not a valid model context, so the call is
@@ -709,6 +702,8 @@ fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelM
                 // A reasoning-only step row is durable transcript evidence,
                 // not model context: reasoning is never replayed, so a row
                 // without answer text contributes no message.
+                // @todo(provider): a gateway with the DeepSeek contract replays
+                // it once the request carries `tools`.
                 if !row.text().trim().is_empty() {
                     messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
                 }
@@ -754,13 +749,9 @@ fn incomplete_tool_row() -> ErrorDto {
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
 ///
-/// The model-visible tools surface in advertisement order.
-///
-/// # Errors
-///
-/// Returns a typed validation error when a model-visible tool cannot be mapped
-/// into a provider-neutral tool definition.
-fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
+/// The model-visible tools surface in advertisement order; their definitions and
+/// schema text are code-owned, so construction cannot fail.
+fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
     intention_tools::model_visible_descriptors()
         .iter()
         .map(|descriptor| {
@@ -775,10 +766,6 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Metadata fixtures use expect to provide precise failures."
-    )]
 
     use super::tool_result_metadata;
     use intention_proto::{

@@ -10,7 +10,7 @@
 //! notices a resolved line can answer with are built here too, from the same
 //! declarations. Nothing outside this module spells a command name.
 
-use super::Theme;
+use super::ThemePreference;
 
 /// One value one declared command argument accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,27 +91,27 @@ pub enum CommandAction {
 
 /// The values `/theme` accepts, in the order the picker draws its rows.
 ///
-/// The list is derived from [`Theme::ALL`], so the command surface cannot
-/// declare a value the theme vocabulary does not carry, nor call a theme by a
-/// name of its own: each value is spelled by the wire vocabulary itself
-/// (`ThemeDto::as_str`), the same word the setting is serialized with. A theme
-/// added to `ALL` extends this declaration, and the command surface and the
-/// picker panel can never disagree about what the two themes are called or
-/// which surface each one paints.
-static THEME_VALUES: [ValueSpec; Theme::ALL.len()] = theme_values();
+/// The list is derived from [`ThemePreference::ALL`], so the command surface
+/// cannot declare a value the preference vocabulary does not carry, nor call a
+/// preference by a name of its own: each value is spelled by the vocabulary
+/// itself ([`ThemePreference::as_str`]), the same word the local settings file
+/// stores. A preference added to `ALL` extends this declaration, and the
+/// command surface and the picker panel can never disagree about what the three
+/// preferences are called or which palette each one paints.
+static THEME_VALUES: [ValueSpec; ThemePreference::ALL.len()] = theme_values();
 
-/// Returns the theme vocabulary as the declared values of `/theme`.
-const fn theme_values() -> [ValueSpec; Theme::ALL.len()] {
+/// Returns the preference vocabulary as the declared values of `/theme`.
+const fn theme_values() -> [ValueSpec; ThemePreference::ALL.len()] {
     let mut values = [ValueSpec {
         value: "",
         description: "",
-    }; Theme::ALL.len()];
+    }; ThemePreference::ALL.len()];
     let mut position = 0;
-    while position < Theme::ALL.len() {
-        let theme = Theme::ALL[position];
+    while position < ThemePreference::ALL.len() {
+        let preference = ThemePreference::ALL[position];
         values[position] = ValueSpec {
-            value: theme.dto().as_str(),
-            description: theme.description(),
+            value: preference.as_str(),
+            description: preference.description(),
         };
         position += 1;
     }
@@ -697,10 +697,6 @@ fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Registry tests assert the declared commands and their ranking directly."
-    )]
 
     use super::{
         ArgumentSpec, COMMANDS, CommandAction, CommandMenu, CommandResolution, CommandSpec,
@@ -792,13 +788,18 @@ mod tests {
                 .iter()
                 .map(|value| value.value)
                 .collect::<Vec<_>>(),
-            vec!["light", "dark"],
-            "the declared values are the theme vocabulary in picker order"
+            vec!["auto", "light", "dark"],
+            "the declared values are the preference vocabulary in picker order"
         );
         assert_eq!(
             argument.values[0].description,
-            crate::app::Theme::Light.description(),
-            "the command surface reads the theme's own row vocabulary"
+            crate::app::ThemePreference::Auto.description(),
+            "the command surface reads the preference's own row vocabulary"
+        );
+        assert_eq!(
+            argument.values[1].description,
+            crate::app::ThemePreference::Light.description(),
+            "every declared value reads its own row vocabulary"
         );
     }
 
@@ -812,7 +813,7 @@ mod tests {
         assert_eq!(invocation.value(1), None, "no second argument is declared");
         assert_eq!(
             invocation.value_index(0),
-            Some(1),
+            Some(2),
             "the resolved value carries its own position in the declaration"
         );
         assert_eq!(invocation.value_index(1), None);
@@ -825,7 +826,7 @@ mod tests {
             Some("dark"),
             "the canonical spelling is what a caller sees"
         );
-        assert_eq!(invocation.value_index(0), Some(1));
+        assert_eq!(invocation.value_index(0), Some(2));
 
         let invocation = resolve_command("theme")
             .into_invocation()
@@ -842,7 +843,7 @@ mod tests {
     fn a_value_no_declaration_answers_to_names_the_accepted_values() {
         assert_eq!(
             resolve_command("theme purple").notice().as_deref(),
-            Some("unknown theme \"purple\" - expected light or dark")
+            Some("unknown theme \"purple\" - expected auto or light or dark")
         );
         assert_eq!(
             resolve_command("new purple").into_invocation(),
@@ -1050,7 +1051,7 @@ mod tests {
         );
         assert_eq!(
             labels(&menu),
-            vec!["light", "dark"],
+            vec!["auto", "light", "dark"],
             "an empty filter lists every value in declaration order"
         );
 

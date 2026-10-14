@@ -223,7 +223,12 @@ fn map_openrouter_error(error: &OpenRouterError) -> ProviderErrorDto {
 /// assistant-message reasoning echo field, and OpenRouter expresses reasoning
 /// through request-scoped options (`reasoning`, `include_reasoning`) plus
 /// response-side reasoning content. The attachment stays runtime-owned
-/// transient same-run state and never changes this native request shape.
+/// transient state and never changes this native request shape.
+///
+/// @todo(provider): the missing SDK field, not the wire, is why this adapter
+/// cannot echo. A model routed through OpenRouter whose own wire validates the
+/// reasoning echo for tool calls (Claude, Gemini 3) fails there, so this kind
+/// supports reasoning output only until the pinned SDK carries the field.
 fn translate_request(request: &ModelRequestDto) -> DtoResult<ChatCompletionRequest> {
     let mut messages = Vec::new();
     if let Some(context) = request.system_context() {
@@ -349,11 +354,11 @@ fn translate_assistant_message(message: &ModelMessageDto) -> DtoResult<Message> 
     }
 }
 
-#[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Private SDK error fixtures construct exact native variants."
+#[expect(
+    clippy::disallowed_types,
+    reason = "Adapter tests build raw SDK payloads to assert the translation; DTO-first binds production code."
 )]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, ToolCallDto, UsageDto};
@@ -499,8 +504,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let request = request()
             .with_tools(vec![definition])
             .expect("tool advertisement is valid");
@@ -676,8 +680,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let request = ModelRequestDto::new(
             RunId::new(),
             "fixture-model",
@@ -783,8 +786,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let widest = ModelRequestDto::new(
             RunId::new(),
             "fixture-model",
@@ -812,10 +814,9 @@ mod tests {
         );
 
         // A tool-role message always carries its identity, so the tool-result
-        // step cannot fail; tool parameters and the request identity are
-        // validated where they are built, so the remaining steps cannot fail.
+        // step cannot fail; the request identity is validated where it is
+        // built, so the remaining steps cannot fail.
         assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
-        assert!(ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err());
         assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
         assert!(ModelRequestDto::new(RunId::new(), "fixture-model", Vec::new(), None).is_err());
 

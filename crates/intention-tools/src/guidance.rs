@@ -1,10 +1,12 @@
 //! Model-visible guidance for one failed tool call.
 //!
 //! Guidance is tool-result content, not an `ErrorDto`: it explains the failed
-//! call in code-owned safe language so the model can correct the call and
-//! continue the run. It carries no absolute workspace root, no OS error
-//! string, no command line, no file content, and no credential, and it stays
-//! inside `MAX_TOOL_GUIDANCE_BYTES`.
+//! call in code-owned language so the model can correct the call and continue
+//! the run. Its only dynamic detail is the failure message — the addressed
+//! workspace-relative path and the underlying error. It carries no absolute
+//! workspace root, no resolved symlink target, no command line, no file
+//! content, and no credential, and it stays inside
+//! `MAX_TOOL_GUIDANCE_BYTES`.
 
 use intention_proto::ErrorDto;
 

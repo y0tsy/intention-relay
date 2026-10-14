@@ -352,10 +352,6 @@ fn display_width(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "The pane unit tests assert typed fixture values directly."
-    )]
 
     use super::{BufferLines, MIN_BLOCK_ROWS, block_rows, clip, window_start};
     use crate::app::{Action, AppState};

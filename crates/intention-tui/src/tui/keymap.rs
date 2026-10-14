@@ -136,19 +136,24 @@ const fn sessions_action(key: &KeyEvent) -> Option<Action> {
 
 /// Returns the action one key press asks for on the theme picker screen.
 ///
-/// The picker owns the same two rows the core does: `Up` and `Down` walk them
-/// without wrapping and preview the candidate they land on, `Enter` commits
-/// the highlighted theme through the daemon, and `Esc` drops the preview and
-/// returns to the chat. The picker's `Esc` is its own close key, exactly as the
-/// browser's is: while it is open, the chat's cancel, clear, and exit arms are
-/// unreachable. Ctrl+C and Ctrl+Q keep the meanings every screen gives them.
+/// The picker owns the same three rows the core does - `Auto`, `Light`, and
+/// `Dark`: `Up` and `Down` walk them without wrapping and preview the candidate
+/// they land on, `Enter` commits the highlighted preference and asks for its
+/// local rewrite, and `Esc` drops the preview and returns to the chat. The
+/// picker's `Esc` is its own close key, exactly as the browser's is: while it is
+/// open, the chat's cancel, clear, and exit arms are unreachable. Ctrl+C and
+/// Ctrl+Q keep the meanings every screen gives them.
 const fn theme_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
     match key.key {
         Key::Char('q') if key.ctrl => Some(Action::Quit),
         Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
-        Key::Up => Some(Action::ThemePreviewed(state.effective_theme().previous())),
-        Key::Down => Some(Action::ThemePreviewed(state.effective_theme().next())),
-        Key::Enter => Some(Action::ThemeSelected(state.effective_theme())),
+        Key::Up => Some(Action::ThemePreviewed(
+            state.highlighted_preference().previous(),
+        )),
+        Key::Down => Some(Action::ThemePreviewed(
+            state.highlighted_preference().next(),
+        )),
+        Key::Enter => Some(Action::ThemeSelected(state.highlighted_preference())),
         Key::Escape => Some(Action::ThemePreviewCleared),
         _ => None,
     }
@@ -160,7 +165,7 @@ mod tests {
 
     use crate::app::{
         Action, AppState, BrowserCursorMove, InputCursorMove, InputHistoryMove, MenuMove, Screen,
-        Theme,
+        ThemePreference,
     };
 
     use super::key_action;
@@ -370,29 +375,29 @@ mod tests {
         let mut state = picker_state();
         assert_eq!(
             key_action(&KeyEvent::new(Key::Down), &state),
-            Some(Action::ThemePreviewed(Theme::Dark)),
-            "Down previews the row below the committed theme"
+            Some(Action::ThemePreviewed(ThemePreference::Light)),
+            "Down previews the row below the committed auto row"
         );
         assert_eq!(
             key_action(&KeyEvent::new(Key::Up), &state),
-            Some(Action::ThemePreviewed(Theme::Light)),
-            "Light is the first row: Up stays"
+            Some(Action::ThemePreviewed(ThemePreference::Auto)),
+            "Auto is the first row: Up stays"
         );
 
-        state.update(Action::ThemePreviewed(Theme::Dark));
+        state.update(Action::ThemePreviewed(ThemePreference::Dark));
         assert_eq!(
             key_action(&KeyEvent::new(Key::Down), &state),
-            Some(Action::ThemePreviewed(Theme::Dark)),
+            Some(Action::ThemePreviewed(ThemePreference::Dark)),
             "Dark is the last row: Down stays"
         );
         assert_eq!(
             key_action(&KeyEvent::new(Key::Up), &state),
-            Some(Action::ThemePreviewed(Theme::Light)),
+            Some(Action::ThemePreviewed(ThemePreference::Light)),
             "Up walks back from the previewed row"
         );
         assert_eq!(
             key_action(&KeyEvent::new(Key::Enter), &state),
-            Some(Action::ThemeSelected(Theme::Dark)),
+            Some(Action::ThemeSelected(ThemePreference::Dark)),
             "Enter commits the row the preview is on"
         );
         assert_eq!(

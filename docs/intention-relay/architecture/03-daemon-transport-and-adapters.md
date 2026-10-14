@@ -10,7 +10,7 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
 transactions; active sessions and runs; provider drivers and model streams; the tool surface and workspace policy, plus
-VFR, Headroom, and plan policies when activated; frame publication and subscription source; and protocol frames and
+plan policy when activated; frame publication and subscription source; and protocol frames and
 subscription current-state reads via `intention-transport`.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
@@ -52,14 +52,11 @@ table: a request variant is the operation, and the reply variant is its typed re
 | `GetSessionSnapshot` | `GetSessionSnapshotQueryDto` | `SessionSnapshot` |
 | `GetDaemonHealth` | none | `DaemonHealth` |
 | `ListSessions` | none | `SessionsListed` |
-| `GetTuiSettings` | none | `TuiSettings` |
-| `SetTuiTheme` | `SetTuiThemeCommandDto` | `TuiThemeSet` |
 | `SubscribeSession` | `SubscribeSessionCommandDto` | `SessionSubscribed` |
 
-The terminal theme is a presentation-only wire value: `ThemeDto` is the durable `light`/`dark` spelling,
-`TuiSettingsDto` is the daemon's effective theme a client renders with, and `TuiThemeAcceptedDto` is the stored
-selection's acceptance evidence. A theme selection enters no run's immutable configuration selection and records no
-configuration revision.
+The wire carries no terminal-theme operation: the theme is the terminal client's own presentation state, resolved and
+stored locally, so the daemon never learns which palette a front end paints. A theme change records no configuration
+revision all the same, and the local file it writes is not the credential-bearing `config.toml`.
 
 Errors travel on exactly one channel: a rejection carrying the structured `ErrorDto` with its stable code, category,
 retry guidance, and safe message. A request line that cannot be decoded is answered with a typed identity-less
@@ -274,7 +271,7 @@ explicit presentation DTOs when necessary for JavaScript ergonomics; and manage 
 app lifecycle details.
 
 The bridge must not import application use-case services directly; create a competing SQLite connection or run actor;
-invoke provider SDKs or tools; reimplement persistence, permission, plan, workspace, VFR, or Headroom policy; or
+invoke provider SDKs or tools; reimplement persistence, plan, workspace, or tool-transform policy; or
 introduce a parallel Tauri-only command contract.
 
 ## TUI and REPL
@@ -310,14 +307,14 @@ follow-up run.
 | Reconnect | Subscription integration test. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
 | State location | Platform-state path fixture. | The database resolves under AppData/platform state and fails safely without an absolute platform directory, never using CWD. |
-| Adapter isolation | Dependency/contract test. | Tauri and TUI have no direct runtime/storage implementation dependency. |
+| Adapter isolation | Dependency/contract test. | The TUI adapter has no direct runtime/storage implementation dependency; the desktop bridge carries the same rule when M6 creates it. |
 
 ## Quality-gate integration
 
 The daemon, transport, client, and adapter tests in this document are blocking `make verify` inputs under the coverage
-policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate tiers). Tauri and TUI carry the
-`edge` tier floor in addition to
-their mapping contracts and fixture-daemon outcome scenarios; the floor never replaces that evidence.
+policy of [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). `intention-tui`
+carries its 20% line floor in addition to its mapping contracts and fixture-daemon outcome scenarios; the floor never
+replaces that evidence, and the bridge crate takes its own floor when M6 creates it.
 
 ## Open implementation decisions
 
@@ -428,8 +425,9 @@ text above is the live policy.
   wrapped, because wrapping it would shred the alignment the table exists to show.
 - One colour system, two themes. `src/tui/palette.rs` is the single source of colours: `palette::of(theme)` resolves
   one `Palette` value once per frame from the state's effective theme, and every pane reads the roles of the reference
-  it was handed, so no pane constructs a colour of its own. The light theme is the warm off-white surface the terminal
-  has always drawn; the dark theme is a neutral graphite ramp whose only hue is the accent pair, so a state there
+  it was handed, so no pane constructs a colour of its own. The light palette is the product's warm off-white surface;
+  the dark palette is a neutral graphite ramp whose only hue is the accent pair, and it is what a terminal that reports
+  no background is painted with, so a state there
   reaches the reader through its word and glyph rather than through a colour of its own. The module's own role table
   pairs each role's light and dark value. Within one
   theme no two roles share a value — the one documented alias is `error`, which spells `scarlet` exactly — every role
@@ -475,30 +473,53 @@ text above is the live policy.
   keep collecting across the pauses a terminal's own chunked delivery leaves, and the `Enter` a paste carried stays its
   line break while the `Enter` the user presses afterwards submits the line — so the keystrokes reach the line as the one
   paste they are, never as a row per line.
-- Terminal settings. `config.toml` supplies the default through its optional `[tui] theme` key (`light` or `dark`; an
-  absent section and an absent key both mean light, and an unknown spelling is the typed `invalid_tui_theme` validation
-  error, so nothing silently falls back). The daemon owns the runtime value as a single-row `tui_settings` override in
-  the state database and answers the effective theme — the stored override, else the configuration default, else light
-  — through `GetTuiSettings`; `SetTuiTheme` commits the override in one transaction and answers the accepted theme. A
-  theme is presentation-only: a change records no configuration revision, never enters a run's immutable captured
-  selection, and the daemon never rewrites the credential-bearing configuration file. The committed theme is the
-  daemon's value, never the terminal's guess: a selection previews locally while the round trip is in flight, and only
-  the accepted reply moves the committed value.
+- Terminal theme resolution. The theme is the terminal client's own presentation state: it is no wire value, the
+  daemon never learns it, and no remote round trip gates a repaint. A launch resolves a *preference* — `auto`, `light`,
+  or `dark` — and paints the palette it names. The preference comes from the fullscreen UI's `--theme` flag when it was
+  spelled; else from the local `tui.toml` beside `config.toml` under the same platform configuration directory, whose
+  `[tui] theme` declaration is `auto`, `light`, or `dark` (an absent file, section, or key, like a declared `auto`,
+  asks for detection, and an unknown spelling is the typed `invalid_tui_theme` validation error, so nothing silently
+  falls back); else `auto`. A spelled `light` or `dark` — by flag or by file — beats every form of environment
+  detection, and `auto` paints what detection answers: the `COLORFGBG` variable a terminal exports when it exists
+  (cheap, no query), else a foreground-free `OSC 11` query of the terminal's background colour, read with a 15 ms
+  deadline before the frame starts and answered from the report the terminal sends, with a malformed or missing report
+  standing for no evidence; else the dark palette, because a terminal that reports neither is far more often a dark
+  one (the emulators that ship a default profile ship a dark one) and terminal applications default to their dark
+  themes likewise. Detection runs once per launch even when a spelled palette wins, so the picker's `Auto` row can
+  preview what returning to detection would paint, and it is skipped when standard input or output is not a terminal. The
+  probe is a Unix route: a console that delivers input through its own record API rather than a byte stream answers no
+  query, so detection there reaches its file or its default.
+  The terminal route is the zero-configuration source rather than a platform theme lookup, because the background the
+  terminal paints is the surface this front end draws on and the route needs no platform dependency. A theme is
+  presentation-only: a change
+  records no configuration revision, never enters a run's immutable captured selection, and never rewrites the
+  credential-bearing `config.toml`.
+- Theme selection. `Enter` on the picker commits the highlighted preference in memory at once and asks for one rewrite
+  of the local `tui.toml`, so the next launch reads it without anyone asking again; a selection that matches the
+  committed preference writes nothing, a commit of `Auto` stores the request to follow detection and clears any
+  spelled-out palette the file held, and a failed rewrite reports its typed error while the committed selection stands.
+  The write
+  happens after the frame the selection produced, so no local file access sits in the input path, and the terminal
+  re-lays the transcript out exactly as a resize does because the layout cache is keyed by the palette in force.
 - Theme picker. `/theme` with no argument opens the picker as `Screen::Theme`, a small panel in the chat panel's own
   band region — the region above the input block the command band uses — so the input block and the detail line keep
   their rows rather than the panel docking at the window's bottom. Its rounded frame carries the `Theme` title, one row
-  per theme with the theme's name and one-line description, the effective theme's row marked with the sessions
+  per preference — `Auto`, `Light`, `Dark`, the first being the way back to detection without editing the file by hand
+  — with the preference's name and one-line description, the highlighted row marked with the sessions
   browser's `> ` cursor and selected wash, and its own last inner row carries the `enter apply | esc revert` legend.
-  `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the candidate
-  and nothing is persisted. `Enter` commits the highlighted theme through the daemon and closes the picker; `Esc`
-  drops the preview, restores the committed theme, and closes. The picker's `Esc` is its own keymap layer, so the
+  `Up` and `Down` preview the row they land on: the whole window, transcript included, repaints through the palette
+  that preference names — `Auto` through the palette detection answered at this launch — and nothing is persisted.
+  `Enter` commits the highlighted preference, asks for its local rewrite, and closes the picker;
+  `Esc`
+  drops the preview, restores the committed preference, and closes. The picker's `Esc` is its own keymap layer, so the
   chat's cancel, clear, and exit arms are unreachable while it is open; the Esc layering is the open band, then the
   picker, then a live run's cancel, then the input-clear arm, then the exit.
 - Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter: `/new`
   creates a session, `/sessions` opens the browser panel, and `/theme` selects the theme its optional `theme` argument
-  names (`light` or `dark`; a declared value matches however it is spelled) or opens the picker when the argument is
+  names (`auto`, `light`, or `dark`; a declared value matches however it is spelled) or opens the picker when the
+  argument is
   omitted. An unknown
-  command answers with the known set, an unknown value answers `unknown theme "purple" - expected light or dark`, and a
+  command answers with the known set, an unknown value answers `unknown theme "purple" - expected auto or light or dark`, and a
   word past the last declared argument answers `unexpected argument "now"`. One registry is the single source for every
   command's name, description, category, action, and declared arguments — their values, value descriptions, order, and
   whether they are required — so the submission path, the band, and every notice are built from the one declaration and
@@ -545,7 +566,7 @@ text above is the live policy.
   without a drag is a hit-test only, except that a click on a collapsed reasoning block's marker expands that block. A
   drag past the transcript's top or bottom edge scrolls the window one fast step — five wheel notches — while extending
   the selection to the row the pointer reaches, and a wheel notch while the button is held adds the same fast step. The
-  transcript reserves a one-column gutter for revue's vendored scroll view, which renders a native scrollbar, so content
+  transcript reserves a one-column gutter for revue's scroll view, which renders a native scrollbar, so content
   above the window stays visible natively. The application performs no clipboard work of any kind: copying is the
   terminal emulator's business, pasting is its own delivery of the text the user asked for, and the crate carries
   neither a copy path nor a clipboard read. The trade-off is the terminal's own drag-selection:
@@ -585,7 +606,7 @@ fabricated value. The table below names each one, taken from the markers in the 
 | the `Favorites` tab's empty state | a durable favorite flag |
 | the `Archived` tab's empty state and the `Ctrl+X` notice | a durable archive flag and its command |
 | the row counter's `+N omitted (core: paged list @todo)` | a session list that can be paged past its bounded window |
-| the welcome overview's `AGENTS.md` chip | the instruction sources and their effective projection (Slice 3) |
+| the welcome overview's `AGENTS.md` chip | the instruction channel (Slice 3) |
 | the welcome overview's `MCPs` chip | MCP capability support |
 | the welcome overview's `Skills` chip | skills support |
 | the `Ctrl+F` tree notice | session forks (Slice 6) |

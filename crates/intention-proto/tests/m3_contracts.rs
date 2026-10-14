@@ -1,6 +1,6 @@
-#![allow(
-    clippy::expect_used,
-    reason = "M3 contract fixtures use expect for precise test diagnostics."
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
 )]
 
 #[allow(

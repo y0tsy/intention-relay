@@ -34,14 +34,10 @@ def main() -> None:
     with (ROOT / "quality" / "tools.toml").open("rb") as policy_file:
         policy = tomllib.load(policy_file)
     stable = policy["toolchains"]["stable"]
-    nightly = policy["toolchains"]["nightly"]
 
     run(["rustup", "toolchain", "install", stable, "--profile", "minimal"])
-    run(["rustup", "toolchain", "install", nightly, "--profile", "minimal"])
     for component in policy["components"]["stable"]:
         run(["rustup", "component", "add", component, "--toolchain", stable])
-    for component in policy["components"]["nightly"]:
-        run(["rustup", "component", "add", component, "--toolchain", nightly])
 
     for tool in policy["tools"]:
         name = tool["name"]
@@ -56,8 +52,6 @@ def main() -> None:
             raise RuntimeError(f"tool {name} has invalid install_features")
         if features:
             command.extend(["--features", ",".join(features)])
-        if name == "cargo-udeps":
-            command.insert(1, f"+{nightly}")
         run(command)
 
 

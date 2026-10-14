@@ -32,7 +32,7 @@ pub use commands::{
 };
 pub use input::{TRANSCRIPT_DRAG_ROWS, paste_is_large};
 pub use state::AppState;
-pub use theme::Theme;
+pub use theme::{Theme, ThemePreference};
 pub use transcript::TranscriptSelection;
 
 /// The surface of the one window that owns the keyboard.

@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Daemon binary integration uses explicit process diagnostics."
-)]
-
 use std::env;
 use std::process::Command;
 

@@ -1,15 +1,15 @@
 # VFR and Headroom
 
-**Approved future design. Not implemented; the `intention-vfr` and `intention-headroom` crates are created at their
-milestone (M7), and activation requires an activating specification.** Virtual File
-Representation (VFR) and Headroom/CCR are required v1 capabilities: separate extension crates attached as ordinary calls
-in the direct tool sequence, not hard-coded dependencies of base tools. The typed hook plane was removed in Slice 1.5 and
-is not part of this design: the stages below describe that call order, not a hook framework ([architecture
-05](05-tools-and-workspace.md)).
+**Approved future design. Not implemented; VFR and Headroom arrive at M7 as modules of `intention-tools`, and
+activation requires an activating specification.** Virtual File Representation (VFR) and Headroom/CCR are required v1
+capabilities delivered as ordinary library calls inside the tool pipeline, not as separate extension crates attached to
+it. The typed hook plane was removed in Slice 1.5 and is not part of this design; the stages below describe the call
+order, not a hook framework ([architecture 05](05-tools-and-workspace.md)).
 
 ## Design principle
 
-Base tools perform their primitive work. Extensions transform the result at controlled phases.
+Base tools perform their primitive work. The two modules transform results at controlled phases inside the
+`intention-tools` crate.
 
 ```mermaid
 flowchart LR
@@ -30,23 +30,21 @@ conflated.
 
 ## Ownership and non-authorities
 
-Architecture 05 owns the tool pipeline and workspace policy, so VFR and Headroom attach only as declared ordinary calls
-in the direct tool sequence, and base tools never import or link either extension implementation crate. Architecture 30
-owns the effective instruction projection and its assembly; this document contributes the `Vfr` contribution contract
-and no assembly order.
+Architecture 05 owns the tool pipeline and workspace policy; the VFR and Headroom modules are ordinary library
+functions called by that pipeline, and base tools never take a private dependency on either transform. Architecture 30
+owns the frozen instruction text; this document contributes the `Vfr` contribution text and no assembly order.
 
-## `intention-vfr`
+## VFR module
 
 ### Responsibilities
 
-`intention-vfr` owns:
+The VFR module owns:
 
 - eligibility evaluation for file read results;
 - typed virtual representation DTOs;
 - source map/hidden segment metadata;
-- expansion and raw-read tool contracts;
-- a VFR-specific typed instruction contribution with its own revision
-identity, assembled into the effective instruction projection by [architecture
+- expansion and raw-read tool contracts (`expand` and the raw-read path, delivered as future `ToolId` variants);
+- the instruction contribution assembled into the frozen instruction text of [architecture
 30](30-instruction-sources-and-system-context.md);
 - tests proving loss-aware, deterministic transformations.
 
@@ -56,39 +54,43 @@ identity, assembled into the effective instruction projection by [architecture
 - It transforms only eligible source files according to resolved configuration.
 - It creates a virtual representation that preserves enough stable reference data for later expansion.
 - It does not mutate the physical file or base `read` tool semantics.
--  The model receives explicit instructions describing placeholders and the `expand`/raw path, delivered only as the
-  declared `Vfr` contribution of architecture 30's instruction projection.
+- The model receives explicit instructions describing placeholders and the `expand`/raw path, delivered only as the
+  declared `Vfr` contribution of architecture 30's instruction text.
 - A user-visible tool result remains traceable to the physical normalized file path and VFR transform decision.
 
 ### Supporting tools
 
 - `expand`: obtains requested represented sections through a typed VFR reference.
--  raw-read path: reads the full allowed source without applying the presentation transform, subject to WorkspaceRoot
+- raw-read path: reads the full allowed source without applying the presentation transform, subject to WorkspaceRoot
   and normal policy.
 
 The final user-facing tool names and DTO fields may differ, but they must retain these semantics.
 
-## `intention-headroom`
+## Headroom module
 
 ### Responsibilities
 
-`intention-headroom` owns:
+The Headroom module owns:
 
 - typed compression eligibility and transform decisions;
-- CCR storage contract and implementation selection;
-- references, retention, expiry, and retrieval metadata;
+- the CCR storage contract and its implementation selection;
+- references and retrieval metadata;
 - the `retrieve` tool contract;
 - safe compression observability.
 
 ### Required behavior
 
 - Headroom runs after a normalized tool result is available.
--  Original or normalized source content is retained according to CCR policy before a compressed model-context
+- Original or normalized source content is retained according to CCR policy before a compressed model-context
   representation relies on it.
 - The model receives a typed reference when recovery is available.
 - `retrieve` resolves one or more references, or returns a typed missing/expired error.
 - Headroom does not erase the audit trail of the pre-compression result.
 - Expiry, capacity, and storage failures are explicit policy outcomes.
+
+Retention duration, rotation/compaction behavior, and expiry are deferred decisions: the delivered modules carry
+`@todo(vfr)` and `@todo(headroom)` markers naming the deferred rule where it applies, and the activating specification
+selects the values.
 
 ## Deterministic extension ordering
 
@@ -96,9 +98,9 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 | ---: | --- | --- | --- |
 | 1 | Path/CWD policy | `intention-tools` | Safe resolved invocation. |
 | 2 | Primitive execution | Base tool | Physical result. |
-| 3 | Virtual source transform | `intention-vfr` | Normalized VFR or original result. |
+| 3 | Virtual source transform | VFR module (`intention-tools`) | Normalized VFR or original result. |
 | 4 | Persist normalized result | Application/storage | Durable audit/query value. |
-| 5 | Compress model context | `intention-headroom` | Model-specific compressed/reference value. |
+| 5 | Compress model context | Headroom module (`intention-tools`) | Model-specific compressed/reference value. |
 | 6 | Publish adapter event | Runtime/transport | Agreed human-readable result and metadata. |
 
 The v1 default presentation policy: adapters receive the normalized result, including VFR representation where
@@ -117,11 +119,11 @@ original/retrieved content.
 
 ## Failure behavior
 
--  An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail
+- An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail
   policy; it never emits an unresolvable placeholder.
 - Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
 - An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
-- An extension failure records which stage failed without exposing source content or secrets in normal diagnostics.
+- A transform failure records which stage failed without exposing source content or secrets in normal diagnostics.
 
 ## Required tests and outcomes
 
@@ -138,22 +140,23 @@ original/retrieved content.
 
 ## Quality-gate integration
 
-Both crates are subject to the coverage tier declared when they are activated; their transform, retrieval, expiry,
-ordering, and adapter/model
-distinction tests are blocking `make verify` inputs in the single feature configuration. Architecture checks must prove
-base tools do not import either extension implementation crate. See [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md).
+The VFR and Headroom modules live in `intention-tools` and are covered by its declared 60% line floor; their
+transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs in the
+single feature configuration. Base tools stay free of transform behavior as an organization and review rule, not a
+separate crate boundary. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Dependencies and non-goals
 
 Depends on [Tools and Workspace](05-tools-and-workspace.md) and [architecture
-30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, and any base-tool linkage to
-an extension implementation crate.
+30](30-instruction-sources-and-system-context.md). Non-goals: conflating VFR with Headroom, separate extension crates,
+and any base-tool private linkage to either transform.
 
 ## Open decisions
 
+Deferred with `@todo` markers in the modules when they land:
+
 - exact VFR language set and size thresholds;
-- CCR backend, maximum capacity, retention duration, and compaction behavior;
+- CCR backend, maximum capacity, retention duration, and rotation/compaction behavior;
 - which metadata becomes visible in UI;
 - whether content is encrypted at rest in a later version;
 - exact fallback policy for VFR parser failures.

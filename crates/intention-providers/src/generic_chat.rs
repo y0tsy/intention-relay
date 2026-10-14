@@ -453,6 +453,10 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
 ///
 /// Attachments are transient same-run material: they are matched by identity,
 /// never merged into message content, and never consulted for other roles.
+///
+/// @todo(provider): a replayed earlier step (the DeepSeek contract once the
+/// request carries `tools`) reuses the same `reasoning_content` wire field on
+/// any assistant message, including one that carries no tool call.
 fn reasoning_attachments(request: &ModelRequestDto) -> BTreeMap<ToolCallId, &str> {
     let mut attachments = BTreeMap::new();
     for attachment in request.assistant_reasoning() {
@@ -534,11 +538,11 @@ fn translate_assistant_message(
     })
 }
 
-#[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Private tool-fragment fixtures use expect to provide precise test failure messages."
+#[expect(
+    clippy::disallowed_types,
+    reason = "Adapter tests build raw SDK payloads to assert the translation; DTO-first binds production code."
 )]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, UsageDto};
@@ -725,14 +729,12 @@ mod tests {
                 "read_file",
                 "Reads one file",
                 r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-            )
-            .expect("tool is valid"),
+            ),
             crate::model::ModelToolDefinitionDto::new(
                 "search",
                 "Searches files",
                 r#"{"type":"object","required":["query"]}"#,
-            )
-            .expect("tool is valid"),
+            ),
         ])
         .expect("tools are valid");
 
@@ -878,8 +880,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let attachment =
             crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
                 .expect("reasoning attachment is valid");
@@ -914,12 +915,9 @@ mod tests {
         );
 
         // A tool-role message always carries its identity, so the tool-result
-        // step cannot fail; tool parameters and the request identity are
-        // validated where they are built, so the remaining steps cannot fail.
+        // step cannot fail; the request identity is validated where it is
+        // built, so the remaining steps cannot fail.
         assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
-        assert!(
-            crate::model::ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err()
-        );
         assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
         assert!(ModelRequestDto::new(RunId::new(), "fixture", Vec::new(), None).is_err());
 

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Validate pinned Rust toolchains, components, and Cargo quality tools."""
+"""Validate the pinned Rust toolchain and the quality tools one gate runs."""
 
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 import re
 import shutil
@@ -14,114 +13,14 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = ROOT / "quality" / "tools.toml"
-WORKFLOW = ROOT / ".github" / "workflows" / "quality.yml"
-
-# Scoped CI checks: every CI job validates only the toolchains, components,
-# and tools its phase actually uses, while local runs (no scope) still
-# validate the complete pinned set. The union of all CI scopes covers every
-# pinned toolchain and tool, so none escapes CI validation; components are
-# validated by the phase that installs them, and the unscoped local run
-# validates the complete pinned set.
-SCOPES = ("all", "lint-arch", "test", "coverage", "deps")
-
-TOOLCHAIN_LITERAL = re.compile(r"^\s*toolchain:\s*(\S+)\s*$", re.MULTILINE)
-NIGHTLY_SELECTOR = re.compile(r"\+nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}")
-
-
-def check_workflow_toolchain_pins(policy: dict[str, object]) -> list[str]:
-    """Return failures for toolchain spellings that drift from the pinned policy.
-
-    The workflow installs toolchains by literal name while the Python runners
-    read `quality/tools.toml`, so the workflow literals and every `+nightly-*`
-    selector inside a pinned tool command are compared against that one source.
-    """
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
-    pinned = sorted({stable, nightly})
-    failures: list[str] = []
-    if not WORKFLOW.exists():
-        return [f"the quality workflow is missing: {WORKFLOW}"]
-    for match in TOOLCHAIN_LITERAL.finditer(WORKFLOW.read_text(encoding="utf-8")):
-        literal = match.group(1)
-        if literal not in {stable, nightly}:
-            failures.append(
-                f"{WORKFLOW}: workflow toolchain {literal!r} must be one of the quality/tools.toml pins {pinned}"
-            )
-    for tool in policy["tools"]:
-        for part in tool["command"]:
-            for selector in NIGHTLY_SELECTOR.findall(part):
-                if selector != f"+{nightly}":
-                    failures.append(
-                        f"quality/tools.toml tool {tool['name']} selects {selector!r}, "
-                        f"but [toolchains].nightly is {nightly!r}"
-                    )
-    return failures
-
-
-def scope_toolchains(scope: str, policy: dict[str, object]) -> list[str]:
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
-    return {
-        "all": [stable, nightly],
-        "lint-arch": [stable],
-        "test": [stable],
-        "coverage": [nightly],
-        "deps": [stable, nightly],
-    }[scope]
-
-
-def scope_components(scope: str, policy: dict[str, object]) -> dict[str, list[str]]:
-    toolchains = policy["toolchains"]
-    stable = toolchains["stable"]
-    nightly = toolchains["nightly"]
-    return {
-        "all": {
-            stable: list(policy["components"]["stable"]),
-            nightly: list(policy["components"]["nightly"]),
-        },
-        "lint-arch": {stable: ["rustfmt", "clippy"]},
-        "test": {},
-        "coverage": {nightly: ["llvm-tools-preview"]},
-        "deps": {},
-    }[scope]
-
-
-def scope_tools(scope: str, policy: dict[str, object]) -> list[dict[str, object]]:
-    tools = list(policy["tools"])
-    if scope == "all":
-        return tools
-    names = {
-        "lint-arch": set(),
-        "test": {"cargo-nextest"},
-        "coverage": {"cargo-nextest", "cargo-llvm-cov"},
-        "deps": {
-            "cargo-deny",
-            "cargo-audit",
-            "cargo-udeps",
-            "cargo-machete",
-            "cargo-about",
-            "cargo-outdated",
-        },
-    }[scope]
-    return [tool for tool in tools if tool.get("name") in names]
-
 
 def fail(message: str) -> None:
     print(f"tools-check: {message}", file=sys.stderr)
     raise SystemExit(1)
 
-
 def run(command: list[str]) -> str:
     try:
-        completed = subprocess.run(
-            command,
-            check=True,
-            capture_output=True,
-            text=True,
-            env=os.environ.copy(),
-        )
+        completed = subprocess.run(command, check=True, capture_output=True, text=True)
     except FileNotFoundError:
         fail(f"required command is unavailable: {command[0]}")
     except subprocess.CalledProcessError as error:
@@ -129,12 +28,10 @@ def run(command: list[str]) -> str:
         fail(f"command failed ({' '.join(command)}): {output}")
     return f"{completed.stdout}\n{completed.stderr}"
 
-
 def require_version(label: str, command: list[str], expected: str) -> None:
     output = run(command)
     if not re.search(rf"(?<![0-9.]){re.escape(expected)}(?![0-9.])", output):
         fail(f"{label} version mismatch: expected {expected}, got {output.strip()!r}")
-
 
 def require_toolchain(name: str) -> None:
     output = run(["rustup", "toolchain", "list"])
@@ -142,74 +39,54 @@ def require_toolchain(name: str) -> None:
     if not any(item == name or item.startswith(f"{name}-") for item in installed):
         fail(f"required toolchain is unavailable: {name}")
 
-
 def require_component(toolchain: str, component: str) -> None:
     output = run(["rustup", "component", "list", "--installed", "--toolchain", toolchain])
     prefix = component.replace("-preview", "")
     if not any(line.startswith(prefix) for line in output.splitlines()):
         fail(f"{toolchain} is missing required component {component}")
 
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--policy", type=Path, default=DEFAULT_POLICY)
     parser.add_argument(
-        "--scope",
-        choices=SCOPES,
-        default="all",
-        help="validate only the toolchains, components, and tools for one CI "
-        "phase scope; defaults to the complete pinned set for local runs",
+        "--component",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="validate one rustup component of the pinned toolchain",
+    )
+    parser.add_argument(
+        "--tool",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="validate one pinned quality tool and its exact version",
     )
     arguments = parser.parse_args()
 
     with arguments.policy.open("rb") as policy_file:
         policy = tomllib.load(policy_file)
-
     stable = policy["toolchains"]["stable"]
-    nightly = policy["toolchains"]["nightly"]
-    selected_toolchains = scope_toolchains(arguments.scope, policy)
-    for toolchain in selected_toolchains:
-        require_toolchain(toolchain)
-    if stable in selected_toolchains:
-        require_version("Rust stable", ["rustup", "run", stable, "rustc", "--version"], stable)
-    if nightly in selected_toolchains:
-        if not nightly.startswith("nightly-"):
-            fail("nightly toolchain must use a dated nightly-YYYY-MM-DD pin")
-        nightly_rustc_version = policy["toolchains"].get("nightly_rustc_version")
-        if not isinstance(nightly_rustc_version, str) or not nightly_rustc_version:
-            fail("nightly_rustc_version must be an explicit Rust version pin")
-        require_version("Rust nightly", ["rustup", "run", nightly, "rustc", "--version"], nightly_rustc_version)
-        run(["rustup", "run", nightly, "rustdoc", "--version"])
+    pinned_components = set(policy["components"]["stable"])
+    pinned_tools = {tool["name"]: tool for tool in policy["tools"]}
 
-    for toolchain, components in scope_components(arguments.scope, policy).items():
-        for component in components:
-            require_component(toolchain, component)
+    require_toolchain(stable)
+    require_version("Rust stable", ["rustup", "run", stable, "rustc", "--version"], stable)
 
-    cargo_home = os.environ.get("CARGO_HOME")
-    canonical_bin: Path | None = None
-    if cargo_home:
-        canonical_bin = Path(cargo_home).expanduser().resolve() / "bin"
-        path_entries = [Path(item).expanduser().resolve() for item in os.environ.get("PATH", "").split(os.pathsep) if item]
-        if canonical_bin not in path_entries:
-            fail(f"canonical Cargo bin is missing from PATH: {canonical_bin}")
-        cargo = shutil.which("cargo")
-        if cargo is None or Path(cargo).resolve().parent != canonical_bin:
-            fail(f"cargo must resolve from canonical Cargo bin: {canonical_bin}")
+    for component in arguments.component:
+        if component not in pinned_components:
+            fail(f"{component} is not a pinned component in quality/tools.toml")
+        require_component(stable, component)
 
-    for tool in scope_tools(arguments.scope, policy):
-        executable = shutil.which(tool["name"])
-        if executable is None:
-            fail(f"required tool is unavailable: {tool['name']}")
-        if canonical_bin is not None and Path(executable).resolve().parent != canonical_bin:
-            fail(f"{tool['name']} must resolve from canonical Cargo bin: {canonical_bin}")
-        require_version(tool["name"], tool["command"], tool["version"])
+    for name in arguments.tool:
+        tool = pinned_tools.get(name)
+        if tool is None:
+            fail(f"{name} is not a pinned tool in quality/tools.toml")
+        if shutil.which(name) is None:
+            fail(f"required tool is unavailable: {name}")
+        require_version(name, tool["command"], tool["version"])
 
-    pin_failures = check_workflow_toolchain_pins(policy)
-    if pin_failures:
-        fail("\n".join(pin_failures))
-
-    print(f"tools-check: pinned toolchains, components, and tools are available (scope {arguments.scope})")
-
+    print("tools-check: the pinned toolchain, its components, and the gate's tools are available")
 
 if __name__ == "__main__":
     main()

@@ -27,6 +27,7 @@
 - Remove imports, variables, functions, or tests only when the current change makes them unused or obsolete.
 - Fix issues introduced by the current change, but do not use a task as an excuse for unrelated cleanup.
 - Never add speculative limits, quotas, caps, or bureaucratic bounds without a real, demonstrated precedent. Liveness safeguards are the only exception.
+- Never add an interactive confirmation, approval, or blocking question gate to an execution path. The product runs unattended for hours: admission, tools, MCP, providers, children, bridge, and kernel all proceed without waiting for user input, and `ask_user` is asynchronous. Security is structural (workspace addressing, credential isolation, typed boundaries, safe projections), never a prompt.
 
 ### No backward compatibility
 
@@ -49,8 +50,7 @@
 
 ## Parallel tool use
 
-- Treat parallel tool calls as the target for broad or multi-surface work.
-- For most such tasks, target at least five genuinely independent useful calls. Target 10–15 only when that many independent checks materially improve speed or coverage.
+- Use parallel tool calls for genuinely independent work, and keep them to the ones that actually advance the task.
 - Do not create no-op calls, duplicate calls, or parallelize actions that depend on earlier results.
 
 ## Sub-agent discipline
@@ -61,8 +61,8 @@
 ## Test-first and architectural boundaries
 
 - Follow TDD/TTD: establish applicable contract, architecture, and outcome tests before implementation.
-- Every new production crate must be declared in the machine-readable policy with its responsibility and test target before production code is accepted; the crate's coverage tier applies ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
-- Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules.
+- Every new production crate states its responsibility and its test targets in [the crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md); a crate that carries production logic gets a line floor in the root `Makefile`'s `COVERAGE_FLOORS` ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
+- Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules. DTO-first and the working-directory rule are denied by Clippy through the root `clippy.toml`; adapter isolation and the composition root are enforced by the dependency manifests, by rustc, and by review.
 - Follow existing data, configuration, and dependency patterns. Do not hard-code values that are genuinely configurable, and do not add configuration unless configurability is a requirement.
 - Check the workspace `Cargo.toml` and existing dependency graph before adding a dependency.
 - Do not hard-code POSIX-specific path syntax (for example, `/tmp/...` or `/workspace/...`) in production code, tests, fixtures, or configuration that executes on supported platforms. Construct filesystem paths with platform-native APIs such as `std::env::temp_dir()` and `Path`/`PathBuf`; use explicit canonical Windows drive and UNC literals only in Windows-path validation tests.
@@ -71,6 +71,7 @@
 
 - Use the root Makefile as the quality orchestration interface. Run `make quick` while iterating and `make verify` before handing off implementation work.
 - Changes to Makefile, linting, coverage, feature profiles, or supply-chain policy must update the relevant machine-readable policy and architecture documentation in the same change.
+- Documentation, code comments, commit messages, and pull-request descriptions state changes, removals, and statuses as facts: what the repository does, not who decided it. Never cite a decision, directive, approval, or rejection by a person as the reason for a change.
 
 ## Security and language
 
@@ -85,14 +86,3 @@
 - Use Conventional Commit messages in the form `type(scope): description`.
 - Prefer a new branch for non-trivial changes, including new features, behavior changes, multi-file refactors, or work spanning multiple logical concerns. Small isolated fixes may use the current branch when appropriate.
 - Prefer atomic commits. Combine changes only when splitting them would harm coherence or make history misleading. State the technical reason in the commit body when relevant.
-
-## GitHub labels
-
-- The repository keeps exactly this label set: ten `type:` labels matching the Conventional Commit types (`type: feat`, `type: fix`, `type: docs`, `type: refactor`, `type: test`, `type: chore`, `type: perf`, `type: ci`, `type: build`, `type: revert`), five `area:` labels for repository surfaces (`area: architecture`, `area: decisions`, `area: quality`, `area: crates`, `area: ci`), and the process labels `dependencies`, `security`, `breaking-change`, and `blocked`. Nothing else.
-- Every pull request and issue carries exactly one `type:` label matching the commit type of the change (`type: feat` for `feat(...)`, and so on).
-- An `area:` label marks each surface the change touches; a change spanning surfaces carries each one.
-- Dependabot applies `dependencies` and `security` to its pull requests; treat both as dependency work.
-- Add `breaking-change` when the change removes or alters existing behavior under the no-backward-compatibility policy; the accompanying ADR or owner document is updated in the same change.
-- Add `blocked` while an external dependency or a pending decision stops progress, and remove it when unblocked.
-- Do not invent ad-hoc labels. Extend this list first, then create the label with `gh label create`.
-- Labels are not a status tracker beyond `blocked`; milestone and slice state stays in `docs/intention-relay`.

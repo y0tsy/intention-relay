@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Transport integration fixtures use direct failure assertions for diagnostics."
-)]
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 

@@ -123,20 +123,12 @@ pub fn fixed_error(code: &'static str) -> ProviderErrorDto {
     error_dto(code, false)
 }
 
-#[allow(
-    clippy::expect_used,
-    reason = "Normalized provider error codes are compile-time adapter constants, so validation cannot fail."
-)]
 fn error_dto(code: &'static str, retryable: bool) -> ProviderErrorDto {
     ProviderErrorDto::unavailable(code, retryable, None)
         .expect("normalized provider error codes are non-blank adapter constants")
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Mapping-rule fixtures use expect to name impossible local failures."
-)]
 mod tests {
     use super::*;
     use intention_proto::ErrorRetryDto;

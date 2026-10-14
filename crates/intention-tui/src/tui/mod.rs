@@ -73,6 +73,7 @@ mod palette;
 mod panes;
 mod paste;
 mod screens;
+mod theme;
 
 pub use driver::TuiOptions;
 pub use screens::RevueView;
@@ -105,14 +106,19 @@ use paste::Pastes;
 ///
 /// # Errors
 ///
-/// Returns an unavailable error when the client runtime or the terminal cannot
-/// be started. Client, protocol, and run failures reach the status pane instead
-/// of ending the session.
+/// Returns the typed validation error of a local settings file that declares
+/// an undeclared theme or an unreadable shape, and an unavailable error when
+/// the client runtime or the terminal cannot be started. Client, protocol, and
+/// run failures reach the status pane instead of ending the session.
 pub fn run_blocking(
     options: TuiOptions,
     client: IntentionClient,
     endpoint: LocalEndpoint,
 ) -> DtoResult<()> {
+    // The theme is this front end's own value and is resolved once, before the
+    // first frame: the spelled flag, else the local settings file, else the
+    // environment detection the file asks for. See `theme`.
+    let theme = theme::resolve(options.theme())?;
     // The front end resolves the session it opens once, through the client: an
     // explicit continuation asks the client for the target, a selected session
     // is used as it is, and a launch that asked for neither opens nothing.
@@ -127,7 +133,7 @@ pub fn run_blocking(
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver);
+    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver, theme);
     front_end.start();
     App::builder()
         // @todo(revue): revue has no text-selection model, so the front end
@@ -137,19 +143,11 @@ pub fn run_blocking(
         // text) and leaves copying to the terminal emulator. A library
         // selection surface would remove the trade-off.
         .mouse_capture(true)
-        // Ctrl+C is the shared core's layered action, so revue must not
-        // consume it as the framework's own quit key first.
-        // @todo(revue): revue 3.9.1 hardcodes Ctrl+C as its quit key and its
-        // event loop quits right after the app handler runs, so on the default
-        // configuration a single press during a live run tears the front end
-        // down before the layered interrupt can arm or notice anything. This
-        // argument and the repository's vendored patch (`AppBuilder::quit_key`,
-        // `vendor/revue/PATCH.md`, the root `[patch.crates-io]` entry) exist
-        // only for this option; drop both once upstream exposes it. The
-        // argument and the Ctrl+C arms in `keymap.rs` must go together: without
-        // the argument revue silently resumes quitting on the first press, and
-        // without the arms Ctrl+C silently does nothing.
-        .quit_key(None)
+        // Ctrl+C is the shared core's layered action, not revue's quit key:
+        // `handle_event` calls `App::prevent_default` for the press so the
+        // framework leaves the one key to the front end. That call and the
+        // Ctrl+C arms in `keymap.rs` must go together - without the arms Ctrl+C
+        // silently does nothing.
         .build()
         .run(front_end, handle_event)
         // @todo(revue): revue's `run` failure carries no typed cause, so every
@@ -233,6 +231,12 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
                 let pressed = action.is_some();
                 if let Some(action) = action {
                     front_end.apply(action);
+                }
+                // revue quits on Ctrl+C after the handler returns; the layered
+                // core action owns that key, so the press it consumed must not
+                // also end the application.
+                if key.is_ctrl_c() {
+                    app.prevent_default();
                 }
                 pressed
             }
@@ -465,10 +469,19 @@ impl FrontEnd {
     /// `session` is the session this launch opens: the one the caller selected,
     /// or the one the client resolved for an explicit continuation. A launch
     /// that named neither opens none, and the user can still ask for a session
-    /// later with `/new` or a row of the sessions browser.
-    fn new(session: Option<SessionId>, workspace_root: WorkspaceRootDto, driver: Driver) -> Self {
+    /// later with `/new` or a row of the sessions browser. `theme` is the
+    /// preference and detection answer the launch resolved, so the first frame
+    /// already paints the palette they name.
+    fn new(
+        session: Option<SessionId>,
+        workspace_root: WorkspaceRootDto,
+        driver: Driver,
+        theme: theme::ResolvedTheme,
+    ) -> Self {
         Self {
-            state: AppState::new(session).with_workspace_root(workspace_root),
+            state: AppState::new(session)
+                .with_theme(theme.preference(), theme.detected())
+                .with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
             pastes: Pastes::new(),
@@ -665,10 +678,6 @@ impl View for FrontEnd {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
-    )]
 
     use std::cell::RefCell;
     use std::time::{Duration, Instant};

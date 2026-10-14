@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Shared protocol fixtures use expect for precise test diagnostics."
-)]
-
 use intention_proto::{
     MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId, RunModeDto, SessionId,
     SessionProjectionDto, WorkspaceId, WorkspaceRootDto,

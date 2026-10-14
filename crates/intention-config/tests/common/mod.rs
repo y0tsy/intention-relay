@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Shared configuration fixtures use expect for precise test diagnostics."
-)]
-
 use intention_config::{ConfigPathDto, ConfigSourceDto};
 
 /// Credential-shaped fixture text that must never surface in public data.

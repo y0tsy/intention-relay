@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Contract fixtures use expect to provide precise test failure messages."
-)]
-
 mod support;
 
 use intention_proto::{RunId, ToolCallId};
@@ -19,7 +14,6 @@ fn message(role: ModelRoleDto, content: &str) -> ModelMessageDto {
 
 fn tool_definition(name: &str) -> ModelToolDefinitionDto {
     ModelToolDefinitionDto::new(name, "fixture description", r#"{"type":"object"}"#)
-        .expect("fixture tool definition is valid")
 }
 
 #[test]
@@ -293,14 +287,14 @@ fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
         AssistantReasoningDto::new(vec![call_id], oversized)
             .expect_err("oversized reasoning must fail")
             .code(),
-        "invalid_model_assistant_reasoning_text"
+        "invalid_model_assistant_reasoning"
     );
     for text in ["bad\u{0}text", "bad\u{7}text", "bad\u{1b}text"] {
         assert_eq!(
             AssistantReasoningDto::new(vec![call_id], text)
                 .expect_err("invalid control characters must fail")
                 .code(),
-            "invalid_model_assistant_reasoning_text"
+            "invalid_model_assistant_reasoning"
         );
     }
 }
@@ -358,45 +352,7 @@ fn model_request_assistant_reasoning_survives_rebuilds() {
 }
 
 #[test]
-fn model_tool_definitions_validate_names_descriptions_and_parameters() {
-    let long_name = "a".repeat(65);
-    for name in [
-        "",
-        " ",
-        "inspect.path",
-        "inspect space",
-        "inspecté",
-        long_name.as_str(),
-    ] {
-        assert_eq!(
-            ModelToolDefinitionDto::new(name, "description", r#"{"type":"object"}"#)
-                .expect_err("invalid tool definition name must fail")
-                .code(),
-            "invalid_tool_definition_name"
-        );
-    }
-    assert_eq!(
-        ModelToolDefinitionDto::new("inspect", " ", r#"{"type":"object"}"#)
-            .expect_err("blank tool definition description must fail")
-            .code(),
-        "invalid_tool_definition_description"
-    );
-    let oversized_parameters = format!(r#"{{"padding":"{}"}}"#, "a".repeat(70_000));
-    for parameters in [
-        "",
-        "[]",
-        r#""text""#,
-        "not-json",
-        oversized_parameters.as_str(),
-    ] {
-        assert_eq!(
-            ModelToolDefinitionDto::new("inspect", "description", parameters)
-                .expect_err("invalid tool definition parameters must fail")
-                .code(),
-            "invalid_tool_definition_parameters"
-        );
-    }
-
+fn model_tool_definitions_expose_their_code_owned_fields() {
     let definition = tool_definition("inspect_path");
     assert_eq!(definition.name(), "inspect_path");
     assert_eq!(definition.description(), "fixture description");

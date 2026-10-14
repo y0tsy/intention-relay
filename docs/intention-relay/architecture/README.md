@@ -53,7 +53,7 @@ flowchart TD
 | **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |
 | **Projection** | A normalized current-state representation derived and stored for efficient queries. |
 | **TTD** | Test-driven delivery. Each milestone starts from executable contracts and observable outcomes, not only structural design. |
-| **Quality gate** | A reproducible, blocking Makefile pipeline that verifies formatting, linting, tests, documentation, architecture, coverage, and supply-chain policy. |
+| **Quality gate** | A reproducible, blocking Makefile pipeline that verifies formatting, linting, tests, rustdoc, coverage, and supply-chain policy. |
 
 ## Reading paths
 
@@ -72,15 +72,15 @@ flowchart TD
 3. [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md)
 4. [Tools and workspace](05-tools-and-workspace.md)
 5. [VFR and Headroom](06-vfr-and-headroom.md)
-6. [MCP capability lifecycle](18-mcp-capability-lifecycle.md)
+6. [MCP connection records and direct invocation](18-mcp-capability-lifecycle.md)
 7. [Gateway/RLM bridge](19-gateway-rlm-bridge.md)
-8. [Run-scoped IPython kernel lifecycle](20-ipython-kernel-lifecycle.md)
-9. [Goals, Skills, context, memory, and compaction](21-goals-skills-context-memory-and-compaction.md)
-10. [Provider evolution, profiles, and reasoning](22-provider-evolution-profiles-and-reasoning.md)
+8. [Session-scoped kernel lifecycle with run-scoped namespaces](20-ipython-kernel-lifecycle.md)
+9. [Goals, skills, context, and compaction](21-goals-skills-context-memory-and-compaction.md)
+10. [Provider configuration and reasoning](22-provider-evolution-profiles-and-reasoning.md)
 11. [Non-destructive session branching and regeneration](23-non-destructive-session-branching-and-regeneration.md)
-12. [Configuration and provider control plane](25-configuration-provider-control-plane.md)
+12. [Provider discovery and typed configuration editing](25-configuration-provider-control-plane.md)
 13. [Goal domain and verification](28-goal-domain-and-verification.md)
-14. [Provider session selection and profiles protocol](29-provider-session-and-profiles-protocol.md)
+14. [Provider session selection](29-provider-session-and-profiles-protocol.md)
 
 ### Agent operation
 

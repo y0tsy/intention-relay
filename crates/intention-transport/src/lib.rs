@@ -588,11 +588,6 @@ const fn reclaim_stale_socket(_endpoint: &LocalEndpoint) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Transport unit fixtures use direct assertions for diagnostics."
-    )]
 
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};

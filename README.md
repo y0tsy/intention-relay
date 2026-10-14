@@ -35,11 +35,10 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
   `write`, `edit`, `execute`, `glob`, `grep`) with one deterministic typed
   tool sequence and durable, redacted tool-result evidence.
 - **SQLite-first durable state.** One composition crate selects the SQLite
-  adapter; the durable store is nine current-state tables (`projects`,
-  `workspace_roots`, `sessions`, `runs`, `turns`, `messages`, `tool_results`,
-  `configuration_revisions`, `tui_settings`) in a single-version schema,
-  `messages` plus
-  `tool_results` are the transcript, and every state change commits in one
+  adapter; the durable store is seven current-state tables (`projects`,
+  `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
+  `configuration_revisions`) in a single-version schema,
+  `messages` rows are the transcript, and every state change commits in one
   SQLite transaction before publication, with recovery-before-readiness on
   daemon start.
 - **Security posture.** Single-user, endpoint and state kept under the current
@@ -55,14 +54,14 @@ of each.
 
 | Milestone | Status | Scope |
 | --- | --- | --- |
-| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, docs, architecture, coverage, supply-chain gates) with pinned tools. |
+| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, rustdoc, coverage, supply-chain gates) with pinned tools. |
 | M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Machine-readable policies (`quality/*.toml`) enforce the crate classification with its declared responsibilities, workspace and external dependency edges, named integration test targets, and coverage tiers. |
+| M1+ Quality policy hardening | Closed | Policy files carry the pinned toolchain and tools (`quality/tools.toml`, read by `quality/check_tools.py`), the supply-chain policy (`deny.toml`), the two compiler-enforced source rules (`clippy.toml`), and notice generation (`quality/about.toml`). Crate and external dependency edges are enforced by the manifests and rustc, not by a policy file. |
 | M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
 | M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
 | M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and live session delivery. |
 | M5 Typed tools and workspace | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, one deterministic typed tool sequence, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the agent-operation slice is owned by [architectures 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md), 07, and 15) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) agent operation (instruction sources and system context, Plan/Build modes, physical plans, Build Autopilot, and the `sub_agent` tool), 4) control plane, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to nine newtypes including the durable transcript row `MessageId`, the event log, snapshots, cursors, and resync gave way to the nine current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is closed and merged into `main` as `0fd8ad5` (PR #67): `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers, a multi-line input block, and the registry-driven command hint band above it, and the sessions panel docked to the window's bottom rows over one light/dark palette system, with a `/theme` command, its argument band, and the theme picker panel), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for stopping, history-pushing, and quitting: `Esc` stops a live run in one press and `Ctrl+C` arms the same stop. Slices 3-6 are defined and not implemented. |
+| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the agent-operation slice is owned by [architectures 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md), 07, and 15) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) agent operation (the instruction channel, Plan/Build modes, plans, Build Autopilot, and the `sub_agent` tool), 4) provider configuration and session selection, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to nine newtypes including the durable transcript row `MessageId`, the event log, snapshots, cursors, and resync gave way to the seven current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is closed and merged into `main` as `0fd8ad5` (PR #67): `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers, a multi-line input block, and the registry-driven command hint band above it, and the sessions panel docked to the window's bottom rows over one light/dark palette system, with a `/theme` command, its argument band, and the theme picker panel), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for stopping, history-pushing, and quitting: `Esc` stops a live run in one press and `Ctrl+C` arms the same stop. Slices 3-6 are defined and not implemented. |
 | M6-M8, M10-M11 | Planned | M6 Tauri bridge and primary desktop UI; M7 VFR and Headroom; M8 hardening and acceptance verification; M10 tool selection, admission, and the Gateway/RLM bridge; M11 capabilities and context (MCP, kernel, and Skills/context). See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
 
 Everything beyond M5 outside the activated M5+ slices is roadmap direction
@@ -73,11 +72,10 @@ closed M0-M5 behavior.
 ## Crate map
 
 All workspace crates live under [crates/](crates/) unless noted. Coverage is
-enforced by the machine-readable policy in
-[quality/coverage.toml](quality/coverage.toml) under
+enforced by `COVERAGE_FLOORS` in the root [Makefile](Makefile) under
 [architecture 12](docs/intention-relay/architecture/12-quality-gates-and-makefile.md): per-crate line
-tiers of 75% (`core`), 60% (`standard`), and 20% (`edge`), with `intention-proto`
-exempt at 0% and outside collection.
+floors of 75%, 60%, and 20%, with `intention-proto` and `intention-test-support`
+outside measurement.
 
 ### DTO foundations
 
@@ -119,7 +117,7 @@ exempt at 0% and outside collection.
 | --- | --- | --- |
 | [intention-tui](crates/intention-tui) | Active adapter (terminal application) | The terminal application over the shared client: a revue-based fullscreen UI, an interactive REPL, and a headless prompt command in one binary. |
 | `intention-tauri` | Planned (M6) | Reserved Tauri bridge/UI adapter slot; the crate is created at M6. |
-| `intention-vfr`, `intention-headroom`, `intention-plans` | Planned (Slice 3/M7) | Reserved VFR, Headroom/CCR, and Plan/Build artifact crates; created at M5+ Slice 3 (plans) and M7 (VFR/Headroom). |
+| `intention-plans` | Planned (Slice 3) | Reserved Plan/Build artifact crate; created at M5+ Slice 3. VFR and Headroom arrive at M7 as modules of `intention-tools`, not as separate crates. |
 | [intention-test-support](crates/intention-test-support) | Non-production | Durable integration fixtures and contract scenarios used by tests. |
 
 Architecture rules worth knowing: only `intention-daemon`
@@ -167,7 +165,8 @@ reads no environment and infers no path.
 
 The terminal client shares one command grammar across its three modes
 (`tui`, `repl`, `run <PROMPT>`, with `--workspace`, `--session`, `--continue`,
-`--mode`, `--timeout`, and `--format`), talks to the daemon only through
+`--mode`, `--timeout`, `--format`, and the fullscreen UI's `--theme
+auto|light|dark`), talks to the daemon only through
 `intention-client`, renders the step's answer and reasoning as separate
 transient delta channels until the committed row replaces them, and ends with a
 closed typed status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed
@@ -195,18 +194,23 @@ filters, ranks, and completes them, with `Tab` committing the highlighted row,
 already spells its command or value, and `Esc` closing the band before it means
 anything else. The
 registry also declares each command's arguments: `/theme` takes an optional
-`light` or `dark` value, and while the caret is in that argument word the band
-lists those values in the same three columns, completing one with a trailing
-space. A theme is the terminal's warm off-white light palette or its neutral
-graphite dark palette whose only hue is the accent pair, resolved once per frame
-so a theme change replays the
-transcript exactly as a resize does. The daemon owns the effective theme:
-`config.toml` supplies the default through `[tui] theme` (absent means light),
-and the stored single-row override in the state database wins over it. `/theme`
-with a value selects that theme through the daemon; with no value it opens a
-picker panel in the chat panel's band region — so the input block keeps its
-rows — where `Up`/`Down` preview the whole window live without persisting
-anything, `Enter` commits through the daemon, and `Esc` reverts the preview.
+`auto`, `light`, or `dark` value, and while the caret is in that argument word
+the band lists those values in the same three columns, completing one with a
+trailing space. A theme is the terminal's warm off-white light palette or its
+neutral graphite dark palette whose only hue is the accent pair, resolved once
+per frame so a theme change replays the
+transcript exactly as a resize does. The terminal owns its own theme and the
+daemon never learns it: the launch resolves the preference from the `--theme`
+flag, else from the local `tui.toml`, else to `auto`, and `auto` paints what the
+environment detection answers — `COLORFGBG` when the terminal exports it, else
+the terminal's own answer to a background query, else the dark palette, which is
+the default of a terminal that reports nothing. `/theme` with a value selects
+that preference and rewrites `tui.toml` — a stored `auto` clears a spelled-out
+palette — while `/theme` with no value opens a picker panel in the chat panel's
+band region — so the input block keeps its rows — with one row per preference
+(`Auto`, `Light`, `Dark`), where `Up`/`Down` preview the whole window live
+without persisting anything, `Enter` commits the selection and writes the file,
+and `Esc` reverts the preview.
 
 ## Configuration
 
@@ -227,9 +231,6 @@ kind = "generic-chat-completion-api"  # or "openrouter"
 model = "<model-id>"
 endpoint = "https://<provider>/v1"    # required for generic-chat-completion-api
 credential = "<your-api-key>"
-
-[tui]
-theme = "light"  # optional; "dark" selects the dark palette
 ```
 
 Notes:
@@ -238,12 +239,10 @@ Notes:
   `generic-chat-completion-api`; anything else is rejected with a typed safe
   error. `endpoint` is optional for `openrouter` (the driver uses the
   OpenRouter API default).
-- The optional `[tui] theme` selects the terminal palette: `light` (the
-  default when the section or key is absent) or `dark`. An unknown spelling is
-  rejected with the typed `invalid_tui_theme` validation error, so nothing
-  silently falls back. The daemon answers the effective theme over the typed
-  wire — the state database's single-row override, else this default, else
-  light — and a theme selection records no configuration revision and never
+- The terminal theme is not configuration this file carries: `intention-tui`
+  resolves it locally and writes it to its own `tui.toml` beside `config.toml`,
+  where `theme = "auto"` (the default), `"light"`, or `"dark"` stores the
+  preference, so a selection records no configuration revision and never
   rewrites this credential-bearing file.
 - By explicit product decision the credential is open text in this private
   file. Keep the file readable only by your user (e.g. mode `0600` on Unix);
@@ -251,12 +250,11 @@ Notes:
   parsing, credentials are not serialized, displayed, or included in errors,
   DTOs, durable records, diagnostics, or protocol frames. Public
   projections expose only `credential_configured`.
-- Configuration is read at daemon startup. Controlled reload with canonical
-  config revisions, credential rotation, health checks, provider discovery and
-  pricing, raw-TOML configuration editing, and session defaults with per-turn
-  overrides are the accepted M5+ Slice 4 direction; that slice is not
-  implemented. Fork override commands remain Slice 6 work. Nothing else
-  changes configuration after startup.
+- Configuration is read at daemon startup. The accepted M5+ Slice 4 direction
+  adds named provider entries with a global default and an optional
+  per-session selection, provider/model discovery, and a typed
+  configuration-editing surface that applies at the next daemon start; that
+  slice is not implemented. Nothing else changes configuration after startup.
 - Malformed TOML or a future schema version fails typed validation, and the
   configuration file content is deliberately omitted from error output.
 
@@ -266,16 +264,17 @@ Notes:
   (`ubuntu-24.04`, `windows-2025`); the codebase also carries macOS path
   mapping. Code, tests, and fixtures must not hard-code POSIX-only paths.
 - **Rust.** The pinned stable toolchain is `1.97.1`
-  ([rust-toolchain.toml](rust-toolchain.toml)) with `rustfmt`, `clippy`, and
-  `llvm-tools-preview`. Coverage CI additionally uses pinned
-  `nightly-2026-07-31`; all quality tools are pinned in
-  [quality/tools.toml](quality/tools.toml).
+  ([rust-toolchain.toml](rust-toolchain.toml)) with `rustfmt`, `clippy`,
+  `llvm-tools-preview`, and the `x86_64-pc-windows-gnu` target; all quality
+  tools are pinned in [quality/tools.toml](quality/tools.toml).
+- **MinGW** only for `make lint-windows`, which lints the Windows target from
+  Linux; CI installs it for the lint job, and no other local target needs it.
 - **Python 3** for the quality scripts behind the Makefile.
 - **Network** on first setup: `make bootstrap-tools` installs the exact pinned
   toolchains and quality tools (this target is mutating and networked;
   everything else is offline once installed).
 - Everything builds from the committed `Cargo.lock`; the workspace uses
-  edition 2024, denies `unsafe_code`, and applies a strict Clippy policy
+  edition 2024, denies `unsafe_code`, and applies a pragmatic Clippy policy
   (see [Cargo.toml](Cargo.toml)).
 
 ## Build, test, and quality commands
@@ -287,11 +286,11 @@ quick` while iterating and run `make verify` before acceptance.
 | --- | --- |
 | `make bootstrap-tools` | Mutating/networked: install exact pinned toolchains and quality tools. |
 | `make quick` | Fast local loop: tools check, `fmt-check`, lint, tests. |
-| `make check` | Complete non-mutating source gate: format, lint, tests/doctests, docs, architecture. |
-| `make docs-check` | Rustdoc, then Markdown link/Mermaid/secret-pattern validation. |
-| `make coverage` | Line coverage, enforcing each collected crate's declared tier floor (see [quality/coverage.toml](quality/coverage.toml)). |
+| `make check` | Complete non-mutating source gate: format, lint, tests, doctests/rustdoc. |
+| `make lint-windows` | Lint the Windows target from Linux; needs the pinned `x86_64-pc-windows-gnu` target and a MinGW toolchain. |
+| `make coverage` | One instrumented workspace run; enforces each measured crate's line floor from `COVERAGE_FLOORS` in the [Makefile](Makefile). |
 | `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
-| `make deps` | Supply-chain gates: deny, audit, outdated, machete, udeps, notices check. |
+| `make deps` | Supply-chain gates: lockfile anchor, deny, machete, notices check. |
 | `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
 | `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-deps`) in parallel. |
 
@@ -306,14 +305,18 @@ The blocking workflow is
 [.github/workflows/quality.yml](.github/workflows/quality.yml), run on pushes
 and pull requests to `main`:
 
-- `lint-arch` and `test` jobs on `ubuntu-24.04` and `windows-2025`;
-- `coverage-default` and `deps` jobs on `ubuntu-24.04`;
-- pinned toolchains and per-job tool scopes, rust-cache, `mold` on Linux,
-  sccache for coverage builds, and uploaded quality reports.
+- `lint-arch` (formatting, native lint, Windows-target lint, doctests,
+  rustdoc), `coverage-default`, and `deps` on `ubuntu-24.04`;
+- `test` on `windows-2025`, which runs the platform-dependent suite
+  (`PLATFORM_TESTS`) and the doctests; Linux test execution happens inside
+  `coverage-default`, which runs the full suite instrumented;
+- pinned toolchains and per-job tool installs, a per-phase build cache that
+  keeps each job's target tree warm, `mold` from its own pinned action on
+  Linux, LLD instead of `link.exe` on Windows, MinGW for the Windows-target
+  lint, and uploaded quality reports.
 
-One supporting workflow is not part of the blocking gate: the manual
-live-provider end-to-end run
-([real-api-e2e.yml](.github/workflows/real-api-e2e.yml)). Dependabot is
+The live-provider end-to-end run is a local target, `make e2e-real-api`, and
+never part of the blocking gate. Dependabot is
 enabled for dependency updates
 ([dependabot.yml](.github/dependabot.yml)).
 
@@ -328,7 +331,7 @@ enabled for dependency updates
   target architecture with reading paths (principles, crate map, DTO policy,
   quality gates, TTD, roadmap, and the instruction channel).
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
-  the remaining milestone plan (M6-M11) and the M5+ slice order.
+  the remaining milestone plan (M6-M8 and M10-M11) and the M5+ slice order.
 
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
   for registry dependencies.
@@ -342,15 +345,15 @@ What `main` does not yet provide (all of it is documented roadmap work):
   binary) is delivered.
 - No VFR or Headroom behavior (M7).
 - No M5+ work on the Goal domain or session
-  branching, and no fork override commands (slices 5-6); no agent-operation behavior
-  (slice 3: instruction sources, `AGENTS.md`, the effective instruction projection, Plan/Build modes, physical plans,
+  branching (slices 5-6); no agent-operation behavior
+  (slice 3: the instruction channel, Plan/Build modes, plans,
   Build Autopilot, and the `sub_agent` tool), owned by
   [architectures 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md), 07, and 15.
 - No project script library for kernel cells (`.ir/scripts`), which Milestone 11
   delivers as agent-authored modules persisted through the frozen tool
   descriptors ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
 - Slice 1.5 core simplification is activated: the event log, snapshots,
-  cursors, and resync are replaced by the nine current-state tables written in
+  cursors, and resync are replaced by the seven current-state tables written in
   one SQLite transaction per state change, and the nine-production-crate
   consolidation and the composition-facade removal are merged on `main`.
 - Slice 2 terminal UX is closed and merged into `main` as `0fd8ad5` (PR
@@ -363,8 +366,9 @@ What `main` does not yet provide (all of it is documented roadmap work):
   no session at launch, draws one window — the chat panel with markdown answers,
   a multi-line input block, and the registry-driven command hint band above it,
   and the sessions panel docked to the window's bottom rows — over one light/dark
-  palette system, with `/theme` (`light` or `dark`, or no argument for the
-  previewing picker panel) and the daemon-owned effective theme,
+  palette system, with `/theme` (`auto`, `light`, or `dark`, or no argument for
+  the previewing picker panel) and the locally resolved, locally stored
+  preference,
   caches the committed transcript layout,
   streams the live tail through the same block functions as the committed rows,
   and layers `Ctrl+C` and `Esc` into stop, history-pushing, and quitting arms (a
@@ -386,9 +390,9 @@ The v1 boundary and non-goals are stated precisely in
 - Use the quality gates: `make quick` while iterating, `make verify` before
   handoff; CI must stay green on pull requests to `main`.
 - Keep machine-readable policies ([quality/](quality)) and architecture
-  documentation in sync with code changes: new production crates must be
-  declared with a responsibility, test target, and coverage tier before
-  production code is accepted.
+  documentation in sync with code changes: a new production crate states its
+  responsibility and test targets in the crate map and gets a line floor in the
+  Makefile's `COVERAGE_FLOORS` before production code is accepted.
 - Single live version, no backward compatibility: when an execution path
   becomes outdated, remove it; do not add compatibility layers, fallback
   branches, or migration fixtures for older schema/protocol/format versions.

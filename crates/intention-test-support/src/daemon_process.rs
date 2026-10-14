@@ -5,12 +5,6 @@
 //! and kill it within a bounded window, so every suite drives the real process
 //! boundary without duplicating harness code.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "process fixtures fail with a precise diagnostic when the test environment cannot host the daemon"
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};

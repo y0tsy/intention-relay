@@ -29,9 +29,9 @@ pub use protocol::{
     ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto,
     ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto,
     SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line,
-    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
+    SessionSummaryDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
+    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
+    parse_session_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
@@ -469,6 +469,21 @@ impl ErrorDto {
         }
     }
 
+    /// Creates a stable error from a trusted internal code and an owned message.
+    ///
+    /// The caller builds the message from data it has already classified as
+    /// safe to report, such as a workspace-relative path and its OS error.
+    #[must_use]
+    pub fn owned_message(code: &'static str, category: ErrorCategoryDto, message: String) -> Self {
+        Self {
+            code: code.to_owned(),
+            category,
+            message,
+            retry: ErrorRetryDto::Manual,
+            correlation_id: None,
+        }
+    }
+
     /// Creates a stable unavailable error from trusted internal constants.
     #[must_use]
     pub fn unavailable(code: &'static str, message: &'static str) -> Self {
@@ -534,10 +549,6 @@ impl std::error::Error for ErrorDto {}
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
 

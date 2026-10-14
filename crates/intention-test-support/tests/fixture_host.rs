@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Fixture-host integration uses explicit protocol diagnostics."
-)]
-
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use intention_proto::{

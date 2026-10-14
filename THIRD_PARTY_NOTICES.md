@@ -13,7 +13,7 @@ the root `Cargo.toml`.
 
 ## License index
 
-- [Apache License 2.0](#Apache-2.0), used by 132 dependency entries
+- [Apache License 2.0](#Apache-2.0), used by 133 dependency entries
 - [MIT License](#MIT), used by 57 dependency entries
 - [Unicode License v3](#Unicode-3.0), used by 23 dependency entries
 - [ISC License](#ISC), used by 5 dependency entries
@@ -288,11 +288,7 @@ PERFORMANCE OF THIS SOFTWARE.
 #### Used by
 
 - [windows-link 0.2.1](https://github.com/microsoft/windows-rs)
-- [windows-sys 0.52.0](https://github.com/microsoft/windows-rs)
 - [windows-sys 0.61.2](https://github.com/microsoft/windows-rs)
-- [windows-targets 0.52.6](https://github.com/microsoft/windows-rs)
-- [windows_x86_64_gnu 0.52.6](https://github.com/microsoft/windows-rs)
-- [windows_x86_64_msvc 0.52.6](https://github.com/microsoft/windows-rs)
 
 ```text
                                  Apache License
@@ -3079,7 +3075,7 @@ limitations under the License.
 - [rustc_version 0.4.1](https://github.com/djc/rustc-version-rs)
 - [rustix 1.1.5](https://github.com/bytecodealliance/rustix)
 - [rustls-native-certs 0.8.4](https://github.com/rustls/rustls-native-certs)
-- [rustls 0.23.45](https://github.com/rustls/rustls)
+- [rustls 0.23.46](https://github.com/rustls/rustls)
 - [scopeguard 1.2.0](https://github.com/bluss/scopeguard)
 - [signal-hook-mio 0.2.5](https://github.com/vorner/signal-hook)
 - [signal-hook-registry 1.4.8](https://github.com/vorner/signal-hook)
@@ -4375,6 +4371,11 @@ limitations under the License.
 - [thiserror-impl 2.0.21](https://github.com/dtolnay/thiserror)
 - [thiserror 1.0.69](https://github.com/dtolnay/thiserror)
 - [thiserror 2.0.21](https://github.com/dtolnay/thiserror)
+- [unic-char-property 0.9.0](https://github.com/open-i18n/rust-unic/)
+- [unic-char-range 0.9.0](https://github.com/open-i18n/rust-unic/)
+- [unic-common 0.9.0](https://github.com/open-i18n/rust-unic/)
+- [unic-emoji-char 0.9.0](https://github.com/open-i18n/rust-unic/)
+- [unic-ucd-version 0.9.0](https://github.com/open-i18n/rust-unic/)
 - [unicode-ident 1.0.26](https://github.com/dtolnay/unicode-ident)
 - [widestring 1.2.1](https://github.com/VoidStarKat/widestring-rs)
 
@@ -4710,7 +4711,7 @@ THE SOFTWARE.
 
 #### Used by
 
-- [mio 1.2.3](https://github.com/tokio-rs/mio)
+- [mio 1.2.4](https://github.com/tokio-rs/mio)
 
 ```text
 Copyright (c) 2014 Carl Lerche and other MIO contributors
@@ -5398,7 +5399,7 @@ SOFTWARE.
 
 #### Used by
 
-- [revue 3.9.1](https://github.com/hawk90/revue)
+- [revue 3.10.0](https://github.com/hawk90/revue)
 
 ```text
 MIT License
@@ -5459,7 +5460,7 @@ SOFTWARE.
 
 - [async-openai-macros 0.3.0](https://github.com/64bit/async-openai)
 - [async-openai 0.42.2](https://github.com/64bit/async-openai)
-- [revue-macros 3.9.1](https://github.com/hawk90/revue)
+- [revue-macros 3.10.0](https://github.com/hawk90/revue)
 
 ```text
 MIT License
@@ -5488,7 +5489,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 - [tokio-stream 0.1.19](https://github.com/tokio-rs/tokio)
 - [tokio-util 0.7.19](https://github.com/tokio-rs/tokio)
-- [tokio 1.53.2](https://github.com/tokio-rs/tokio)
+- [tokio 1.53.3](https://github.com/tokio-rs/tokio)
 
 ```text
 MIT License
@@ -5549,7 +5550,7 @@ SOFTWARE.
 
 #### Used by
 
-- [openrouter-rs 0.18.0](https://github.com/realmorrisliu/openrouter-rs)
+- [openrouter-rs 0.19.0](https://github.com/realmorrisliu/openrouter-rs)
 - [zmij 1.0.23](https://github.com/dtolnay/zmij)
 
 ```text

@@ -67,7 +67,7 @@ default scope decides what a pathless call addresses, not what the process may r
 - `execute` starts with `cwd = workspace_root` unless the call declares a `cwd`, and inherits the invoking process
 environment with the call's own declared variables overlaid by name. WorkspaceRoot is an addressing anchor and
 default CWD, not a security, environment, or privilege boundary.
-- a tool result identifies the path/CWD used, with safe redaction as necessary;
+- a tool result identifies the logical path/CWD it used;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 ### Project script library
@@ -80,8 +80,8 @@ The project script library is the logical, slash-separated, workspace-relative p
 in, or excluded from, any other policy, and no plan artifact, daemon state, checkpoint, or configuration lives there;
 - modules are created and edited only through `write` and `edit`, read through
 `read`, `glob`, and `grep`, and run through `execute`; the relative-path addressing rules above apply unchanged;
-- a tool result or error identifies a module by its logical relative path, with
-the same redaction as every other workspace path; and
+- a tool result or error identifies a module by its logical relative path,
+like every other workspace path; and
 - `write` and `edit` remain incompatible in Plan mode, so library mutation stays
 Build activity.
 
@@ -92,18 +92,19 @@ WorkspaceRoot is an anchor for addressing, not a security boundary: the daemon a
 user's ordinary OS authority. Real isolation, if it is ever required, must be an OS-level boundary such as a sandbox,
 container, or ACL, never a lexical path check.
 
-### Safe missing-path outcome
+### Failed workspace operations
 
-A file-oriented failure outcome uses `ErrorDto` with a stable code and a code-owned safe message: a workspace read that
-cannot open or read its target reports `tool_read_failed` with `unable to read workspace file`. The tool must not
-disclose the absolute workspace root, a resolved symlink target, an OS error string, command details, or file content,
-and the error carries no dynamic path detail payload.
+A failed workspace operation uses `ErrorDto` with its existing stable code and a message that names the target it
+addressed — the workspace-relative path, or the `glob` pattern — and the underlying OS or pattern error verbatim: a
+read that cannot open or read its target reports `tool_read_failed` with `unable to read {path}: {error}`. The message
+never carries the absolute workspace root, a resolved symlink target, the command line, or file content; the guidance
+rendering below bounds what the model sees.
 
 A failed call is durable, model-visible evidence rather than a stopped run: the application commits one terminal
-`Failed` result whose content is bounded guidance rendered by `tool_failure_guidance` (the code-owned safe message, the
+`Failed` result whose content is bounded guidance rendered by `tool_failure_guidance` (the typed failure message, the
 failed tool identity, and a code-owned suggestion), and the model loop answers the call with that content before
-continuing. The guidance is tool-result content, not an `ErrorDto` payload: it never carries the absolute root, an OS
-error string, a command line, or file content, and it stays inside `MAX_TOOL_GUIDANCE_BYTES`.
+continuing. The guidance is tool-result content, not an `ErrorDto` payload: its only dynamic detail is that same
+addressed path and error, and it stays inside `MAX_TOOL_GUIDANCE_BYTES`.
 
 ## Tool pipeline
 
@@ -159,7 +160,7 @@ context, or dispatcher mechanism, and the production path has no phase dispatch 
 
 WorkspaceRoot binding, VFR transformation, Headroom compression, and Plan-mode authorization are therefore ordinary
 calls, not extension points. Each attaches only when a phase has a behavioural owner with a contract to test; the
-`intention-plans`, `intention-vfr`, and `intention-headroom` owners are not active implementations today
+`intention-plans` owner and the VFR/Headroom modules of `intention-tools` are not active implementations today
 ([architecture 15](15-tool-registry-and-model-tool-loop.md)).
 
 ## Policy separation
@@ -171,8 +172,8 @@ The following must remain distinct:
 | Tool's primitive work | Base tool implementation. |
 | Path addressing and CWD | WorkspaceRoot binding in the application. |
 | Plan-mode mutation authorization | Plan policy. |
-| Compression and retrieval metadata | Headroom. |
-| Virtual source transformation | VFR. |
+| Compression and retrieval metadata | Headroom module (`intention-tools`). |
+| Virtual source transformation | VFR module (`intention-tools`). |
 | Persistence transaction | Application/storage. |
 | UI rendering | Adapter. |
 
@@ -193,15 +194,15 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 | Shell semantics | Tool contract test. | Pipelines, redirects, and compound commands run through the platform shell. |
 | Recoverable call failure | Engine lifecycle and daemon end-to-end tests. | An undecodable, denied, or failed call commits one terminal `Failed` result with bounded guidance and the next model step proceeds. |
 | Pre-effect rejection | Application integration test. | An unknown tool id is rejected before any external effect and still leaves the durable call row and one guided `Failed` result. |
-| Adapter independence | Daemon tool-stream contract test from TUI and bridge clients. | Both see the same committed tool results. |
+| Adapter independence | Daemon tool-stream contract test from the TUI client. | The adapter sees the same committed tool results the daemon owns; the desktop bridge joins this row when M6 creates it. |
 
 ## Quality-gate integration
 
 Tool and WorkspaceRoot tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
-Makefile](12-quality-gates-and-makefile.md) (per-crate tiers). Architecture checks must reject direct process-CWD
-fallback and
-VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope,
-execute-CWD, and policy-denial scenarios above.
+Makefile](12-quality-gates-and-makefile.md) (per-crate line floors). Direct process-CWD fallback is rejected by the
+compiler, through the `clippy.toml` entries that deny `std::env::current_dir` and `std::env::set_current_dir`; that base
+tools stay free of transform behavior is a review responsibility. Line coverage cannot replace the explicit
+relative-addressing, search-scope, execute-CWD, and policy-denial scenarios above.
 
 ## Open decisions
 

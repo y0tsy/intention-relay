@@ -56,39 +56,19 @@ is not one of the six `ToolId` values is `unknown_tool` before any effect.
 
 A new tool id is a new `ToolId` variant with its own typed input, its own spec, and a separate approved architecture and
 replanning decision. Until such a decision lands, the owners that are not shipped hold no slot and no partial contract:
-`intention-headroom` (`retrieve`), `intention-plans` (`plan_submit`), and `intention-vfr` (`expand`) are future crates
-created at their milestones and have neither input/result DTOs nor model visibility, and a request for any of those
-names is the same pre-effect `unknown_tool` rejection.
+`retrieve` and `expand` are future `ToolId` variants delivered at M7 by the VFR/Headroom modules of `intention-tools`,
+and `plan_submit` is delivered by `intention-plans` at M5+ Slice 3; none has input/result DTOs or model visibility
+yet, and a request for any of those names is the same pre-effect `unknown_tool` rejection.
 
 A spec carries credential-free fields only: the `ToolId`, its description, and its code-owned input JSON Schema.
 Identity is the enum variant, never a presentation string. Public boundaries reject raw JSON/maps, unvalidated paths,
 provider/Python values, implementation handles, resources, and implementation errors.
 
-`ToolEffectProfile` describes direct declared effects: workspace read or write, process start, network retrieval, user
-interaction, session mutation, retained-content read, and future child controls. It is not authority, sandbox, or a
-complete indirect-effect inventory. The initial mapping is:
-
-| `ToolId` | Direct effect flags |
-| --- | --- |
-| `read`, `glob`, `grep`, `expand` | `workspace_read` |
-| `write` | `workspace_write` |
-| `edit` | `workspace_read`, `workspace_write` |
-| `execute` | `process_start` |
-| `fetch_url` | `network_retrieval` |
-| `ask_user` | `user_interaction` |
-| `todo`, `plan_submit` | `session_state_mutation` |
-| `retrieve` | `retained_content_read` |
-| `sub_agent` | `child_agent_start`, `child_agent_control` |
-| `mcp` | `process_start`, `network_retrieval` |
-
-The profile states direct declared capability only: `process_start` does not claim a shell program cannot
-read/write/start descendants/access network, and `network_retrieval` does not claim side-effect-free remote retrieval.
-No flag requires confirmation. `WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and
-`expand` (default relative-path base and initial `execute` CWD, not an access boundary; absolute and `..` paths are
-accepted with no path-based denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp`
-get no fictional workspace path; their owners may require typed URL, question, todo, retained-content, plan,
-child-agent, or MCP-method references instead. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy
-work.
+`WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and `expand` (default relative-path
+base and initial `execute` CWD, not an access boundary; absolute and `..` paths are accepted with no path-based
+denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp` get no fictional workspace
+path; their owners may require typed URL, question, todo, retained-content, plan, child-agent, or MCP-method references
+instead. No tool requires confirmation. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
 Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` /
 `typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic changes require a new record
@@ -113,14 +93,17 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
   boundary and does not relax the separate provider-endpoint policy. Redirects remain retrievals under the same
   restrictions with a code-owned bounded limit. The typed result distinguishes final URL, status, safe content
   metadata, and bounded body; arbitrary response headers are not model-visible by default.
--  **`ask_user`** is a normal long-running `user_interaction` tool. After
-  `ToolCallStarted` the post-M4 run stays `Running`; other independently admitted calls may complete concurrently, and
-  the next model step waits for this question's terminal safe result with every other group result. It never moves the
-  post-M4 run out of `Running` and never rewrites committed `messages` or `tool_results` rows or recovery state.
+-  **`ask_user`** is an asynchronous `user_interaction` tool. The call records the durable question and completes
+  immediately with a typed no-answer-yet result, so no model step, group, or run waits for the user: the question reaches
+  the user through the ordinary durable activity/notification projection, and an answer arrives as an ordinary user turn
+  under the pending-turn rule (principle 5 of [architecture 00](00-principles-and-scope.md)). Its code-owned description
+  and result guidance state that an answer may never arrive and that the model continues the work the question does not
+  directly block. There is no correlation queue, answer-resume path, or second model step, and an unanswered question
+  never moves the run out of `Running` or rewrites committed `messages` rows or recovery state.
 -  **`sub_agent`** admits one child run and returns its markdown answer. The typed input carries the bounded markdown
   task and the selected `mode`. `Sync` holds the call open until the child run reaches a terminal state and returns the
-  child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Deferred`
-  outcome carrying the child session handle as plain text (a UUIDv4); the child's terminal markdown answer is recorded
+  child's terminal markdown answer as the call's result. `Async` terminates the call immediately with a `Completed`
+  result carrying the child session handle as plain text (a UUIDv4); the child's terminal markdown answer is recorded
   as one durable child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model
   request. There is no message exchange, delegation pair, clarification round trip, or `AwaitResult`. A child run is an
   ordinary run with its own lifecycle, tool loop, cancellation, and no-resume rules; a child result never starts a parent
@@ -139,17 +122,19 @@ not describe the facade, tool gateway, prompt policy, or audit trail as OS-level
 A run's frozen tool selection is a closed, credential-free `Disabled | Selected` typed serde JSON record. When
 selected it contains:
 
-- a tool-admission-engine revision limited to common typed mechanics; and
-- an ordered list of only the tools actually supplied to the model, each binding its `ToolId`, its code-owned input JSON
-  Schema text (the contract the model sees), its required-capability binding, and its mode relation.
+- a tool-admission-engine revision limited to common typed mechanics;
+- one tool-layer revision that `spec(id)` serves; and
+- an ordered list of the `ToolId` values actually supplied to the model.
 
 It excludes unexposed tools, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
-readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. Ordering is the
-advertisement order of that list: semantic, preserved by the typed record, with no positions or cursors, and duplicate
-semantic keys are rejected. Admission, retry, recovery, forks, audit, or a later package must not rebuild a missing
-selection from the current spec match, configuration, model/provider names, driver availability, workspace,
-ancestry, MCP discovery, bridge/kernel state, logs, or UI state; unknown, corrupt, or unsupported selections block
-dependent work before effect while unrelated readable history remains available.
+readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. The model-visible tools'
+code-owned input JSON Schema text stays the contract the model sees and is read through `spec(id)` when the request is
+built, never copied into the selection. Ordering is the advertisement order of the list: semantic, preserved by the
+typed record, with no positions or cursors, and duplicate `ToolId` values are rejected. Admission, retry, recovery,
+forks, audit, or a later package must not rebuild a missing selection from the current spec match, configuration,
+model/provider names, driver availability, workspace, ancestry, MCP discovery, bridge/kernel state, logs, or UI state;
+unknown, corrupt, or unsupported selections block dependent work before effect while unrelated readable history remains
+available.
 
 ## Validation ownership and limit classification
 
@@ -192,8 +177,8 @@ own typed plan authorization.
 
 Build admits otherwise compatible selected tools; Plan keeps ordinary project `write`/`edit` incompatible while
 physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
-sandbox; `ask_user` is normal `user_interaction` tooling, and the run remains `Running`
-after it starts.
+sandbox; `ask_user` is asynchronous `user_interaction` tooling, and the run remains `Running` without waiting for its
+answer.
 
 The project script library (`.ir/scripts`, [architecture 20](20-ipython-kernel-lifecycle.md))
 follows these same tool-admission semantics: its logical relative path is a default base for existing frozen tools
@@ -230,8 +215,8 @@ sequenceDiagram
 ```
 
 A `ToolCalls` finish closes a model step, not the run: one transaction records the completed assistant message alone,
-and each admitted call then records its own `tool_results` row and its answering transcript row in one transaction; no
-local effect occurs inside it.
+and each admitted call then records its committed tool-result message row and its answering transcript row in one
+transaction; no local effect occurs inside it.
 
 Every completed step commits exactly one assistant row whenever it produced text or reasoning, and that row commits
 before the step's own tool rows do. The row carries the step's whole reasoning; a step that reasoned without answering
@@ -256,8 +241,8 @@ calls' order or meaning.
 ### Tool output, terminal outcomes, and bounds
 
 A call produces one normalized safe output, bounded by the tool's output window, and exactly one terminal result. Output
-accumulates in memory and commits once, together with its `tool_results` row. Duplicate, post-terminal, or wrong-group
-results fail closed as `tool_result_stream_invalid`.
+accumulates in memory and commits once, together with its committed tool-result message row. Duplicate, post-terminal,
+or wrong-group results fail closed as `tool_result_stream_invalid`.
 
 Only the terminal safe result projection of every call becomes model context, and only after the whole group completes.
 The first-scope bounds are:
@@ -265,28 +250,25 @@ The first-scope bounds are:
 - the existing **64 KiB** `MAX_TOOL_OUTPUT_BYTES` bound applies to a call's committed output; and
 -  a tool renders its output within its own output window and reports a cut through the result's truncation flag and explicit marker before the result commits; there is no output-refusal outcome, and committed output is never truncated or partly committed.
 
-The closed initial terminal outcome taxonomy is: `Succeeded`, `Deferred`, `DeniedBeforeExecution`,
-`FailedBeforeExternalEffect`, `CancelledBeforeStart`, `InterruptedBeforeStart`, `ExecutionUnavailable`, and `Partial`.
-It carries only safe model-visible projection and approved typed metadata; no value silently changes category later.
-`Succeeded`, `Deferred`, known denials, known pre-effect failures, and `Partial` may enter the next typed exchange; a
-`Partial` result carries the bounded captured output with its interruption notice, never blocks another model step, and
-is never retried. Every `Failed` outcome answers its call with its bounded code-owned guidance the same way, so the
-model reads what went wrong and can correct the call instead of losing the run to it. `Deferred` is the asynchronous `sub_agent` acceptance outcome: it carries the child session handle,
-permits the next model step, and never changes category when the child's terminal markdown answer arrives later as the committed child-result message.
+The durable result row stores exactly `ToolResultStatusDto`: `Completed`, `Failed`, or `Partial`. The specific cause is
+a bounded metadata code on the same result row, never a second status dimension; the closed first set is
+`tool_cancelled`, `tool_timed_out`, `tool_execution_interrupted`, `denied_before_execution`, and
+`execution_unavailable`. A successful call, including the asynchronous `sub_agent` acceptance that returns the child
+session handle as its content, records `Completed`; a known denial or an unavailable implementation records `Failed`
+with its bounded code-owned guidance; a call stopped before or during execution records `Partial` with the bounded
+captured output and its interruption notice. `Completed` and `Partial` results may enter the next typed exchange, and a
+`Partial` result never blocks another model step and is never retried.
 
 Failure semantics are closed: invalid tool input or a refused workspace binding produces a typed `Failed` result whose
 bounded model-visible guidance answers the call, and the model loop continues to the next step without retrying the
 call or stopping the run; a tool infrastructure error produces a safe normalized failure without leaking provider or OS
 text and remains the one tool-path outcome that terminalizes the run.
 
-#### Lifecycle vocabulary and interruption notices
+#### Interruption notices
 
-The tool lifecycle vocabulary is closed: `ToolLifecycleStatusDto` is `Admitted`, `Rejected`, `Started`, `Completed`,
-`Failed`, `Cancelled`, or `Partial`, and `ToolResultStatusDto` is `Completed`, `Failed`, or `Partial`,
-mapping one to one onto the matching terminal lifecycle member. The transition set is closed: none to `Admitted`;
-`Admitted` to `Cancelled`, `Started`, or `Rejected`; `Started` to `Completed`, `Failed`, or `Partial`. A `Partial`
-result records one execution that was interrupted before a final result, requires non-blank content exactly like a
-successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool outcome:
+A `Partial` result records one execution that was interrupted before a final result, requires non-blank content
+exactly like a successful result, never terminalizes the run, and is never retried. A run-level stop is not a tool
+outcome:
 `run.cancel` cancels a call in flight with the same stopped `Partial` result and notice, keeps a result that committed
 before the stop was honored, and ends the run `Interrupted` at its execution's next boundary instead of asking the
 model again. Three interruption codes are recorded:
@@ -337,33 +319,30 @@ model-tool-loop content receives the current
 typed state or a typed error, never a partially understood snapshot or live stream. New run-selection provenance records
 the tool/model `model_tool_loop_v1` support needed to reconstruct local exchanges.
 
-## Model progress deadline
+## Model step progress
 
-`model_stream_progress_timeout_v1` is the selected model-step policy for all post-M4 model-tool-loop steps, including
-roots and children. Progress is content, not schedule: only non-empty text and reasoning content counts; usage and other
-non-content values do not, and a continuously producing stream has no fixed step duration. The policy is active only
-while a provider stream for a model step is open; it is paused while a tool or foreground kernel cell runs, `ask_user`
-awaits, a retry delay runs, or the run is completing or cancelling.
+Progress is content, not schedule: only non-empty text and reasoning content counts; usage and other non-content values
+do not, and a continuously producing stream has no fixed step duration. A model step's deadline is active only while a
+provider stream for that step is open, and it is paused while a tool or foreground kernel cell runs, a retry delay runs,
+or the run is completing or cancelling.
 
-A provider stream that stops producing content fails with `model_stream_progress_timeout`. This document selects no
-fixed deadline value: the enforcing bound for the current scope is the provider execution's configured attempt timeout,
-an implementation safeguard owned by [architecture 08](08-model-protocol-and-providers.md) and [architecture
-09](09-configuration-security-and-observability.md), and a later activating specification selects any progress deadline
-it adds. That safeguard bounds silence, not content: it is armed when a provider stream opens and re-armed by every
-event the stream delivers, usage and tool-call facts included, so it holds the no-stall outcome while this policy's
-content-only refinement waits for its activating specification. Before the first committed content or other irreversible evidence, exactly one retry is permitted after
-`model_stream_progress_timeout`; after such a fact, no retry is permitted. A simultaneously committed user cancellation
-wins the race. A timeout otherwise produces a safe failed outcome, suppresses late output, and never claims success
-or resumes work after restart.
+The deadline has exactly one owner. [Architecture 08](08-model-protocol-and-providers.md) arms the provider attempt's
+idle window when the stream opens and re-arms it on every normalized event, expires it as the retryable
+`provider_attempt_timed_out` failure, and owns the attempt count: at most two attempts, with one retry permitted only
+before any durable text, reasoning, usage, or tool fact. This document selects no deadline value, adds no second failure
+code, and adds no retry of its own ([architecture 09](09-configuration-security-and-observability.md) carries the window
+in the limits registry). That window bounds silence, not content, so a later activating specification may add a
+content-only refinement; it must state the deadline it selects and keep the pause rule above.
 
-The progress policy is a model-step policy owned by this document. A timeout outcome is a known typed failure before an
-external effect when no irreversible evidence preceded it, and a bounded `Partial` result when a started effect lacks
-durable terminal proof; the next model step proceeds, and nothing pauses.
+A model step that ends by deadline is a known typed failure before an external effect when no irreversible evidence
+preceded it, and a bounded `Partial` result when a started effect lacks durable terminal proof; the next model step
+proceeds, and nothing pauses.
 
 ## Effect evidence, cancellation, and recovery
 
 An admitted call's start is the boundary after which an external effect may be possible. Before it, cancellation or
-restart records `CancelledBeforeStart` or `InterruptedBeforeStart` and no external action occurs; after it, known
+restart records a `Partial` result with the `tool_cancelled` or `tool_execution_interrupted` code and no external
+action occurs; after it, known
 terminal evidence records the exact known result, and a started action interrupted or lost without proven terminal
 effect commits a bounded `Partial` result with its interruption notice. Known validation failures, denials, and known
 tool/process failures are known outcomes, not partial results, and each one is delivered to the model as the call's
@@ -391,9 +370,10 @@ beyond the nine identity newtypes and the plain step and group indices.
 ## Dependencies and non-goals
 
 This document depends on the one-capability-path rules. It retains the `sub_agent` tool contract, admission, and
-generic tool-effect boundary, which the third slice of Milestone 5+ delivers. Architecture 18 owns the future `mcp` tool's source/discovery/capability/invocation
-semantics; this document retains tool identity, admission, and generic loop ownership. Architecture 19 owns
-Gateway/RLM attachment, grants, bridge operation correlation, and bridge-visible delivery; its ingress must use this
+generic tool-effect boundary, which the third slice of Milestone 5+ delivers. Architecture 18 owns the future `mcp`
+tool's connection-record, discovery, and direct-invocation semantics; this document retains tool identity, admission,
+and generic loop ownership. Architecture 19 owns the spawned kernel child's typed-client ingress, bridge-local
+recovery, and bridge-visible delivery; its ingress must use this
 document's frozen tool selection, admission, `ToolCallId`, start/result state, and publication from the commit
 without bypass or duplication, and tool admission never grants target-mutation authority. Architecture 20 kernel host
 requests consume the same frozen tool selection, admission, `ToolCallId`, and publication path; kernel execution

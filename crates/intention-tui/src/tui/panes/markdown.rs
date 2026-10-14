@@ -249,10 +249,6 @@ fn fitting_prefix(row: &RowBuilder, rest: &str, limit: usize) -> usize {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit tests assert typed fixture rows for diagnostics."
-    )]
 
     use revue::render::Modifier;
 

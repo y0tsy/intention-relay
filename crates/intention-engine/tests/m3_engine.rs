@@ -1,13 +1,8 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Focused application fixtures use expect to provide precise test failures."
-)]
-
 mod common;
 
 use std::fs;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, PoisonError};
 
 use common::{FakeRepository, RecordingCommitObserver, row_id, workspace_root};
 use intention_config::ConfigSnapshotDto;
@@ -220,7 +215,7 @@ fn local_tool_rejects_storage_before_execution() {
     *repository
         .commit_error
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) =
+        .expect("the fixture mutex is not poisoned") =
         Some(ErrorDto::unavailable("storage_down", "storage unavailable"));
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
@@ -237,7 +232,7 @@ fn local_tool_rejects_storage_before_execution() {
 }
 
 #[test]
-fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
+fn committed_rows_name_the_logical_path_and_never_the_absolute_root() {
     let root = std::env::temp_dir().join(format!("intention-redaction-{}", SessionId::new()));
     fs::create_dir_all(&root).expect("root");
     let repository = FakeRepository::with_accepted(Err(ErrorDto::unavailable("unused", "unused")));
@@ -262,7 +257,7 @@ fn committed_rows_redact_absolute_workspace_root_and_os_error_text() {
         repository.committed_results()
     );
     assert!(!rendered.contains(&root.to_string_lossy().to_string()));
-    assert!(!rendered.contains("No such file or directory"));
+    assert!(rendered.contains("unable to read missing:"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -418,7 +413,7 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     let inputs = repository
         .accepted_inputs
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(inputs[0].proposed_run_id(), proposed_run_id);
     assert_eq!(inputs[0].config_snapshot().resolved(), config.resolved());
@@ -431,7 +426,7 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) =
+        .expect("the fixture mutex is not poisoned") =
         Some(starting_context(session_id, RunId::new(), &config));
     let error = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, requested_run, RunCancellation::new())
@@ -445,7 +440,7 @@ fn send_user_turn_parameters_and_schedule_validation_cover_the_durable_selection
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) =
+        .expect("the fixture mutex is not poisoned") =
         Some(starting_context(session_id, matching_run, &config));
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, matching_run, RunCancellation::new())
@@ -590,7 +585,7 @@ fn starting_run_context_rebuilds_the_committed_tool_exchange() {
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+        .expect("the fixture mutex is not poisoned") = Some(context);
 
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, run_id, RunCancellation::new())
@@ -680,7 +675,7 @@ fn starting_run_context_skips_reasoning_only_assistant_rows() {
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+        .expect("the fixture mutex is not poisoned") = Some(context);
 
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, run_id, RunCancellation::new())
@@ -781,7 +776,7 @@ fn starting_run_context_omits_unpaired_tool_rows() {
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+        .expect("the fixture mutex is not poisoned") = Some(context);
 
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, run_id, RunCancellation::new())
@@ -829,11 +824,11 @@ fn create_and_remove_workflows_map_committed_results() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     *repository
         .removed
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(
+        .expect("the fixture mutex is not poisoned") = Some(
         PendingTurnProjectionDto::new(session_id, pending_turn, "later")
             .expect("fixture pending turn is valid"),
     );
@@ -869,13 +864,13 @@ fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let bound_project = ProjectId::new();
     let bound_workspace = WorkspaceId::new();
     *repository
         .workspace_binding
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) =
+        .expect("the fixture mutex is not poisoned") =
         Some(WorkspaceBindingDto::new(bound_project, bound_workspace));
     let create = CreateSessionCommandDto::new(
         ProjectId::new(),
@@ -898,7 +893,7 @@ fn session_creation_joins_the_durable_binding_of_its_workspace_root() {
     let forwarded = repository
         .create_commands
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
     assert_eq!(
@@ -927,7 +922,7 @@ fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let project_id = ProjectId::new();
     let workspace_id = WorkspaceId::new();
     let create = CreateSessionCommandDto::new(
@@ -951,7 +946,7 @@ fn session_creation_keeps_its_identities_for_an_unbound_workspace_root() {
     let forwarded = repository
         .create_commands
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(forwarded.len(), 1);
     assert_eq!(
@@ -970,7 +965,7 @@ fn the_core_default_resolves_absent_to_build() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let create = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
@@ -992,7 +987,7 @@ fn the_core_default_resolves_absent_to_build() {
     let forwarded = repository
         .create_commands
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(forwarded.len(), 1, "one creation reaches the repository");
     assert_eq!(
@@ -1050,7 +1045,7 @@ fn create_session_with_turn_commits_the_session_before_the_turn() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let observer = RecordingCommitObserver::new();
     let created = ApplicationService::new(&repository)
         .create_session(
@@ -1069,7 +1064,7 @@ fn create_session_with_turn_commits_the_session_before_the_turn() {
         repository
             .calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone(),
         vec!["create_session", "accept_user_turn"],
         "the durable session commits before its first turn"
@@ -1077,7 +1072,7 @@ fn create_session_with_turn_commits_the_session_before_the_turn() {
     let inputs = repository
         .accepted_inputs
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(inputs.len(), 1, "one turn reaches the repository");
     assert_eq!(
@@ -1100,11 +1095,12 @@ fn a_replayed_create_session_with_turn_returns_the_recorded_outcome() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+        .expect("the fixture mutex is not poisoned") = Err(session_already_exists());
     *repository
         .loaded_projection
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") =
+        Some(projection(session_id, None, Vec::new()));
     let created = ApplicationService::new(&repository)
         .create_session(
             create_with_first_turn(session_id, key, "first"),
@@ -1122,7 +1118,7 @@ fn a_replayed_create_session_with_turn_returns_the_recorded_outcome() {
         repository
             .calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone(),
         vec!["create_session", "accept_user_turn"],
         "a replay still accepts the carried turn against the durable session"
@@ -1143,7 +1139,7 @@ fn a_same_key_with_different_content_is_a_typed_conflict() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let error = ApplicationService::new(&repository)
         .create_session(
             create_with_first_turn(session_id, IdempotencyKey::new(), "different"),
@@ -1157,7 +1153,7 @@ fn a_same_key_with_different_content_is_a_typed_conflict() {
         repository
             .create_commands
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1,
         "the session committed before the turn was rejected"
@@ -1175,7 +1171,7 @@ fn a_failed_turn_leaves_the_session_replayable() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") = Ok(projection(session_id, None, Vec::new()));
     let application = ApplicationService::new(&repository);
     let error = application
         .create_session(
@@ -1190,7 +1186,7 @@ fn a_failed_turn_leaves_the_session_replayable() {
         repository
             .create_commands
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1,
         "the session stays durable although the carried turn was rejected"
@@ -1201,15 +1197,16 @@ fn a_failed_turn_leaves_the_session_replayable() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Err(session_already_exists());
+        .expect("the fixture mutex is not poisoned") = Err(session_already_exists());
     *repository
         .loaded_projection
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") =
+        Some(projection(session_id, None, Vec::new()));
     *repository
         .accepted
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Ok(pending_first_turn(session_id, "first"));
+        .expect("the fixture mutex is not poisoned") = Ok(pending_first_turn(session_id, "first"));
     let replayed = application
         .create_session(
             create_with_first_turn(session_id, key, "first"),
@@ -1261,7 +1258,7 @@ fn selected_commit_failures_propagate_from_each_commit_point() {
         *repository
             .commit_failures
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = vec![failing_call];
+            .expect("the fixture mutex is not poisoned") = vec![failing_call];
         let error = ApplicationService::new(&repository)
             .invoke_local_tool_with_publication(
                 invoke_read_input_in_workspace(&hello_workspace(&root), path),
@@ -1301,7 +1298,7 @@ impl<'a> TerminalOrderingProbe<'a> {
     fn published(&self) -> Vec<MessageProjectionDto> {
         self.publications
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 
@@ -1316,7 +1313,7 @@ impl<'a> TerminalOrderingProbe<'a> {
             *self
                 .results_at_publish
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner),
+                .expect("the fixture mutex is not poisoned"),
             vec![0, 1],
             "the terminal row publishes after its own durable commit"
         );
@@ -1330,11 +1327,11 @@ impl SessionCommitObserver for TerminalOrderingProbe<'_> {
         };
         self.results_at_publish
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(self.committed_result_rows.load(Ordering::SeqCst));
         self.publications
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(message.clone());
     }
 }
@@ -1424,7 +1421,7 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
         *publisher
             .results_at_publish
             .lock()
-            .unwrap_or_else(PoisonError::into_inner),
+            .expect("the fixture mutex is not poisoned"),
         vec![0, 1]
     );
     let publications = publisher.published();
@@ -1463,6 +1460,14 @@ fn every_terminal_outcome_persists_one_correlated_result_before_publication() {
     assert!(
         !content.contains(&root.to_string_lossy().to_string()),
         "guidance never carries the absolute workspace root"
+    );
+    assert!(
+        content.contains("unable to read missing.txt:"),
+        "guidance names the workspace-relative path it addressed"
+    );
+    assert!(
+        content.contains("os error"),
+        "guidance carries the OS error verbatim"
     );
     assert_single_terminal_result(
         &repository,
@@ -1769,7 +1774,7 @@ fn terminal_commit_failure_propagates_from_the_tool_error_path() {
     *repository
         .commit_failures
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = vec![2];
+        .expect("the fixture mutex is not poisoned") = vec![2];
     let error = ApplicationService::new(&repository)
         .invoke_local_tool_with_publication(
             invoke_read_input("missing"),
@@ -1965,7 +1970,7 @@ fn active_run_returns_the_exact_active_run_and_rejects_every_other_lookup() {
     *repository
         .loaded_projection
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) =
+        .expect("the fixture mutex is not poisoned") =
         Some(projection(session_id, Some(active), Vec::new()));
 
     let service = ApplicationService::new(&repository);
@@ -1987,7 +1992,8 @@ fn active_run_returns_the_exact_active_run_and_rejects_every_other_lookup() {
     *repository
         .loaded_projection
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(projection(session_id, None, Vec::new()));
+        .expect("the fixture mutex is not poisoned") =
+        Some(projection(session_id, None, Vec::new()));
     assert_eq!(
         service
             .active_run(session_id, run_id)
@@ -2004,7 +2010,7 @@ fn a_failed_creation_propagates_without_accepting_its_first_turn() {
     *repository
         .created
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Err(ErrorDto::unavailable(
+        .expect("the fixture mutex is not poisoned") = Err(ErrorDto::unavailable(
         "storage_busy",
         "the durable store is locked",
     ));
@@ -2022,7 +2028,7 @@ fn a_failed_creation_propagates_without_accepting_its_first_turn() {
         repository
             .calls
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone(),
         vec!["create_session"],
         "a failed creation never reaches the first turn it carried"
@@ -2077,7 +2083,7 @@ fn starting_run_context_replays_committed_notices_to_the_model() {
     *repository
         .starting_context
         .lock()
-        .unwrap_or_else(PoisonError::into_inner) = Some(context);
+        .expect("the fixture mutex is not poisoned") = Some(context);
 
     let scheduled = ApplicationService::new(&repository)
         .schedule_starting_run(session_id, run_id, RunCancellation::new())

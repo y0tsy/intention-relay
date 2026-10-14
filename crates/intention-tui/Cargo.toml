@@ -15,9 +15,17 @@ intention-proto = { path = "../intention-proto", version = "=0.0.0" }
 intention-transport = { path = "../intention-transport", version = "=0.0.0" }
 lexopt = "0.3.2"
 mimalloc = { version = "0.1", default-features = false }
-revue = { version = "3.9.1", default-features = false, features = ["markdown"] }
+revue = { version = "3.10.0", default-features = false, features = ["markdown"] }
 serde_json = "1.0.149"
 tokio = { version = "1.53.1", features = ["macros", "rt", "signal", "sync", "time"] }
+toml = "1.0.3"
+
+# The terminal background probe reads its answer in raw mode beside a bounded
+# readiness wait. Both crates are already in the locked graph through revue:
+# crossterm is its terminal backend and mio its event source.
+[target.'cfg(unix)'.dependencies]
+crossterm = "0.29.0"
+mio = "1.2"
 
 [dev-dependencies]
 intention-test-support = { path = "../intention-test-support", version = "=0.0.0" }
