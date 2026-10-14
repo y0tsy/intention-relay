@@ -10,7 +10,7 @@ multi-user operation are explicit v1 exclusions ([00 Principles and Scope](00-pr
 
 The daemon is the sole owner of application use cases and runtime actors; SQLite connections and persistence
 transactions; active sessions and runs; provider drivers and model streams; the tool surface and workspace policy, plus
-VFR, Headroom, and plan policies when activated; frame publication and subscription source; and protocol frames and
+plan policy when activated; frame publication and subscription source; and protocol frames and
 subscription current-state reads via `intention-transport`.
 
 Tauri, TUI, and REPL own only presentation, user input adaptation, local display state, and reconnect UX.
@@ -271,7 +271,7 @@ explicit presentation DTOs when necessary for JavaScript ergonomics; and manage 
 app lifecycle details.
 
 The bridge must not import application use-case services directly; create a competing SQLite connection or run actor;
-invoke provider SDKs or tools; reimplement persistence, permission, plan, workspace, VFR, or Headroom policy; or
+invoke provider SDKs or tools; reimplement persistence, plan, workspace, or tool-transform policy; or
 introduce a parallel Tauri-only command contract.
 
 ## TUI and REPL

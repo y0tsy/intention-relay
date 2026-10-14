@@ -275,33 +275,35 @@ consumed here, while the durable `SessionProviderProfileChanged` delivery stays 
 - no Tauri crate imports application/runtime/storage implementation APIs;
 - adapters satisfy mapping-contract and smoke/outcome requirements rather than a misleading aggregate UI line target.
 
-## Milestone 7: VFR and Headroom extensions
+## Milestone 7: VFR and Headroom modules
 
-Goal: independently enabled extensions over the base tool pipeline.
+Goal: independently enabled transforms over the base tool pipeline, delivered as modules of `intention-tools`.
 
 ### Deliver
 
--  The VFR extension, mapping, expansion/raw tools, and model instructions as the `Vfr` contribution of [architecture
-30](30-instruction-sources-and-system-context.md);
-- The Headroom extension, CCR retention contract, and retrieve tool;
+-  The VFR module: mapping, expansion/raw tools (`expand` and the raw-read path as future `ToolId` variants), and model
+instructions as the `Vfr` contribution of [architecture 30](30-instruction-sources-and-system-context.md);
+- The Headroom module: the CCR retention contract and the retrieve tool;
 - deterministic composition with the workspace/tool pipeline;
-- adapter/model representation policy.
+- adapter/model representation policy;
+- retention, rotation, and expiry recorded as `@todo(vfr)`/`@todo(headroom)` markers in the modules until an
+activating specification selects the deferred values.
 
 ### Tests first
 
 - VFR transform/expand/raw fixtures;
 - Headroom retention/retrieval/expiry fixtures;
-- full extension-order integration test;
+- full pipeline-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the per-crate tier floors
+-  coverage fixtures for transform, expiry, retrieval, and error paths under the `intention-tools` tier floor
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
--  VFR and Headroom operate as independently enabled extensions; `retrieve` returns retained content while valid,
+-  VFR and Headroom operate as independently enabled modules; `retrieve` returns retained content while valid,
 with typed expiry behavior afterward;
-- base tools do not import VFR or Headroom implementation crates;
--  extension crates meet their declared tier floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+- base tools stay free of transform behavior, and no separate extension crate exists;
+-  The modules meet `intention-tools`' declared tier floor ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ## Milestone 8: Hardening and acceptance verification
 

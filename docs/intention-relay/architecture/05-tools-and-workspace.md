@@ -160,7 +160,7 @@ context, or dispatcher mechanism, and the production path has no phase dispatch 
 
 WorkspaceRoot binding, VFR transformation, Headroom compression, and Plan-mode authorization are therefore ordinary
 calls, not extension points. Each attaches only when a phase has a behavioural owner with a contract to test; the
-`intention-plans`, `intention-vfr`, and `intention-headroom` owners are not active implementations today
+`intention-plans` owner and the VFR/Headroom modules of `intention-tools` are not active implementations today
 ([architecture 15](15-tool-registry-and-model-tool-loop.md)).
 
 ## Policy separation
@@ -172,8 +172,8 @@ The following must remain distinct:
 | Tool's primitive work | Base tool implementation. |
 | Path addressing and CWD | WorkspaceRoot binding in the application. |
 | Plan-mode mutation authorization | Plan policy. |
-| Compression and retrieval metadata | Headroom. |
-| Virtual source transformation | VFR. |
+| Compression and retrieval metadata | Headroom module (`intention-tools`). |
+| Virtual source transformation | VFR module (`intention-tools`). |
 | Persistence transaction | Application/storage. |
 | UI rendering | Adapter. |
 
@@ -200,8 +200,7 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 
 Tool and WorkspaceRoot tests are blocking `make verify` inputs under the coverage policy of [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md) (per-crate tiers). Architecture checks must reject direct process-CWD
-fallback and
-VFR/Headroom coupling inside base tools; line coverage cannot replace the explicit relative-addressing, search-scope,
+fallback, and base tools stay free of transform behavior; line coverage cannot replace the explicit relative-addressing, search-scope,
 execute-CWD, and policy-denial scenarios above.
 
 ## Open decisions

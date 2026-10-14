@@ -118,7 +118,7 @@ exempt at 0% and outside collection.
 | --- | --- | --- |
 | [intention-tui](crates/intention-tui) | Active adapter (terminal application) | The terminal application over the shared client: a revue-based fullscreen UI, an interactive REPL, and a headless prompt command in one binary. |
 | `intention-tauri` | Planned (M6) | Reserved Tauri bridge/UI adapter slot; the crate is created at M6. |
-| `intention-vfr`, `intention-headroom`, `intention-plans` | Planned (Slice 3/M7) | Reserved VFR, Headroom/CCR, and Plan/Build artifact crates; created at M5+ Slice 3 (plans) and M7 (VFR/Headroom). |
+| `intention-plans` | Planned (Slice 3) | Reserved Plan/Build artifact crate; created at M5+ Slice 3. VFR and Headroom arrive at M7 as modules of `intention-tools`, not as separate crates. |
 | [intention-test-support](crates/intention-test-support) | Non-production | Durable integration fixtures and contract scenarios used by tests. |
 
 Architecture rules worth knowing: only `intention-daemon`

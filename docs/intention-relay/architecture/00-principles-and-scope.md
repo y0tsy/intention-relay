@@ -46,8 +46,8 @@ execution, not a sandbox ([architecture 05](05-tools-and-workspace.md)).
 ### 7. Cross-cutting features attach as ordinary calls
 
 Workspace enforcement, VFR, Headroom/CCR, and plan-mode restrictions attach as ordinary calls in the direct tool
-sequence; the typed hook plane was removed in Slice 1.5. Base tools stay focused on their primitive work and do not
-hard-code extension behavior.
+sequence; VFR and Headroom arrive as modules inside `intention-tools`, and the typed hook plane was removed in Slice
+1.5. Base tools stay focused on their primitive work and do not hard-code extension behavior.
 
 ### 8. Automatic durable state
 
@@ -157,7 +157,7 @@ work; the second stays owned by the named slice.
 | Topic | Decision required |
 | --- | --- |
 | Transcript retention | Retention and compaction policy for transcript rows and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 8. |
-| CCR backend | Initial memory/SQLite retention strategy, limits, and expiry behavior ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). Milestone 7 owns the delivered backend. |
+| CCR backend | Initial memory/SQLite retention strategy, limits, rotation, and expiry behavior ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). The M7 modules carry `@todo(headroom)` markers for the deferred values. |
 
 ## Deferred decisions
 

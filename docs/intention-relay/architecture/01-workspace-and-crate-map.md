@@ -133,7 +133,8 @@ application, one binary with a fullscreen revue UI, an interactive REPL, and a h
 client, and the owner of its own terminal theme, which it stores locally — a `--theme auto|light|dark` flag, else the
 `tui.toml` preference, else environment detection, else the dark palette — so no theme state crosses the
 wire — and the non-production `intention-test-support` fixture crate. The future crates are created at their
-milestones: `intention-tauri` (M6), `intention-plans` (M5+ Slice 3), and `intention-vfr` and `intention-headroom` (M7).
+milestones: `intention-tauri` (M6) and `intention-plans` (M5+ Slice 3); VFR and Headroom arrive at M7 as modules of
+`intention-tools`, not as separate crates.
 
 Rules the target map fixes:
 
@@ -209,7 +210,7 @@ implementations; the binary owns process lifecycle.
 
 For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
 Base tools remain primitive implementations; the engine owns lifecycle/result persistence and publication, and the
-future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
+future plan owner and the VFR/Headroom modules attach as ordinary calls when activated, not as extension points.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 

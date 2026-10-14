@@ -58,7 +58,7 @@ The following are mandatory candidates for automated architecture tests:
 | Local protocol | Tauri bridge and TUI use `intention-client`, not direct application services. |
 | Daemon authority | SQLite/runtime actor ownership appears only daemon-side. |
 | Workspace boundary | File-oriented tool invocations require `WorkspaceRootDto`. |
-| Extension boundaries | VFR/Headroom attach as ordinary library calls with a declared contract, not base-tool private coupling. |
+| Extension boundaries | VFR and Headroom run as ordinary library modules of `intention-tools` with a declared contract, not base-tool private coupling. |
 | Plan integrity | Model-visible plan reads expose exactly the plan body, and plan metadata lives on the SQLite record; ordinary Plan `write`/`edit` cannot target project paths, while Plan `execute` remains advisory-guided and audited. |
 | Autopilot continuity | Plan approval pins a revision, starts a fresh same-Session Build run, and optional handoff transfers only a safe frozen context. |
 | Secret safety | Secret-bearing config cannot appear in public DTO/log/error/snapshot types. |
