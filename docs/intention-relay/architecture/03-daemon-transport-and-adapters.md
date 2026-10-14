@@ -486,7 +486,9 @@ text above is the live policy.
   standing for no evidence; else the dark palette, because a terminal that reports neither is far more often a dark
   one (the emulators that ship a default profile ship a dark one) and terminal applications default to their dark
   themes likewise. Detection runs once per launch even when a spelled palette wins, so the picker's `Auto` row can
-  preview what returning to detection would paint, and it is skipped when standard input or output is not a terminal.
+  preview what returning to detection would paint, and it is skipped when standard input or output is not a terminal. The
+  probe is a Unix route: a console that delivers input through its own record API rather than a byte stream answers no
+  query, so detection there reaches its file or its default.
   The terminal route is the zero-configuration source rather than a platform theme lookup, because the background the
   terminal paints is the surface this front end draws on and the route needs no platform dependency. A theme is
   presentation-only: a change

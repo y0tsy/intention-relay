@@ -29,8 +29,10 @@
 //! the next start reads the choice back; a rewrite of `auto` clears the
 //! spelled-out palette and leaves the next launch to detection.
 
+#[cfg(unix)]
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use intention_proto::{DtoResult, ErrorDto};
@@ -46,6 +48,7 @@ const CONFIG_DIRECTORY_NAME: &str = "intention-relay";
 
 /// The background query: OSC 11, "report the background colour", closed by the
 /// string terminator.
+#[cfg(unix)]
 const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 
 /// The bounded window one terminal has to answer the background query.
@@ -54,6 +57,7 @@ const OSC11_QUERY: &[u8] = b"\x1b]11;?\x1b\\";
 /// before the first frame, so the window is short enough that a terminal which
 /// never answers costs one launch almost nothing: 15 ms is a liveness
 /// safeguard, never a budget a compliant terminal can lose.
+#[cfg(unix)]
 const PROBE_DEADLINE: Duration = Duration::from_millis(15);
 
 /// The palette the resolution paints when the environment answers nothing.
@@ -72,6 +76,7 @@ const DEFAULT_THEME: Theme = Theme::Dark;
 ///
 /// A background reply is far shorter than this; the bound keeps a terminal
 /// that streams anything else from filling the probe's buffer.
+#[cfg(unix)]
 const MAX_REPLY_BYTES: usize = 64;
 
 /// The perceived brightness at or above which a background is a light one.
@@ -478,6 +483,7 @@ fn terminal_probe() -> Option<Theme> {
 /// no wait at all. A response closed by the string terminator or by `BEL` is
 /// complete; a read that ends, or a reply that grows past [`MAX_REPLY_BYTES`],
 /// is no reply.
+#[cfg(unix)]
 fn read_osc11_reply(mut reader: impl Read, mut ready: impl FnMut() -> bool) -> Option<Vec<u8>> {
     let mut reply = Vec::new();
     while reply.len() < MAX_REPLY_BYTES {
@@ -498,6 +504,7 @@ fn read_osc11_reply(mut reader: impl Read, mut ready: impl FnMut() -> bool) -> O
 }
 
 /// Returns whether one reply already carries its terminator.
+#[cfg(unix)]
 fn reply_is_complete(reply: &[u8]) -> bool {
     reply.ends_with(b"\x1b\\") || reply.ends_with(b"\x07")
 }
@@ -508,6 +515,7 @@ fn reply_is_complete(reply: &[u8]) -> bool {
 /// components or a `#rrggbb` literal; everything around it - the introducer and
 /// the terminator - is framing. A reply of another query, or a malformed
 /// colour, is no evidence.
+#[cfg(unix)]
 fn parse_osc11_background(reply: &[u8]) -> Option<Color> {
     let text = std::str::from_utf8(reply).ok()?;
     let start = text.find("]11;")? + "]11;".len();
@@ -521,6 +529,7 @@ fn parse_osc11_background(reply: &[u8]) -> Option<Color> {
 /// Both spellings a terminal answers with are accepted: `#rrggbb`, and the
 /// `rgb:` form whose three components carry one to four hexadecimal digits
 /// each.
+#[cfg(unix)]
 fn parse_color(spec: &str) -> Option<Color> {
     if let Some(hex) = spec.strip_prefix('#') {
         if hex.len() != 6 {
@@ -548,6 +557,7 @@ fn parse_color(spec: &str) -> Option<Color> {
 /// A component is scaled by the width the terminal sent, so a four-digit
 /// component's high byte and a two-digit component's byte both land on the
 /// eight-bit scale the palette uses.
+#[cfg(unix)]
 fn component(text: &str) -> Option<u8> {
     let digits = text.len();
     if digits == 0 || digits > 4 || !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -560,8 +570,10 @@ fn component(text: &str) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::io::Cursor;
     use std::path::Path;
+    #[cfg(unix)]
     use std::time::Duration;
 
     use revue::style::Color;
@@ -570,10 +582,11 @@ mod tests {
     use crate::app::{Theme, ThemePreference};
 
     use super::{
-        DEFAULT_THEME, MAX_REPLY_BYTES, PROBE_DEADLINE, THEME_FILE_NAME, colorfgbg_theme,
-        detect_with, local_theme_path, parse_local_theme, parse_osc11_background, read_local_theme,
-        read_osc11_reply, resolve_with, theme_of_background, write_local_theme,
+        DEFAULT_THEME, THEME_FILE_NAME, colorfgbg_theme, detect_with, local_theme_path,
+        parse_local_theme, read_local_theme, resolve_with, theme_of_background, write_local_theme,
     };
+    #[cfg(unix)]
+    use super::{MAX_REPLY_BYTES, PROBE_DEADLINE, parse_osc11_background, read_osc11_reply};
 
     #[test]
     fn the_local_file_path_names_the_theme_file_beside_the_configuration() {
@@ -704,6 +717,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn one_background_reply_parses_in_every_spelling_terminals_send() {
         for (reply, expected) in [
@@ -732,6 +746,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn another_query_and_a_malformed_colour_are_no_evidence() {
         for reply in [
@@ -751,6 +766,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_reader_delivers_the_reply_up_to_its_terminator() {
         let reply = b"\x1b]11;rgb:0000/0000/0000\x1b\\";
@@ -758,6 +774,7 @@ mod tests {
         assert_eq!(read, reply, "the whole reply reaches the parser");
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_reader_with_nothing_to_deliver_reads_no_reply() {
         assert_eq!(
@@ -777,6 +794,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_probe_waits_fifteen_milliseconds() {
         assert_eq!(
