@@ -119,16 +119,14 @@ requires explicit selection. Skill discovery, selection, and record semantics ar
 
 ## Model proposals and user confirmation
 
-After one of these durable Goal milestones the model may prepare at most one coalesced proposal of a particular owner
-scope and record kind: user acceptance or stop of a goal, or recording of a verification evidence reference.
-`RefinementDraftDto` contains a daemon-assigned identity, selected source
-run/Goal and milestone, exact base revisions, bounded typed edit set, evidence references, safe rationale, and a typed
-record identity. It is not a current record, does not appear in cards or model context, cannot be used by a
-child/Skill/role/MCP method, and grants no execution authority. A later equal proposal adds evidence to the
-one pending draft rather than producing an unbounded queue. The daemon records the proposal durably and surfaces the question
-through the asynchronous `ask_user` path; the run continues while the draft stays pending, and the user may accept,
-edit-and-accept, or reject it whenever they return. Acceptance validates the exact base revision and creates a new immutable record revision; a
-stale base is a typed conflict, and rejection changes no active record.
+After one of these durable Goal milestones the model may prepare one proposal: user acceptance or stop of a goal, or
+recording of a verification evidence reference. A proposal is one pending `ask_user` question whose payload names the
+target record identity, that record's exact base revision, and the proposed change as text. It is not a current record,
+does not appear in cards or model context, cannot be used by a child/Skill/role/MCP method, and grants no execution
+authority. A run makes one proposal at a time, so at most one proposal is pending per run. The run continues while the
+question stays pending, and the user may accept, edit-and-accept, or reject it whenever they return. Acceptance is an
+ordinary command that validates the exact base revision and creates a new immutable record revision; a stale base is
+`goal_revision_conflict`, and rejection changes no active record.
 
 ## Conversation compaction
 
@@ -155,7 +153,7 @@ only the in-flight call: it commits a bounded `Partial` result with its notice a
 model step.
 On failure or daemon restart, no provider request, tool, MCP request, process, kernel action, child, or external effect
 is retried, reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known pre-effect
-evidence or a bounded partial result. Goals, summaries, proposals, and readable history survive recovery; a later user
+evidence or a bounded partial result. Goals, summaries, and readable history survive recovery; a later user
 attempt obtains a new run identity and target snapshot.
 
 ## Bounds and closed safe failures
@@ -180,8 +178,6 @@ goal_snapshot_too_large
 goal_snapshot_unavailable
 delegation_role_invalid
 delegation_role_widening_forbidden
-refinement_draft_conflict
-refinement_draft_too_large
 ```
 
 They disclose no credential, path, raw external response, private process resource, full Skill/role content, model
@@ -189,8 +185,8 @@ proposal text, provider resource, or implementation detail.
 
 ## Compatibility and historical preservation
 
-No historical record gains synthetic Goal, evidence, proposal, or compaction state. Goals are acceptance/evidence
-records, not a work-authorization plane. All directions affect fresh runs only.
+No record carries state it did not record, and no current state reconstructs meaning a record never had. Goals are
+acceptance/evidence records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 

@@ -51,10 +51,10 @@ not enter committed records, frames, or protocol DTOs.
 - An accepted run receives an immutable copy of its selected snapshot/revision.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
 to a configuration edit.
--  TOML application is **daemon-restart-only** in M3: the daemon neither watches TOML nor applies an edit to an
+-  TOML application is **daemon-restart-only**: the daemon neither watches TOML nor applies an edit to an
 already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
 applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-detecting or requesting the restart remains open; M3/M4 behavior must never imply a second activation path for a
+detecting or requesting the restart remains open; no behavior implies a second activation path for a
 running daemon.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
 back to process CWD.
@@ -128,7 +128,7 @@ Every numeric bound in the system is recorded here with the reason it exists:
 | Pipe-collection window (`READER_DRAIN_GRACE`, 5 s) | Liveness: after the direct child is reaped, a descendant holding the pipes open cannot extend the call; a window that runs out stops the process group and keeps the captured output. |
 | Provider idle attempt window and retry delay | Liveness: a live provider request that delivers no event for the configured window fails typed; the window re-arms after every delivered event, so a request that keeps producing facts is never cut off. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
-| Goal domain ([28](28-goal-domain-and-verification.md)) | Representation: 256 goals in one project, 64 in one session, tree depth 16, 32 direct children per goal, 64 session links per project goal, 32 selected skills and roles in one run, 512 KiB per skill, role, summary, or draft, 1 MiB per canonical goal target snapshot, 4 MiB of goal context and summaries in one run, and one pending proposal per owner scope and record kind with evidence coalescing. |
+| Goal domain ([28](28-goal-domain-and-verification.md)) | Representation: 256 goals in one project, 64 in one session, tree depth 16, 32 direct children per goal, 64 session links per project goal, 32 selected skills and roles in one run, 512 KiB per skill, role, or summary, 1 MiB per canonical goal target snapshot, 4 MiB of goal context and summaries in one run, and one pending proposal per run. |
 | Conversation tree ([23](23-non-destructive-session-branching-and-regeneration.md)) | Representation: 128 NFC Unicode scalar values per session title. One read returns the immediate children of one requested parent in stable creation order, and the tree carries no depth, descendant-count, or branch-count bound: an over-size response is answered by the transport envelope's own `local_protocol_message_too_large` failure, and a base snapshot carries no canonical size limit. |
 
 ## Credential isolation
