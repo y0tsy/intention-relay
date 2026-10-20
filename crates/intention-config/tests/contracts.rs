@@ -6,7 +6,7 @@
 )]
 mod common;
 
-use common::{FAKE_CREDENTIAL, explicit_source};
+use common::FAKE_CREDENTIAL;
 
 use intention_config::{RawConfigInputDto, ResolvedConfigDto};
 
@@ -14,7 +14,6 @@ use intention_config::{RawConfigInputDto, ResolvedConfigDto};
 fn valid_v1_toml_resolves_to_a_redacted_public_dto() {
     let raw = RawConfigInputDto::new(
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"gpt-5.6-terra\"\ncredential = \"fixture-credential-not-real-12345\"\n",
-        explicit_source(),
     );
 
     let resolved = ResolvedConfigDto::parse_resolve(raw).expect("fixture config must resolve");
@@ -26,18 +25,15 @@ fn valid_v1_toml_resolves_to_a_redacted_public_dto() {
 
 #[test]
 fn malformed_or_unsupported_toml_returns_safe_typed_errors() {
-    let malformed = RawConfigInputDto::new("schema_version = [", explicit_source());
+    let malformed = RawConfigInputDto::new("schema_version = [");
     let future_version = RawConfigInputDto::new(
         "schema_version = 99\n[provider]\nkind = \"openrouter\"\nmodel = \"gpt-5.6-terra\"\ncredential = \"fixture-credential-not-real-12345\"\n",
-        explicit_source(),
     );
     let wrong_schema_type = RawConfigInputDto::new(
         "schema_version = \"one\"\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential-not-real-12345\"\n",
-        explicit_source(),
     );
     let undeclared_provider = RawConfigInputDto::new(
         "schema_version = 1\n[provider]\nkind = \"openai\"\nmodel = \"gpt-5.6-terra\"\ncredential = \"fixture-credential-not-real-12345\"\n",
-        explicit_source(),
     );
 
     for input in [

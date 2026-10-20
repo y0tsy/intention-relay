@@ -38,15 +38,6 @@ pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 /// pending rows can never be permanently larger than one transport envelope.
 const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
 
-/// The maximum encoded pending-turn projection content kept in one session
-/// projection, in bytes.
-///
-/// It equals the admission bound, so the newest queued turn always fits and a
-/// projection always reports at least one pending turn; older turns beyond it
-/// are reported through the projection's omitted count instead of being
-/// materialised.
-const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
-
 /// Immutable outcome for an accepted user turn after committing it durably.
 #[expect(
     clippy::large_enum_variant,
@@ -169,16 +160,15 @@ impl StartingRunModelContextDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the configuration is not persistable,
-    /// the context is empty, a message belongs to another session, or the final
-    /// message is not the starting run's user turn.
+    /// Returns a validation error when the context is empty, a message belongs
+    /// to another session, or the final message is not the starting run's user
+    /// turn.
     pub fn new(
         session_id: SessionId,
         run_id: RunId,
         safe_config: ConfigSnapshotDto,
         messages: Vec<MessageProjectionDto>,
     ) -> DtoResult<Self> {
-        safe_config.validate_for_persistence()?;
         let ends_with_user = messages.last().is_some_and(|message| {
             message.kind() == MessageKindDto::User && message.run_id() == Some(run_id)
         });

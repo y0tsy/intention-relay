@@ -131,7 +131,7 @@ impl SilentDriver {
 
 impl ModelExecutionDriver for SilentDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -438,18 +438,11 @@ fn streams_commit_one_assistant_step_with_reasoning_and_complete() {
 #[test]
 fn malformed_provider_and_eof_streams_safely_fail_without_committing_content() {
     for (events, expected_code) in [
-        (
-            vec![Ok(
-                ModelEventDto::text_delta("invalid").expect("text is valid")
-            )],
-            "invalid_model_stream_order",
-        ),
         (vec![Ok(ModelEventDto::started())], "provider_stream_ended"),
         (
             vec![
                 Ok(ModelEventDto::started()),
-                Err(ProviderErrorDto::unavailable("provider_down", false, None)
-                    .expect("error is valid")),
+                Err(ProviderErrorDto::unavailable("provider_down", false).expect("error is valid")),
             ],
             "provider_down",
         ),
@@ -696,7 +689,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::reasoning_delta("why").expect("reasoning is valid")),
-            Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+            Err(ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")),
         ],
         vec![
             Ok(ModelEventDto::started()),
@@ -929,12 +922,9 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
         ],
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_down",
-            true,
-            None,
-        )
-        .expect("error is valid"))],
+        vec![Err(
+            ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")
+        )],
     ]);
     driver.cancel_during_stream(1, signal.model_signal());
     let clock = ImmediateTime::new();
@@ -999,18 +989,12 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_down",
-            true,
-            None,
-        )
-        .expect("error is valid"))],
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_down",
-            true,
-            None,
-        )
-        .expect("error is valid"))],
+        vec![Err(
+            ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")
+        )],
+        vec![Err(
+            ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")
+        )],
     ]);
     let clock = ImmediateTime::new();
 
@@ -1332,7 +1316,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
     let driver = ScriptedDriver::with_rounds(vec![vec![
         Ok(ModelEventDto::started()),
         Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
-        Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+        Err(ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")),
     ]]);
     let clock = ImmediateTime::new();
 
@@ -1400,7 +1384,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::text_delta("   ").expect("text is valid")),
-            Err(ProviderErrorDto::unavailable("provider_down", true, None).expect("error is valid")),
+            Err(ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")),
         ],
         vec![
             Ok(ModelEventDto::started()),

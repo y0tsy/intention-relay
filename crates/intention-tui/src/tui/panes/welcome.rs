@@ -7,12 +7,10 @@
 //! overview block is pinned to the region's last rows, directly above the
 //! input block.
 //!
-//! The overview is one horizontal block of up to four sub-blocks. The product
-//! version is a compile-time fact of this binary, so it is the one real
-//! sub-block; the AGENTS.md, MCPs, and Skills sub-blocks are `@todo(core)`
-//! plates, because the client has no instruction-source, MCP, or skills
-//! support to report yet. A plate is deliberate: it carries the stub wash and
-//! the placeholder ink, and never a fabricated count or a fake tick.
+//! The overview is one horizontal block of the sub-blocks the core can fill.
+//! The product version is a compile-time fact of this binary, so it is the one
+//! sub-block: the instruction sources, MCP capabilities, and skills have no
+//! client support and no wire projection, so no sub-block names them.
 //!
 //! revue has no font sizes, so the lockup approximates one: the product word
 //! is written bold in an accent ink and the trailing word is tracked out one
@@ -61,26 +59,11 @@ const OVERVIEW_FRAME: usize = 2;
 /// The label of the product-version sub-block.
 const VERSION_LABEL: &str = "Version";
 
-/// The label of the project-instruction sub-block.
-const AGENTS_LABEL: &str = "AGENTS.md";
-
-/// The label of the MCP-capability sub-block.
-const MCPS_LABEL: &str = "MCPs";
-
-/// The label of the skills sub-block.
-const SKILLS_LABEL: &str = "Skills";
-
 /// The version this binary was built as.
 ///
 /// The workspace publishes no separate product version, so the lockup names
 /// the version of the binary that draws it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The visible marker of every sub-block the client cannot fill yet.
-// @todo(core): the instruction sources (AGENTS.md loading), MCP capabilities,
-// and skills have no client support and no wire projection, so those
-// sub-blocks show this deliberate plate instead of a fabricated count or tick.
-const STUB: &str = "@todo(core)";
 
 /// Returns whether the chat shows the welcome surface.
 ///
@@ -230,7 +213,7 @@ fn overview(rows: u16, width: usize, palette: &'static Palette) -> Stack {
 ///
 /// The row is laid out left to right and a sub-block that does not fit ends the
 /// row whole, so a narrow welcome shows fewer sub-blocks instead of half of
-/// one. That is "up to four": the overview is one block, never a wrapped one.
+/// one.
 fn chips_row(width: usize, palette: &'static Palette) -> RichText {
     let mut text = RichText::new();
     let mut used = 0;
@@ -254,33 +237,13 @@ fn chips_row(width: usize, palette: &'static Palette) -> RichText {
 }
 
 /// Returns the sub-blocks of the overview, in display order.
-const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 4] {
-    [
-        SubBlock {
-            label: VERSION_LABEL,
-            state: VERSION,
-            ink: palette.badge_ink,
-            wash: palette.badge_bg,
-        },
-        SubBlock {
-            label: AGENTS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-        SubBlock {
-            label: MCPS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-        SubBlock {
-            label: SKILLS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-    ]
+const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 1] {
+    [SubBlock {
+        label: VERSION_LABEL,
+        state: VERSION,
+        ink: palette.badge_ink,
+        wash: palette.badge_bg,
+    }]
 }
 
 /// Returns the leading sub-blocks that fit in `width` columns, in order.
@@ -308,7 +271,7 @@ fn fitted(width: usize, palette: &'static Palette) -> Vec<SubBlock> {
 struct SubBlock {
     /// The short label of the state the sub-block reports.
     label: &'static str,
-    /// The value or placeholder beside the label.
+    /// The value the sub-block reports.
     state: &'static str,
     /// The ink of the sub-block's text.
     ink: Color,
@@ -400,65 +363,44 @@ mod tests {
     }
 
     #[test]
-    fn the_overview_shows_the_sub_blocks_in_order_and_drops_whole_ones() {
+    fn the_overview_lists_only_the_sub_block_the_core_fills() {
         let blocks = sub_blocks(LIGHT);
         let all = fitted(usize::MAX, LIGHT);
         assert_eq!(
             all.iter().map(|block| block.label).collect::<Vec<_>>(),
-            vec!["Version", "AGENTS.md", "MCPs", "Skills"],
-            "the overview lists the version, the instructions, the MCPs, and the skills"
+            vec!["Version"],
+            "the version is the one fact the core carries"
         );
         assert_eq!(
             all.iter().map(|block| block.state).collect::<Vec<_>>(),
-            vec![
-                env!("CARGO_PKG_VERSION"),
-                "@todo(core)",
-                "@todo(core)",
-                "@todo(core)"
-            ],
-            "only the version is a fact; the rest are deliberate plates"
+            vec![env!("CARGO_PKG_VERSION")],
+            "the sub-block reports the version this binary was built as"
         );
         let chips: Vec<usize> = blocks
             .iter()
             .map(|block| display_width(&block.chip()))
             .collect();
-        let total = chips.iter().sum::<usize>() + blocks.len() - 1;
-        assert_eq!(fitted(total, LIGHT).len(), 4, "the full row holds all four");
-        assert_eq!(
-            fitted(total - 1, LIGHT).len(),
-            3,
-            "one column short drops the last sub-block whole"
-        );
         assert_eq!(
             fitted(chips[0], LIGHT).len(),
             1,
-            "the first sub-block alone fits"
+            "the sub-block fits its own columns"
         );
         assert_eq!(
             fitted(chips[0] - 1, LIGHT).len(),
             0,
-            "nothing fits below it"
+            "a column short drops it whole"
         );
     }
 
     #[test]
-    fn the_version_carries_the_badge_surface_and_a_stub_carries_the_stub_plate() {
+    fn the_version_carries_the_badge_surface() {
         let app = TestApp::with_size(chips_row(80, LIGHT), 80, 1);
         let version = app.buffer().get(0, 0).expect("the version chip paints");
         assert_eq!(version.fg, Some(LIGHT.badge_ink));
         assert_eq!(version.bg, Some(LIGHT.badge_bg));
-        let (stub_x, stub_row) = app
-            .find_text("Skills @todo(core)")
-            .expect("the skills stub renders");
-        let stub = app
-            .buffer()
-            .get(stub_x, stub_row)
-            .expect("the stub chip paints");
-        assert_eq!(stub.fg, Some(LIGHT.todo_ink));
-        assert_eq!(
-            stub.bg,
-            Some(LIGHT.stub_bg),
-            "a stub carries the deliberate @todo plate, not a status wash"
+        assert!(
+            app.find_text("AGENTS.md").is_none(),
+            "no sub-block names a fact the core cannot report"
         );
     }
 }

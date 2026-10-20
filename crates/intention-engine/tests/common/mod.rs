@@ -757,7 +757,6 @@ impl StorageRepositoryDto for FakeRepository {
             RunModeDto::Build,
             Some(self.config.revision_id()),
             Some(self.projection()),
-            Vec::new(),
         )
     }
 

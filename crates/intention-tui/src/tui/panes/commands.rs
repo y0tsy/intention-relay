@@ -158,8 +158,11 @@ fn band(
             1,
         );
     }
-    if let Some(hidden) = rows.len().checked_sub(MAX_COMMAND_ROWS) {
-        band = band.child_sized(overflow_row(hidden, noun, width, wash, palette), 1);
+    if rows.len() > MAX_COMMAND_ROWS {
+        band = band.child_sized(
+            overflow_row(rows.len() - MAX_COMMAND_ROWS, noun, width, wash, palette),
+            1,
+        );
     }
     debug_assert_eq!(
         band_rows(rows.len()),

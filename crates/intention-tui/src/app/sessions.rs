@@ -2,17 +2,15 @@
 //! list, and session selection.
 
 use intention_client::SessionStreamState;
-use intention_proto::{
-    DaemonReadinessDto, ErrorDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-};
+use intention_proto::{ErrorDto, SessionId, SessionSnapshotDto, SessionSummariesDto};
 
 use super::{AppState, ConnectionStatus, Effect, StreamStatus, short_identifier};
 
 impl AppState {
     /// Records a ready daemon and asks for the session list and the selected
     /// session.
-    pub(super) fn apply_bootstrapped(&mut self, readiness: DaemonReadinessDto) -> Vec<Effect> {
-        self.connection = ConnectionStatus::Ready(readiness);
+    pub(super) fn apply_bootstrapped(&mut self) -> Vec<Effect> {
+        self.connection = ConnectionStatus::Ready;
         self.error = None;
         // The theme is this front end's own value, resolved before the first
         // frame; nothing about the connection touches it.
@@ -116,6 +114,15 @@ impl AppState {
     pub(super) fn request_new_session(&mut self) -> Vec<Effect> {
         self.note("creating a session".to_owned());
         vec![Effect::CreateSession { first_turn: None }]
+    }
+
+    /// Records the request to open the session one command named.
+    ///
+    /// The command carries the identifier the user typed, so the read is the
+    /// same one a launch's `--session` asks for: the client resolves it and the
+    /// snapshot it returns is what the chat shows.
+    pub(super) fn request_session_open(&mut self, session_id: SessionId) -> Vec<Effect> {
+        vec![Effect::OpenSession(session_id)]
     }
 
     /// Returns the subscription that makes the open session live, if any.

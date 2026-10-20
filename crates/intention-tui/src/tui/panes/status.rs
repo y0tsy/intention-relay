@@ -103,7 +103,7 @@ pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) ->
     let mut text = RichText::new();
     let (connection, ink) = match state.connection() {
         ConnectionStatus::Connecting => (CONNECTING, palette.warning),
-        ConnectionStatus::Ready(_) => (READY, palette.success),
+        ConnectionStatus::Ready => (READY, palette.success),
         ConnectionStatus::Failed => (OFFLINE, palette.error),
     };
     text = run(text, connection, ink, palette);

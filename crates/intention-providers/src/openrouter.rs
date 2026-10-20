@@ -72,7 +72,7 @@ impl OpenRouterDriver {
 
 impl ModelExecutionDriver for OpenRouterDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -626,7 +626,7 @@ mod tests {
         assert!(matches!(
             retryable.last(),
             Some(Err(error)) if error.code() == "openrouter_provider_unavailable"
-                && error.retry() == intention_proto::ErrorRetryDto::Delayed
+                && error.retryable()
         ));
         assert!(
             !serde_json::to_string(&retryable)
@@ -640,7 +640,7 @@ mod tests {
         assert!(matches!(
             permanent.last(),
             Some(Err(error)) if error.code() == "openrouter_provider_request_rejected"
-                && error.retry() == intention_proto::ErrorRetryDto::Never
+                && !error.retryable()
         ));
     }
 
@@ -822,6 +822,6 @@ mod tests {
 
         let error = crate::mapping::fixed_error(OPENROUTER_REQUEST_REJECTED);
         assert_eq!(error.code(), "openrouter_request_rejected");
-        assert_eq!(error.retry(), intention_proto::ErrorRetryDto::Never);
+        assert!(!error.retryable());
     }
 }

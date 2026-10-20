@@ -84,7 +84,7 @@ impl GenericChatDriver {
 
 impl ModelExecutionDriver for GenericChatDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -546,7 +546,7 @@ fn translate_assistant_message(
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, UsageDto};
-    use intention_proto::{ErrorRetryDto, RunId};
+    use intention_proto::RunId;
 
     /// Collects the shared stream's events for one fixed native chunk sequence.
     fn collect_chunks(
@@ -923,7 +923,7 @@ mod tests {
 
         let error = crate::mapping::fixed_error(GENERIC_CHAT_REQUEST_REJECTED);
         assert_eq!(error.code(), "generic_chat_request_rejected");
-        assert_eq!(error.retry(), ErrorRetryDto::Never);
+        assert!(!error.retryable());
     }
 
     fn assistant_tool_request(first: &ToolCallDto, second: &ToolCallDto) -> ModelRequestDto {
@@ -1030,38 +1030,30 @@ mod tests {
         // string says. An untyped 400 must therefore never be retried to the
         // attempt maximum.
         for (status, kind, expected) in [
-            (http::StatusCode::BAD_REQUEST, None, ErrorRetryDto::Never),
+            (http::StatusCode::BAD_REQUEST, None, false),
             (
                 http::StatusCode::BAD_REQUEST,
                 Some("rate_limit_exceeded"),
-                ErrorRetryDto::Never,
+                false,
             ),
-            (
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-                ErrorRetryDto::Delayed,
-            ),
+            (http::StatusCode::INTERNAL_SERVER_ERROR, None, true),
             (
                 http::StatusCode::SERVICE_UNAVAILABLE,
                 Some("invalid_request_error"),
-                ErrorRetryDto::Delayed,
+                true,
             ),
             (
                 http::StatusCode::TOO_MANY_REQUESTS,
                 Some("rate_limit_exceeded"),
-                ErrorRetryDto::Delayed,
+                true,
             ),
             // A status outside the client/server taxonomy keeps the `type`
             // string as the secondary signal, and stays permanent without it.
-            (
-                http::StatusCode::FOUND,
-                Some("server_error"),
-                ErrorRetryDto::Delayed,
-            ),
-            (http::StatusCode::FOUND, None, ErrorRetryDto::Never),
+            (http::StatusCode::FOUND, Some("server_error"), true),
+            (http::StatusCode::FOUND, None, false),
         ] {
             assert_eq!(
-                map_openai_error(&api_error(status, kind)).retry(),
+                map_openai_error(&api_error(status, kind)).retryable(),
                 expected,
                 "status {status} with type {kind:?}"
             );
@@ -1070,12 +1062,11 @@ mod tests {
 
     #[test]
     fn native_transport_errors_and_normalized_codes_never_leak_provider_text() {
-        assert_eq!(
+        assert!(
             map_openai_error(&OpenAIError::StreamError(Box::new(
                 async_openai::error::StreamError::EventStream("secret provider text".to_owned())
             )))
-            .retry(),
-            ErrorRetryDto::Delayed
+            .retryable()
         );
         let error = map_openai_error(&api_error(http::StatusCode::BAD_REQUEST, None));
         assert_eq!(error.code(), "generic_chat_provider_request_rejected");

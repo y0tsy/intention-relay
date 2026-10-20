@@ -7,6 +7,7 @@
 //! function of this state.
 
 mod action;
+mod arm;
 mod browser;
 mod commands;
 mod ctrl_c;
@@ -27,8 +28,8 @@ pub use action::{
 };
 pub use browser::{BrowserRow, BrowserTab};
 pub use commands::{
-    ArgumentSpec, COMMANDS, CommandInvocation, CommandMenu, CommandResolution, CommandSpec,
-    MenuKind, MenuMove, MenuRow, ValueSpec,
+    ArgumentSpec, COMMANDS, CommandAction, CommandInvocation, CommandMenu, CommandResolution,
+    CommandSpec, MenuKind, MenuMove, MenuRow, ValueSpec, resolve_command,
 };
 pub use input::{TRANSCRIPT_DRAG_ROWS, paste_is_large};
 pub use state::AppState;

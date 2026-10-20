@@ -62,7 +62,7 @@ struct PendingAfterStartedDriver {
 
 impl ModelExecutionDriver for PendingAfterStartedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -1322,12 +1322,8 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::tool_call(call)),
         ],
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_broken",
-            false,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_broken", false)
+            .expect("fixture provider error is valid"))],
     ]);
     let port = ScriptedPort::new(vec![Ok(
         ToolResultOutcomeDto::completed("hello world").expect("content is valid")
@@ -1873,12 +1869,8 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // one more round, and a script that ends after two would then panic the
     // fixture thread rather than observe the continuation.
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_busy",
-            true,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_busy", true)
+            .expect("fixture provider error is valid"))],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
@@ -1956,12 +1948,8 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_busy",
-            true,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_busy", true)
+            .expect("fixture provider error is valid"))],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),

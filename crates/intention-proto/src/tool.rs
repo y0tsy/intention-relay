@@ -16,9 +16,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ToolCallId, WorkspaceRelativePathDto,
-};
+use crate::{DtoResult, ErrorCategoryDto, ErrorDto, ToolCallId, WorkspaceRelativePathDto};
 
 /// The fixed set of tools exposed by the product boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -79,8 +77,7 @@ impl ToolId {
                 "invalid_tool_id",
                 ErrorCategoryDto::Internal,
                 "the tool name is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -474,8 +471,7 @@ impl ToolResultStatusDto {
                 "invalid_tool_result_status",
                 ErrorCategoryDto::Internal,
                 "the durable tool result status is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }

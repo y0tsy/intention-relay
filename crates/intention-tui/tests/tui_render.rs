@@ -8,18 +8,18 @@
 //! revue's pilot exposes cells and characters, not styles, and the palette's
 //! own unit tests guard the colour values.
 
-use std::sync::atomic::{AtomicI64, Ordering};
-
 use intention_client::SessionStreamState;
 use intention_proto::{
-    BoundedText, ConfigRevisionId, DaemonHealthDto, ErrorDto, ExecuteResult, GrepMatch, GrepResult,
-    MessageId, MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
-    RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolIdentityDto,
-    ToolInput, ToolProcessStatus, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto,
-    WorkspaceRootDto, WriteResult,
+    DaemonHealthDto, ErrorDto, ExecuteResult, GrepMatch, GrepResult, MessageKindDto,
+    MessageProjectionDto, PathsResult, RunId, RunModeDto, RunStatusDto, SessionFrameDto, SessionId,
+    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, TextResult,
+    TimestampDto, ToolCallId, ToolId, ToolProcessStatus, ToolResult, UsageDto,
+    WorkspaceRelativePathDto, WriteResult,
+};
+use intention_test_support::fixtures::{
+    FIRST_SESSION, NOW, SECOND_SESSION, bounded, fixture_session, payload, reasoning_row, row,
+    run_at, run_with, snapshot, snapshot_with_model, summary, summary_of, tool_call_row,
+    tool_result_row_with, workspace_root,
 };
 use intention_tui::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme, ThemePreference,
@@ -54,15 +54,6 @@ const DOCK_HEIGHT: u16 = 30;
 /// The window the browser cursor-window test renders into: half its rows still
 /// show ten sessions.
 const CURSOR_HEIGHT: u16 = 40;
-
-/// The canonical id of the first fixture session.
-const FIRST_SESSION: &str = "11111111-1111-4111-8111-111111111111";
-
-/// The canonical id of the second fixture session.
-const SECOND_SESSION: &str = "22222222-2222-4222-8222-222222222222";
-
-/// The wall-clock second every browser render test measures relative times from.
-const NOW: i64 = 1_759_000_000;
 
 /// The transcript row the no-sessions-pane test renders: short enough to stay
 /// on one display row at the full window width.
@@ -99,247 +90,14 @@ fn is_blank_pane_row(line: &str) -> bool {
         .all(|character| character == ' ' || character == '│')
 }
 
-/// Returns the fixture session id spelled by one canonical UUID literal.
-fn fixture_session(value: &str) -> SessionId {
-    SessionId::parse(value).expect("the fixture session id is canonical")
-}
-
 /// Returns one canonical session UUID literal for the browser window fixture.
 fn session_literal(index: i64) -> String {
     format!("{index:08}-1111-4111-8111-111111111111")
 }
 
-/// Returns the absolute workspace root the fixture session was created in.
-fn workspace_root() -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-        .expect("the process temporary directory is an absolute workspace root")
-}
-
-/// Returns one run projection of the fixture session.
-fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
-    let started_at = TimestampDto::from_unix_seconds(NOW).expect("fixture timestamp is valid");
-    let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
-    run_with(session_id, run_id, status, None, started_at, finished_at, 0)
-}
-
-/// Returns one run projection carrying the committed facts a view renders.
-fn run_with(
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    usage: Option<UsageDto>,
-    started_at: TimestampDto,
-    finished_at: Option<TimestampDto>,
-    open_tool_calls: u32,
-) -> RunProjectionDto {
-    RunProjectionDto::new(
-        session_id,
-        run_id,
-        TurnId::new(),
-        status,
-        ConfigRevisionId::new(),
-        usage,
-        started_at,
-        finished_at,
-        open_tool_calls,
-    )
-    .expect("fixture run projection is valid")
-}
-
-/// Returns one session snapshot with its active run and committed rows.
-fn snapshot(
-    session_id: SessionId,
-    active_run: Option<RunProjectionDto>,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionSnapshotDto {
-    snapshot_in_mode(session_id, RunModeDto::Build, active_run, messages)
-}
-
-/// Returns one session snapshot whose projection declares `mode`.
-fn snapshot_in_mode(
-    session_id: SessionId,
-    mode: RunModeDto,
-    active_run: Option<RunProjectionDto>,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionSnapshotDto {
-    snapshot_in_mode_with_model(session_id, mode, None, active_run, messages)
-}
-
-/// Returns one session snapshot whose projection declares `mode` and, when
-/// given, the effective provider model.
-fn snapshot_in_mode_with_model(
-    session_id: SessionId,
-    mode: RunModeDto,
-    model: Option<&str>,
-    active_run: Option<RunProjectionDto>,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionSnapshotDto {
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        mode,
-        None,
-        active_run,
-        Vec::new(),
-    )
-    .expect("the fixture session projection is coherent");
-    let projection = match model {
-        Some(model) => projection
-            .with_provider_model(model)
-            .expect("the fixture provider model is valid"),
-        None => projection,
-    };
-    SessionSnapshotDto::with_projection(session_id, projection, messages)
-        .expect("the fixture session snapshot is coherent")
-}
-
-/// Returns one session summary of the fixture session.
-fn summary(session_id: SessionId) -> SessionSummaryDto {
-    summary_at(session_id, NOW)
-}
-
-/// Returns one session summary last updated at `updated_at`.
-fn summary_at(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
-    summary_of(session_id, updated_at, updated_at, 0)
-}
-
-/// Returns one session summary with every durable field the table renders.
-fn summary_of(
-    session_id: SessionId,
-    created_at: i64,
-    updated_at: i64,
-    message_count: u64,
-) -> SessionSummaryDto {
-    let created_at =
-        TimestampDto::from_unix_seconds(created_at).expect("the fixture time is valid");
-    let updated_at =
-        TimestampDto::from_unix_seconds(updated_at).expect("the fixture time is valid");
-    SessionSummaryDto::new(
-        session_id,
-        ProjectId::new(),
-        WorkspaceId::new(),
-        RunModeDto::Build,
-        created_at,
-        updated_at,
-        workspace_root(),
-        message_count,
-        None,
-    )
-}
-
-/// Returns one fresh durable row identity for a committed fixture row.
-fn row_id() -> MessageId {
-    static NEXT: AtomicI64 = AtomicI64::new(0);
-    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
-        .expect("the fixture row identity is positive")
-}
-
-/// Returns one committed transcript row of the fixture session.
-fn row(
-    session_id: SessionId,
-    run_id: RunId,
-    kind: MessageKindDto,
-    text: &str,
-) -> MessageProjectionDto {
-    MessageProjectionDto::new(row_id(), session_id, Some(run_id), kind, text, None, None)
-        .expect("the fixture transcript row is coherent")
-}
-
-/// Returns one bounded fixture text.
-fn bounded(text: &str) -> BoundedText {
-    BoundedText::new(text).expect("the fixture text is bounded")
-}
-
 /// Returns one workspace-relative fixture path.
 fn relative(path: &str) -> WorkspaceRelativePathDto {
     WorkspaceRelativePathDto::parse(path).expect("the fixture path is workspace-relative")
-}
-
-/// Returns one typed `read` payload carrying `text`.
-fn read_payload(text: &str) -> ToolResult {
-    ToolResult::Read(TextResult {
-        text: bounded(text),
-        truncated: false,
-    })
-}
-
-/// Returns one parsed wire identity of the fixture rows.
-fn identity(tool_id: &str) -> ToolIdentityDto {
-    ToolIdentityDto::parse(tool_id).expect("the fixture tool identity is well-formed")
-}
-
-/// Returns one committed tool-call row carrying `arguments` for `tool_id`.
-fn tool_call_row(
-    session_id: SessionId,
-    run_id: RunId,
-    tool_id: &str,
-    arguments: &str,
-    call_id: ToolCallId,
-) -> MessageProjectionDto {
-    let tool = ToolRowDto::Call(
-        ToolCallRowDto::new(
-            call_id,
-            identity(tool_id),
-            ToolInput::from_arguments_json(tool_id, arguments).ok(),
-        )
-        .expect("the fixture call row is coherent"),
-    );
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::ToolCall,
-        arguments,
-        None,
-        Some(tool),
-    )
-    .expect("the fixture tool-call row is coherent")
-}
-
-/// Returns one committed completed tool-result row carrying `result` for
-/// `call_id`.
-fn tool_result_row(
-    session_id: SessionId,
-    run_id: RunId,
-    tool_id: &str,
-    result: ToolResult,
-    call_id: ToolCallId,
-) -> MessageProjectionDto {
-    tool_result_row_with(session_id, run_id, tool_id, result, Vec::new(), call_id)
-}
-
-/// Returns one committed completed tool-result row carrying `result` and
-/// `metadata` for `call_id`.
-fn tool_result_row_with(
-    session_id: SessionId,
-    run_id: RunId,
-    tool_id: &str,
-    result: ToolResult,
-    metadata: Vec<ToolResultMetadataEntryDto>,
-    call_id: ToolCallId,
-) -> MessageProjectionDto {
-    let tool = ToolRowDto::Result(
-        ToolResultRowDto::new(
-            call_id,
-            identity(tool_id),
-            ToolResultStatusDto::Completed,
-            Some(result),
-            metadata,
-        )
-        .expect("the fixture result row is coherent"),
-    );
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::ToolResult,
-        "committed content",
-        None,
-        Some(tool),
-    )
-    .expect("the fixture tool-result row is coherent")
 }
 
 /// Returns the two committed rows of one durable tool exchange.
@@ -353,41 +111,20 @@ fn tool_exchange(
     let call_id = ToolCallId::new();
     vec![
         tool_call_row(session_id, run_id, tool_id, arguments, call_id),
-        tool_result_row(session_id, run_id, tool_id, result, call_id),
+        tool_result_row_with(
+            session_id,
+            run_id,
+            tool_id,
+            "committed content",
+            result,
+            call_id,
+        ),
     ]
 }
 
 /// Returns one committed daemon notice row carrying `text`.
 fn notice_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::Notice,
-        text,
-        None,
-        None,
-    )
-    .expect("the fixture notice row is coherent")
-}
-
-/// Returns one committed assistant row carrying `reasoning` above its answer.
-fn reasoning_row(
-    session_id: SessionId,
-    run_id: RunId,
-    text: &str,
-    reasoning: &str,
-) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::Assistant,
-        text,
-        Some(reasoning.to_owned()),
-        None,
-    )
-    .expect("the fixture reasoning row is coherent")
+    row(session_id, Some(run_id), MessageKindDto::Notice, text)
 }
 
 /// Returns a connected state that listed `sessions` with `omitted` sessions
@@ -408,7 +145,7 @@ fn listed_state(session_id: SessionId, omitted: u32) -> AppState {
     let mut state = AppState::new(Some(session_id));
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     state.update(Action::SessionsListed(
-        SessionSummariesDto::new(vec![summary(session_id)], omitted)
+        SessionSummariesDto::new(vec![summary(session_id, NOW)], omitted)
             .expect("the fixture session list is coherent"),
     ));
     state
@@ -437,7 +174,7 @@ fn welcome_state() -> AppState {
 fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
     let stream = SessionStreamState::from_snapshot(snapshot(
         session_id,
-        Some(run(session_id, run_id, status)),
+        Some(run_at(session_id, run_id, status, NOW)),
         Vec::new(),
     ));
     state.update(Action::SessionStreamOpened(stream));
@@ -470,7 +207,7 @@ fn streaming_ids() -> (AppState, SessionId, RunId) {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "the committed row",
         )],
@@ -527,8 +264,8 @@ fn streaming_reasoning_state(reasoning: &str, answer: &str) -> AppState {
 fn two_session_state() -> AppState {
     browser_state(
         vec![
-            summary_at(fixture_session(FIRST_SESSION), NOW - 23 * 60),
-            summary_at(fixture_session(SECOND_SESSION), NOW - 2 * 3_600),
+            summary(fixture_session(FIRST_SESSION), NOW - 23 * 60),
+            summary(fixture_session(SECOND_SESSION), NOW - 2 * 3_600),
         ],
         0,
     )
@@ -536,7 +273,7 @@ fn two_session_state() -> AppState {
 
 #[test]
 fn the_browser_panel_shows_its_frame_and_embedded_title() {
-    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 0);
+    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
     let mut app = TestApp::with_size(
         RevueView::with_now(&state, NOW),
         BROWSER_WIDTH,
@@ -556,7 +293,7 @@ fn the_browser_panel_shows_its_frame_and_embedded_title() {
 
 #[test]
 fn the_browser_tabs_show_the_radio_glyphs_and_separators() {
-    let mut state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 0);
+    let mut state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
     {
         let mut app = TestApp::with_size(
             RevueView::with_now(&state, NOW),
@@ -565,7 +302,7 @@ fn the_browser_tabs_show_the_radio_glyphs_and_separators() {
         );
         let pilot = Pilot::new(&mut app);
         pilot.assert_contains("◦ Current Folder  |  ⦿ All");
-        pilot.assert_contains("|  ◦ Favorites  |  ◦ Archived");
+        pilot.assert_not_contains("Favorites");
     }
     state.update(Action::BrowserTabNext);
     let mut app = TestApp::with_size(
@@ -574,13 +311,13 @@ fn the_browser_tabs_show_the_radio_glyphs_and_separators() {
         BROWSER_HEIGHT,
     );
     let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("⦿ Exec");
+    pilot.assert_contains("⦿ Current Folder");
     pilot.assert_not_contains("⦿ All");
 }
 
 #[test]
 fn the_browser_search_bar_shows_its_placeholder() {
-    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 0);
+    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
     let mut app = TestApp::with_size(
         RevueView::with_now(&state, NOW),
         BROWSER_WIDTH,
@@ -592,7 +329,7 @@ fn the_browser_search_bar_shows_its_placeholder() {
 
 #[test]
 fn the_browser_shows_the_table_header() {
-    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 0);
+    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
     let mut app = TestApp::with_size(
         RevueView::with_now(&state, NOW),
         BROWSER_WIDTH,
@@ -717,25 +454,10 @@ fn the_browser_footer_styles_a_key_distinctly_from_its_action() {
 
 #[test]
 fn the_browser_counter_reports_sessions_beyond_the_list_window() {
-    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 3);
+    let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 3);
     let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, BROWSER_HEIGHT);
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("1-1 of 1 +3 omitted (core: paged list @todo)");
-}
-
-#[test]
-fn a_stub_tab_shows_its_todo_empty_state() {
-    let mut state = browser_state(vec![summary(fixture_session(FIRST_SESSION))], 0);
-    state.update(Action::BrowserTabNext);
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("⦿ Exec");
-    pilot.assert_contains("@todo(core): the session summary carries no execute-call");
-    pilot.assert_contains("0 of 0");
 }
 
 #[test]
@@ -786,7 +508,7 @@ fn the_browser_shows_the_created_size_and_path_columns_from_the_summary() {
 #[test]
 fn the_browser_truncates_a_long_title_with_an_ellipsis() {
     let state = browser_state(
-        vec![summary_at(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
+        vec![summary(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
         0,
     );
     let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 52, BROWSER_HEIGHT);
@@ -798,7 +520,7 @@ fn the_browser_truncates_a_long_title_with_an_ellipsis() {
 #[test]
 fn the_browser_table_reflows_when_the_window_resizes() {
     let state = browser_state(
-        vec![summary_at(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
+        vec![summary(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
         0,
     );
     let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 52, BROWSER_HEIGHT);
@@ -820,7 +542,7 @@ fn the_browser_table_reflows_when_the_window_resizes() {
 #[test]
 fn the_browser_window_follows_the_cursor() {
     let sessions = (0_i64..30)
-        .map(|index| summary_at(fixture_session(&session_literal(index)), NOW - index * 60))
+        .map(|index| summary(fixture_session(&session_literal(index)), NOW - index * 60))
         .collect();
     let mut state = browser_state(sessions, 0);
     {
@@ -849,7 +571,7 @@ fn the_browser_panel_docks_below_the_chat_and_shrinks_the_transcript() {
         .map(|index| {
             row(
                 session_id,
-                run_id,
+                Some(run_id),
                 MessageKindDto::User,
                 &format!("row {index}"),
             )
@@ -909,7 +631,7 @@ fn the_chat_screen_shows_no_sessions_pane() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             FULL_WIDTH_ROW,
         )],
@@ -951,7 +673,7 @@ fn a_read_tool_exchange_draws_its_path_and_a_bounded_content_preview() {
             run_id,
             "read",
             r#"{"path":"src/lib.rs"}"#,
-            read_payload(&content),
+            payload(ToolId::Read, &content),
         ),
     );
     // The window is tall enough for the badge, the bounded preview, and its
@@ -1192,7 +914,7 @@ fn expanding_a_reasoning_block_above_the_window_keeps_the_visible_rows() {
     for index in 0..20 {
         messages.push(row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             &format!("row {index:02}"),
         ));
@@ -1256,7 +978,7 @@ fn a_reasoned_tool_round_draws_its_reasoning_above_the_tool_exchange() {
         run_id,
         "read",
         r#"{"path":"src/lib.rs"}"#,
-        read_payload("file contents"),
+        payload(ToolId::Read, "file contents"),
     ));
     let state = open_state(session_id, messages);
     let mut app = TestApp::new(RevueView::new(&state));
@@ -1315,7 +1037,7 @@ fn a_user_row_renders_as_a_labelled_card() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::User,
             "the question",
         )],
@@ -1339,7 +1061,7 @@ fn markdown_inside_a_user_card_renders() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::User,
             "use **care** here\n\n```\nlet x = 1;\n```",
         )],
@@ -1368,7 +1090,7 @@ fn typed_state(typed: &str) -> AppState {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "the committed answer",
         )],
@@ -1411,8 +1133,12 @@ fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
         "pick the colour theme the terminal paints with",
     );
     pilot.assert_line_contains(band_row + 3, "Appearance");
-    pilot.assert_cell(band_x, band_row + 4, '╰');
-    pilot.assert_cell(band_x, band_row + 5, '╭');
+    pilot.assert_line_contains(band_row + 4, "/session");
+    pilot.assert_line_contains(band_row + 4, "open the session one identifier names");
+    pilot.assert_line_contains(band_row + 5, "/quit");
+    pilot.assert_line_contains(band_row + 5, "leave the front end");
+    pilot.assert_cell(band_x, band_row + 6, '╰');
+    pilot.assert_cell(band_x, band_row + 7, '╭');
 
     // The band takes its rows out of the transcript: the committed answer is
     // still shown, and the input block and the detail line keep their rows.
@@ -1439,12 +1165,13 @@ fn the_hint_menu_narrows_and_moves_its_highlight() {
         "the filter hides every command it does not select: {}",
         pilot.line(band_row + 1)
     );
-    pilot.assert_line_contains(band_row + 2, "╰");
+    pilot.assert_line_contains(band_row + 2, "/session");
+    pilot.assert_line_contains(band_row + 3, "╰");
     let (_, badge_row) = find_text(&app, "build");
     assert_eq!(
         badge_row,
-        band_row + 4,
-        "one command row and a frame, and the input block follows immediately"
+        band_row + 5,
+        "two command rows and a frame, and the input block follows immediately"
     );
 
     let mut state = typed_state("/");
@@ -1604,7 +1331,12 @@ fn a_blank_row_separates_the_user_card_from_the_reasoning_and_the_answer() {
     let state = open_state(
         session_id,
         vec![
-            row(session_id, run_id, MessageKindDto::User, "the question"),
+            row(
+                session_id,
+                Some(run_id),
+                MessageKindDto::User,
+                "the question",
+            ),
             reasoning_row(session_id, run_id, "the answer", "the thinking"),
         ],
     );
@@ -1649,7 +1381,7 @@ fn a_long_committed_row_wraps_and_shows_its_tail() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "alpha beta gamma delta epsilon zeta eta theta iota kappa",
         )],
@@ -1673,7 +1405,7 @@ fn a_wrapped_row_consumes_its_display_rows_in_the_window() {
         .map(|index| {
             row(
                 session_id,
-                run_id,
+                Some(run_id),
                 MessageKindDto::Assistant,
                 &format!("common00 common00 common00 common00 common00 word{index:02}xx"),
             )
@@ -1702,7 +1434,7 @@ fn an_assistant_heading_reads_as_a_heading() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "# Answer\n\nbody text",
         )],
@@ -1735,7 +1467,7 @@ fn a_bold_phrase_in_an_answer_is_bold() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "plain **strong** tail",
         )],
@@ -1769,7 +1501,7 @@ fn a_markdown_table_renders_as_an_aligned_grid() {
         session_id,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "| cell | count |\n|---|---|\n| alpha | 347 |\n| beta | 829 |",
         )],
@@ -1876,7 +1608,7 @@ fn a_long_input_line_windows_around_the_cursor() {
 fn the_input_badge_renders_the_projection_model() {
     let session_id = fixture_session(FIRST_SESSION);
     let mut state = listed_state(session_id, 0);
-    state.update(Action::SessionSnapshotLoaded(snapshot_in_mode_with_model(
+    state.update(Action::SessionSnapshotLoaded(snapshot_with_model(
         session_id,
         RunModeDto::Plan,
         Some("openrouter/fixture-model"),
@@ -1891,13 +1623,14 @@ fn the_input_badge_renders_the_projection_model() {
 }
 
 #[test]
-fn the_input_badges_say_so_before_a_session_names_a_mode_or_model() {
+fn the_input_badges_wait_for_a_session_to_name_its_mode_and_model() {
     let mut state = AppState::new(None);
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("mode @todo(core)");
-    pilot.assert_not_contains("model @todo(core)");
+    let app = TestApp::new(RevueView::new(&state));
+    assert!(
+        app.find_text("build").is_none() && app.find_text("model").is_none(),
+        "a session no snapshot has named shows no badge"
+    );
 }
 
 #[test]
@@ -1981,14 +1714,14 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = listed_state(session_id, 0);
-    state.update(Action::SessionSnapshotLoaded(snapshot_in_mode_with_model(
+    state.update(Action::SessionSnapshotLoaded(snapshot_with_model(
         session_id,
         RunModeDto::Build,
         Some("fixture-model"),
         None,
         vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "the committed row",
         )],
@@ -2160,11 +1893,12 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_700 });
     state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_result_row(
+        tool_result_row_with(
             session_id,
             run_id,
             "read",
-            read_payload("the file"),
+            "committed content",
+            payload(ToolId::Read, "the file"),
             call_id,
         ),
     )));
@@ -2288,7 +2022,7 @@ fn scrolling_the_transcript_reveals_older_rows_and_cuts_the_newest() {
         .map(|index| {
             row(
                 session_id,
-                run_id,
+                Some(run_id),
                 MessageKindDto::Assistant,
                 &format!("row {index}"),
             )
@@ -2333,10 +2067,12 @@ fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open(
     );
     find_text(&app, "INTENTION");
     find_text(&app, "R E L A Y");
-    find_text(&app, &format!("Version {}", env!("CARGO_PKG_VERSION")));
-    find_text(&app, "AGENTS.md @todo(core)");
-    find_text(&app, "MCPs @todo(core)");
-    find_text(&app, "Skills @todo(core)");
+    let version_chip = format!("Version {}", env!("CARGO_PKG_VERSION"));
+    find_text(&app, &version_chip);
+    assert!(
+        app.find_text("AGENTS.md").is_none() && app.find_text("MCPs").is_none(),
+        "the overview names only the sub-block the core fills"
+    );
     assert!(
         app.find_text("transcript").is_none(),
         "the welcome replaces the transcript pane"
@@ -2370,8 +2106,8 @@ fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open(
         "the trailing word is the muted, tracked half"
     );
 
-    let (_, overview_row) = find_text(&app, "AGENTS.md @todo(core)");
-    let (_, input_row) = find_text(&app, "mode @todo(core)");
+    let (_, overview_row) = find_text(&app, &version_chip);
+    let (_, input_row) = find_text(&app, "> █");
     assert!(
         product_row < overview_row,
         "the overview sits below the lockup"
@@ -2396,7 +2132,7 @@ fn the_welcome_state_is_gone_once_a_session_is_open() {
         app.find_text("INTENTION").is_none(),
         "an open session keeps the transcript pane"
     );
-    assert!(app.find_text("Skills @todo(core)").is_none());
+    assert!(app.find_text("Skills").is_none());
     let (_, transcript_row) = find_text(&app, "transcript");
     let (_, input_row) = find_text(&app, " build ");
     assert!(transcript_row < input_row, "the pane keeps its region");
@@ -2417,7 +2153,7 @@ fn the_welcome_state_never_covers_a_row_the_core_reports() {
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
     state.update(Action::FrameReceived(SessionFrameDto::Content(row(
         session_id,
-        run_id,
+        Some(run_id),
         MessageKindDto::Assistant,
         "the committed row",
     ))));
@@ -2434,7 +2170,7 @@ fn the_welcome_state_never_covers_a_row_the_core_reports() {
         app.find_text("INTENTION").is_none(),
         "a reported row keeps the transcript pane"
     );
-    assert!(app.find_text("Skills @todo(core)").is_none());
+    assert!(app.find_text("Skills").is_none());
 }
 
 #[test]
@@ -2443,7 +2179,7 @@ fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for()
     let mut state = AppState::new(None);
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
     state.update(Action::SessionsListed(
-        SessionSummariesDto::new(vec![summary(listed)], 0)
+        SessionSummariesDto::new(vec![summary(listed, NOW)], 0)
             .expect("the fixture session list is coherent"),
     ));
     assert_eq!(state.session_id(), None, "the launch opened no session");
@@ -2461,7 +2197,10 @@ fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for()
     );
     find_text(&app, "INTENTION");
     find_text(&app, &format!("Version {}", env!("CARGO_PKG_VERSION")));
-    find_text(&app, "Skills @todo(core)");
+    assert!(
+        app.find_text("Skills").is_none(),
+        "the overview names no sub-block the core cannot fill"
+    );
     find_text(&app, "> █");
     assert!(
         app.find_text("transcript").is_none(),
@@ -2493,7 +2232,7 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
         let run_id = RunId::new();
         let mut messages = vec![row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::User,
             "what is the plan?",
         )];
@@ -2502,11 +2241,11 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
             run_id,
             "read",
             r#"{"path":"src/lib.rs"}"#,
-            read_payload("line one\nline two"),
+            payload(ToolId::Read, "line one\nline two"),
         ));
         messages.push(row(
             session_id,
-            run_id,
+            Some(run_id),
             MessageKindDto::Assistant,
             "the committed answer",
         ));

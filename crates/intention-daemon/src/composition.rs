@@ -11,10 +11,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
-use intention_config::ConfigPathDto;
 use intention_config::{
-    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
+    ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
 #[cfg(test)]
@@ -24,9 +22,9 @@ use intention_proto::DaemonHealthDto;
 use intention_proto::{
     CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
     DtoResult, ErrorDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunId, SchemaVersionDto, SendUserTurnAcceptedDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, SessionSummariesDto, TimestampDto,
+    RunCancelledAcceptedDto, RunId, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
+    SendUserTurnOutcomeDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
+    SessionSummariesDto, TimestampDto,
 };
 #[cfg(test)]
 use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
@@ -43,8 +41,6 @@ use intention_storage::{
 use intention_tools::WorkspaceRoot;
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
-/// The single live configuration snapshot schema (intention-config current schema).
-const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The retained bounded size of a current-state snapshot's recent transcript.
 ///
@@ -149,7 +145,7 @@ struct TestSupportUnconfiguredDriver;
 #[cfg(any(test, feature = "test-support"))]
 impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(false, false, false, false, false, false)
+        ModelCapabilitiesDto::new(false)
     }
 
     fn execute(
@@ -510,26 +506,24 @@ const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAccept
 }
 
 fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    load_provider_configuration(ConfigPathResolver::resolve(None)?)
+    load_provider_configuration(&ConfigPathResolver::resolve(None)?)
 }
 
 fn load_provider_configuration(
-    source: ConfigSourceDto,
+    path: &ConfigPathDto,
 ) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
+    let raw_toml = fs::read_to_string(path.as_str()).map_err(|_| {
         ErrorDto::unavailable(
             "daemon_configuration_read_unavailable",
             "daemon configuration could not be read",
         )
     })?;
-    let material =
-        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
+    let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml))?;
     let snapshot = ConfigSnapshotDto::new(
-        CONFIG_SCHEMA_VERSION,
         ConfigRevisionId::new(),
         now()?,
         material.safe_resolved().clone(),
-    )?;
+    );
     let selected_provider = SelectedProvider::from_startup_material(material)?;
     Ok((snapshot, selected_provider))
 }
@@ -711,27 +705,15 @@ mod tests {
     }
 
     fn fixture_config_snapshot() -> ConfigSnapshotDto {
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("intention-composition-fixture.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("fixture configuration source is absolute"),
-        );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n",
-            source,
         ))
         .expect("fixture configuration resolves");
         ConfigSnapshotDto::new(
-            CONFIG_SCHEMA_VERSION,
             ConfigRevisionId::new(),
             TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
             resolved,
         )
-        .expect("fixture snapshot is credential-free")
     }
 
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
@@ -841,44 +823,23 @@ mod tests {
         let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
         };
-        let SendUserTurnOutcomeDto::Started {
-            run_id,
-            config_revision_id,
-        } = initial_turn.outcome()
-        else {
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
             unreachable!("the first user turn starts a run")
         };
         let committed = run_messages(&facade, session_id, run_id);
 
         // The proposed run identity is derived from the caller's idempotency
-        // key, so a repeated command proposes the identity the durable turn
-        // already recorded and replays its outcome instead of conflicting.
-        let replayed = facade
+        // key, so a repeated command proposes an identity the durable turn
+        // already recorded and fails as a typed conflict.
+        let error = facade
             .send_user_turn(command, &RecordingPublisher::new())
-            .expect("a repeated command replays its recorded outcome");
-        let ProtocolResultDto::TurnAccepted(replayed_turn) = replayed else {
-            unreachable!("the replay returns user-turn evidence")
-        };
-        assert_eq!(
-            replayed_turn.outcome(),
-            SendUserTurnOutcomeDto::Started {
-                run_id,
-                config_revision_id,
-            }
-        );
+            .expect_err("a repeated command proposes a bound run identity");
+        assert_eq!(error.code(), "turn_identity_conflict");
         assert_eq!(
             run_messages(&facade, session_id, run_id),
             committed,
-            "the replayed command duplicates no transcript row"
+            "the repeated command duplicates no transcript row"
         );
-
-        // The same key bound to different content stays a durable conflict.
-        let conflicting = SendUserTurnCommandDto::new(session_id, key, "different turn")
-            .expect("fixture user turn is valid");
-        let error = facade
-            .send_user_turn(conflicting, &RecordingPublisher::new())
-            .expect_err("one key bound to different content conflicts");
-        assert_eq!(error.code(), "turn_idempotency_conflict");
     }
 
     #[test]
@@ -994,12 +955,10 @@ mod tests {
             }
         }
 
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(path.to_string_lossy().into_owned())
-                .expect("fixture config path is absolute"),
-        );
+        let source = ConfigPathDto::parse(path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
         let (snapshot, selected_provider) =
-            load_provider_configuration(source).expect("valid provider config composes");
+            load_provider_configuration(&source).expect("valid provider config composes");
         DaemonApplicationFacade::open_with_selected_provider(
             directory.path().join("provider.sqlite"),
             snapshot.clone(),
@@ -1015,11 +974,9 @@ mod tests {
         let encoded = serde_json::to_string(&snapshot).expect("safe snapshot serializes");
         assert!(!encoded.contains("selected-provider-secret"));
 
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(invalid.to_string_lossy().into_owned())
-                .expect("fixture config path is absolute"),
-        );
-        let error = load_provider_configuration(source)
+        let source = ConfigPathDto::parse(invalid.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
+        let error = load_provider_configuration(&source)
             .err()
             .expect("invalid provider configuration must fail safely");
         assert_eq!(error.code(), "invalid_config_schema");

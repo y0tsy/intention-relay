@@ -8,12 +8,11 @@
 )]
 
 use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto,
-    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId,
-    TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto,
-    run_status_is_terminal,
+    ConfigRevisionId, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
+    GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto, RemoveTurnCommandDto,
+    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionId,
+    SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
+    WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -56,21 +55,14 @@ fn validated_value_dtos_reject_invalid_wire_values() {
 }
 
 #[test]
-fn current_shape_minimal_error_decodes_absent_optional_fields_as_none() {
-    // The current ErrorDto shape keeps `correlation_id` optional on the wire: a
-    // minimal current error without it must decode as None and re-encode
-    // without inventing a value.
+fn current_shape_minimal_error_round_trips_its_retry_flag() {
     let error: ErrorDto = serde_json::from_str(
-        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual"}"#,
+        r#"{"code":"fixture","category":"not_found","message":"safe","retryable":false}"#,
     )
     .expect("minimal current-shape error decodes");
     assert_eq!(error.code(), "fixture");
     assert_eq!(error.category(), ErrorCategoryDto::NotFound);
-    assert_eq!(error.retry(), ErrorRetryDto::Manual);
-    assert!(
-        error.correlation_id().is_none(),
-        "absent correlation is None"
-    );
+    assert!(!error.retryable());
     let encoded = serde_json::to_string(&error).expect("test serialization must succeed");
     let decoded: ErrorDto =
         serde_json::from_str(&encoded).expect("round trip must decode identically");
@@ -88,26 +80,14 @@ fn malformed_error_wire_data_is_rejected() {
     ] {
         assert!(WorkspaceRelativePathDto::parse(invalid_path).is_err());
     }
-    let correlation = CorrelationIdDto::new();
-    let encoded = serde_json::to_string(&correlation).expect("correlation serializes");
-    assert_eq!(
-        serde_json::from_str::<CorrelationIdDto>(&encoded).expect("correlation decodes"),
-        correlation
-    );
     let parsed_path =
         WorkspaceRelativePathDto::parse("src/parsed.rs").expect("fixture path is valid");
     assert_eq!(parsed_path.as_str(), "src/parsed.rs");
-    for non_canonical in [
-        "aaaaaaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
-        "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
-    ] {
-        assert!(CorrelationIdDto::parse(non_canonical).is_err());
-    }
 
     for wire in [
-        r#"{"code":"","category":"not_found","message":"safe","retry":"manual"}"#,
-        r#"{"code":"fixture","category":"not_found","message":" ","retry":"manual"}"#,
-        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual","correlation_id":"not-a-uuid"}"#,
+        r#"{"code":"","category":"not_found","message":"safe","retryable":false}"#,
+        r#"{"code":"fixture","category":"not_found","message":" ","retryable":false}"#,
+        r#"{"code":"fixture","category":"not_found","message":"safe","retryable":"never"}"#,
     ] {
         assert!(serde_json::from_str::<ErrorDto>(wire).is_err());
     }
@@ -128,11 +108,9 @@ fn model_values_are_owned_by_types_and_preserve_the_contract() {
     assert!(UsageDto::reported(u64::MAX, 1, 0).is_err());
     assert!(UsageDto::reported(u64::MAX, 1, u64::MAX).is_err());
 
-    let correlation = CorrelationIdDto::new();
-    let error = ProviderErrorDto::unavailable("provider_unavailable", true, Some(correlation))
+    let error = ProviderErrorDto::unavailable("provider_unavailable", true)
         .expect("safe provider failure is valid");
-    assert_eq!(error.retry(), ErrorRetryDto::Delayed);
-    assert_eq!(error.correlation_id(), Some(correlation));
+    assert!(error.retryable());
     assert_eq!(error.to_string(), "provider_unavailable");
 }
 
@@ -163,9 +141,9 @@ fn model_values_reject_invalid_and_decode_valid_wire_forms() {
         .is_err()
     );
 
-    let error = ProviderErrorDto::unavailable("failed", false, None).expect("valid error");
-    assert_eq!(error.retry(), ErrorRetryDto::Never);
-    assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
+    let error = ProviderErrorDto::unavailable("failed", false).expect("valid error");
+    assert!(!error.retryable());
+    assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retryable":false}"#).is_err());
 }
 
 #[test]
@@ -468,7 +446,6 @@ fn a_session_projection_carries_an_optional_provider_model() {
         RunModeDto::Build,
         None,
         None,
-        Vec::new(),
     )
     .expect("the fixture session projection is coherent");
     assert_eq!(projection.provider_model(), None);

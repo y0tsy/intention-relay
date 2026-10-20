@@ -54,9 +54,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient, StreamStep};
-use intention_config::{
-    ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
@@ -294,14 +292,9 @@ fn fixture_state_directory(host: &LiveE2eHost) -> PathBuf {
 ///
 /// The document passes through opaque configuration input only and is never
 /// printed, even on failure.
-fn preflight_config_document(path: &Path, provider: &LiveProviderConfig, document: &str) {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(path.to_string_lossy().into_owned())
-            .expect("the fixture configuration path is absolute"),
-    );
-    let resolved =
-        ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(document.to_owned(), source))
-            .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
+fn preflight_config_document(provider: &LiveProviderConfig, document: &str) {
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(document.to_owned()))
+        .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
     assert_eq!(
         resolved.provider().kind(),
         provider.kind,
@@ -360,9 +353,8 @@ impl LiveE2eHost {
         for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
-        let config_path = config_path(config_home.path());
         let config_document = provider.config_document();
-        preflight_config_document(&config_path, provider, &config_document);
+        preflight_config_document(provider, &config_document);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");

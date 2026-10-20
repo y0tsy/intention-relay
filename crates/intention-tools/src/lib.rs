@@ -202,6 +202,15 @@ impl CancellationSignal {
             cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
+    /// Observes a cancellation flag owned elsewhere.
+    ///
+    /// A run has one cancellation state, and the blocking tool path observes
+    /// the same flag its model stream awaits rather than a copy kept in step
+    /// with it.
+    #[must_use]
+    pub fn from_shared(cancelled: Arc<AtomicBool>) -> Self {
+        Self { cancelled }
+    }
     #[must_use]
     pub fn cancelled() -> Self {
         Self {
@@ -1895,87 +1904,19 @@ fn grep_tool(
         scope,
         path,
     } = input;
-    if let Some(scope) = scope {
-        return grep_scoped(root, pattern, scope, cancellation);
-    }
-    // A pathless call addresses the whole workspace, exactly like the declared
-    // default scope; it is not a model error.
-    let Some(path) = path else {
-        return grep_scoped(root, pattern, GrepScope::Workspace, cancellation);
-    };
-    let resolved = root.resolve_path(&path);
-    // An explicit file path is addressed as given: `metadata` follows a
-    // symbolic link like any other filesystem path, and only the type
-    // decision happens here.
-    let metadata = std::fs::metadata(&resolved).map_err(|error| {
-        operation_failure("tool_search_failed", "search", path.as_str(), &error)
-    })?;
-    if !metadata.is_file() {
-        return Err(intention_proto::ErrorDto::validation(
-            "tool_search_failed",
-            "workspace search failed",
-        ));
-    }
-    let mut file = std::fs::File::open(resolved).map_err(|error| {
-        operation_failure("tool_search_failed", "search", path.as_str(), &error)
-    })?;
-    let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
-        operation_failure("tool_search_failed", "search", path.as_str(), &error)
-    })?;
-    let text = String::from_utf8_lossy(&bytes);
-    let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-    let logical = path;
-    let mut matches = Vec::new();
-    let mut retained_bytes = 0usize;
-    let mut truncated = source_truncated || lossy_truncated;
-    for (line_index, line) in text.lines().enumerate() {
-        // A stop observed between scanned lines keeps the matches found so far
-        // as an honestly truncated partial result.
-        if cancellation.is_cancelled() {
-            return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
-                matches,
-                truncated: true,
-            }))));
-        }
-        let Some(column) = line.find(pattern.as_str()) else {
-            continue;
-        };
-        let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
-            truncated = true;
-            let end = line
-                .char_indices()
-                .take_while(|(index, _)| *index < MAX_TOOL_OUTPUT_BYTES)
-                .map(|(index, _)| index)
-                .last()
-                .unwrap_or(0);
-            line[..end].to_owned()
-        } else {
-            line.to_owned()
-        };
-        if !record_grep_match(
-            &mut matches,
-            &mut retained_bytes,
-            &mut truncated,
-            logical.clone(),
-            line_index as u64 + 1,
-            line[..column].chars().count() as u64 + 1,
-            fragment,
-        )? {
-            break;
-        }
-    }
-    if cancellation.is_cancelled() {
-        return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
-            matches,
-            truncated: true,
-        }))));
-    }
-    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
-        GrepResult { matches, truncated },
-    )))
+    // An explicit scope wins; an addressed path is a file scope; a pathless
+    // call addresses the whole workspace, exactly like the declared default
+    // scope. All three are ordinary calls, not model errors.
+    let scope = scope
+        .or_else(|| path.map(|path| GrepScope::File { path }))
+        .unwrap_or(GrepScope::Workspace);
+    grep_scoped(root, pattern, scope, cancellation)
 }
 
+/// Searches one resolved scope and renders its bounded match list.
+///
+/// Every `grep` call reaches this one search body: the scope alone decides
+/// whether one addressed file or a directory walk supplies the searched files.
 fn grep_scoped(
     root: &WorkspaceRoot,
     pattern: BoundedText,

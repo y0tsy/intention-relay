@@ -2,6 +2,7 @@
 
 pub mod daemon_process;
 pub mod fake_provider;
+pub mod fixtures;
 
 mod model_fixtures;
 
@@ -10,13 +11,10 @@ use std::path::Path;
 use tempfile::TempDir;
 
 pub use crate::model_fixtures::{ScriptedDriver, run_ready};
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_daemon::{DaemonApplicationFacade, SilentCommitObserver, TestHostLifecycle};
 use intention_proto::{
-    ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SchemaVersionDto, SessionId,
-    TimestampDto, WorkspaceId,
+    ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SessionId, TimestampDto, WorkspaceId,
 };
 use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
@@ -36,7 +34,7 @@ fn open_fixture_facade(path: impl AsRef<Path>) -> DtoResult<DaemonApplicationFac
     DaemonApplicationFacade::open_for_test_support(path, fixture_snapshot())
 }
 
-/// Returns a credential-free fixture snapshot with a native absolute source path.
+/// Returns a credential-free fixture snapshot.
 #[must_use]
 pub fn fixture_snapshot() -> ConfigSnapshotDto {
     fixture_snapshot_with_model("fixture")
@@ -57,33 +55,19 @@ pub fn fixture_snapshot_with_context_window(
     model: &str,
     window_tokens: Option<u64>,
 ) -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-relay-fixtures.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .unwrap_or_else(|_| unreachable!("fixture configuration source is absolute")),
-    );
     let context_window = window_tokens.map_or_else(String::new, |window| {
         format!("context_window_tokens = {window}\n")
     });
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"{FIXTURE_CREDENTIAL}\"\n{context_window}"
-        ),
-        source,
-    ))
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"{FIXTURE_CREDENTIAL}\"\n{context_window}"
+    )))
     .unwrap_or_else(|_| unreachable!("fixture configuration resolves"));
     ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1)
             .unwrap_or_else(|_| unreachable!("fixture timestamp is valid")),
         resolved,
     )
-    .unwrap_or_else(|_| unreachable!("fixture snapshot is credential-free"))
 }
 
 /// Returns a native absolute workspace root for a controlled fixture label.

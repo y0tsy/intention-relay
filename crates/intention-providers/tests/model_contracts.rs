@@ -2,9 +2,8 @@ mod support;
 
 use intention_proto::{RunId, ToolCallId};
 use intention_providers::{
-    AssistantReasoningDto, FinishReasonDto, ModelCapabilitiesDto, ModelEventDto, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    AssistantReasoningDto, ModelCapabilitiesDto, ModelEventDto, ModelMessageDto, ModelRequestDto,
+    ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
 use support::plain_request;
 
@@ -18,13 +17,11 @@ fn tool_definition(name: &str) -> ModelToolDefinitionDto {
 
 #[test]
 fn model_request_and_capabilities_validate_provider_neutral_contracts() {
-    let capabilities = ModelCapabilitiesDto::new(true, false, true, false, false, true);
-    assert!(capabilities.supports_text());
-    assert!(!capabilities.supports_reasoning());
-    assert!(capabilities.supports_tool_calls());
-    assert!(!capabilities.supports_multimodal());
-    assert!(!capabilities.supports_vendor_extensions());
-    assert!(capabilities.supports_streaming());
+    assert!(
+        ModelCapabilitiesDto::new(true)
+            .ensure_runtime_requirements()
+            .is_ok()
+    );
 
     let valid = plain_request();
     assert_eq!(valid.model(), "fixture-model");
@@ -33,41 +30,18 @@ fn model_request_and_capabilities_validate_provider_neutral_contracts() {
 }
 
 #[test]
-fn stream_lifecycle_accepts_ordered_normalized_events() {
-    let mut lifecycle = ModelStreamLifecycleDto::new();
-    let tool = ToolCallDto::new(ToolCallId::new(), "inspect", "{\"path\":\"src\"}")
-        .expect("tool call is valid");
-    let usage = UsageDto::reported(3, 5, 8).expect("usage is internally consistent");
-    for event in [
-        ModelEventDto::started(),
-        ModelEventDto::text_delta("hello").expect("text is valid"),
-        ModelEventDto::reasoning_delta("considering context").expect("reasoning is valid"),
-        ModelEventDto::tool_call(tool),
-        ModelEventDto::usage(usage),
-        ModelEventDto::finished(FinishReasonDto::Stop),
-    ] {
-        lifecycle.accept(&event).expect("ordered event is valid");
-    }
-}
-
-#[test]
 fn capabilities_cover_the_runtime_requirement_and_safe_provider_codes() {
-    let complete = ModelCapabilitiesDto::new(true, true, true, true, true, true);
+    let complete = ModelCapabilitiesDto::new(true);
     complete
         .ensure_runtime_requirements()
-        .expect("complete capability declaration serves the runtime");
-    for unsupported in [
-        ModelCapabilitiesDto::new(false, true, true, true, true, true),
-        ModelCapabilitiesDto::new(true, true, false, true, true, true),
-    ] {
-        assert_eq!(
-            unsupported
-                .ensure_runtime_requirements()
-                .expect_err("a declaration without text or tool calls fails")
-                .code(),
-            "unsupported_model_capability"
-        );
-    }
+        .expect("a declaration that serves streamed text with tool calls passes");
+    assert_eq!(
+        ModelCapabilitiesDto::new(false)
+            .ensure_runtime_requirements()
+            .expect_err("a declaration without streamed text and tool calls fails")
+            .code(),
+        "unsupported_model_capability"
+    );
 
     // The closed constructors are the validation boundary for these in-process
     // model DTOs; there is no decoder for them (ARCH-5-5, DEC-6).
@@ -84,70 +58,16 @@ fn capabilities_cover_the_runtime_requirement_and_safe_provider_codes() {
     );
 
     assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
-    assert!(ProviderErrorDto::unavailable(" ", false, None).is_err());
+    assert!(ProviderErrorDto::unavailable(" ", false).is_err());
 }
 
 #[test]
-fn stream_lifecycle_rejects_invalid_order_payloads_duplicate_usage_and_terminal_preconditions() {
-    // Facts before `Started` are rejected whichever kind follows the order
-    // violation, and the closed payload constructors keep rejecting invalid
-    // values.
-    let mut before_start = ModelStreamLifecycleDto::new();
-    assert_eq!(
-        before_start
-            .accept(&ModelEventDto::text_delta("first").expect("text is valid"))
-            .expect_err("content before start must fail")
-            .code(),
-        "invalid_model_stream_order"
-    );
-    assert_eq!(
-        before_start
-            .accept(&ModelEventDto::reasoning_delta("first").expect("reasoning is valid"))
-            .expect_err("reasoning before start must fail")
-            .code(),
-        "invalid_model_stream_order"
-    );
-    assert!(
-        before_start
-            .accept(&ModelEventDto::usage(UsageDto::NotReported))
-            .is_err()
-    );
-    assert!(
-        before_start
-            .accept(&ModelEventDto::finished(FinishReasonDto::Length))
-            .is_err()
-    );
+fn model_stream_payload_constructors_reject_invalid_values() {
+    // The normalized stream enforces the order contract while it builds, so
+    // these are the payload rules the facts it carries keep closed.
     assert!(ToolCallDto::new(ToolCallId::new(), " ", "{}").is_err());
     assert!(ToolCallDto::new(ToolCallId::new(), "inspect", "not-json").is_err());
     assert!(UsageDto::reported(3, 5, 7).is_err());
-
-    // One accepted sequence: start, a single usage summary, one terminal finish.
-    let mut lifecycle = ModelStreamLifecycleDto::new();
-    lifecycle
-        .accept(&ModelEventDto::started())
-        .expect("start is valid");
-    lifecycle
-        .accept(&ModelEventDto::usage(UsageDto::NotReported))
-        .expect("first usage is valid");
-    assert!(
-        lifecycle
-            .accept(&ModelEventDto::usage(UsageDto::NotReported))
-            .is_err()
-    );
-    lifecycle
-        .accept(&ModelEventDto::finished(FinishReasonDto::ToolCalls))
-        .expect("finish is valid");
-    for event in [
-        ModelEventDto::started(),
-        ModelEventDto::text_delta("after").expect("text is valid"),
-        ModelEventDto::reasoning_delta("after").expect("reasoning is valid"),
-        ModelEventDto::finished(FinishReasonDto::Unknown),
-    ] {
-        assert!(
-            lifecycle.accept(&event).is_err(),
-            "no fact follows the terminal finish"
-        );
-    }
 }
 
 #[test]
@@ -252,7 +172,7 @@ fn model_request_with_messages_preserves_fields() {
 }
 
 #[test]
-fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
+fn assistant_reasoning_carries_its_text_and_bounded_text_rules() {
     let call_id = ToolCallId::new();
     let reasoning = AssistantReasoningDto::new(vec![call_id], "considering context")
         .expect("reasoning is valid");
@@ -265,21 +185,16 @@ fn assistant_reasoning_validates_tool_call_identities_and_bounded_text() {
     assert!(presence.text().is_empty());
     assert_eq!(presence.tool_call_ids(), &[call_id]);
 
-    for text in ["", "line one\nline two\tindented"] {
-        assert!(AssistantReasoningDto::new(vec![call_id], text).is_ok());
-    }
-    assert_eq!(
-        AssistantReasoningDto::new(Vec::new(), "thinking")
-            .expect_err("reasoning without tool calls must fail")
-            .code(),
-        "invalid_model_assistant_reasoning"
+    assert!(
+        AssistantReasoningDto::new(vec![call_id], "line one\nline two\tindented").is_ok(),
+        "the text keeps every whitespace character it carries"
     );
-    assert_eq!(
-        AssistantReasoningDto::new(vec![call_id, call_id], "thinking")
-            .expect_err("repeated tool-call identities must fail")
-            .code(),
-        "invalid_model_assistant_reasoning"
-    );
+    // The identities are the round's own tool calls, so the attachment binds to
+    // whatever it names: an attachment naming none binds to no message and
+    // never reaches the wire.
+    let unbound = AssistantReasoningDto::new(Vec::new(), "thinking")
+        .expect("an attachment that binds to no call is still a value");
+    assert!(unbound.tool_call_ids().is_empty());
     let bounded = "a".repeat(512 * 1024);
     assert!(AssistantReasoningDto::new(vec![call_id], bounded).is_ok());
     let oversized = "a".repeat(512 * 1024 + 1);

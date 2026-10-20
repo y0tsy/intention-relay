@@ -3,17 +3,17 @@
 //! This module owns the state structure, its accessors, and the one `update`
 //! dispatch. The transition bodies live one file per feature beside it:
 //! `sessions.rs`, `browser.rs`, `run.rs`, `input.rs`, `transcript.rs`, and
-//! `ctrl_c.rs`.
+//! `ctrl_c.rs`; the consecutive-press arm they share lives in `arm.rs`.
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    DtoResult, ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunModeDto,
-    RunProjectionDto, RunStatusDto, SessionId, SessionSummaryDto, WorkspaceRootDto,
+    DtoResult, ErrorDto, MessageId, MessageProjectionDto, RunModeDto, RunProjectionDto,
+    RunStatusDto, SessionId, SessionSummaryDto, WorkspaceRootDto,
 };
 
 use super::{
     Action, BrowserRow, BrowserTab, CommandMenu, ConnectionStatus, Effect, RunPhase, Screen,
-    StreamStatus, Theme, ThemePreference, TranscriptSelection, browser, ctrl_c, input, transcript,
+    StreamStatus, Theme, ThemePreference, TranscriptSelection, arm, browser, input, transcript,
 };
 
 /// Every value one terminal session holds, with no terminal attached.
@@ -132,21 +132,12 @@ pub struct AppState {
     /// matches and the highlighted row - so the input line stays the single
     /// source of the word.
     pub(super) command_menu: Option<CommandMenu>,
-    /// The arm the last Ctrl+C press left for the next consecutive press.
+    /// The arm the last press of a layered key left for the next press.
     ///
-    /// The arm names which press armed it: a stop arm fires only while
-    /// its run is still live, and an exit arm fires only when the input line is
-    /// still empty and no run is live, so a state the press no longer matches
-    /// starts a fresh sequence instead of firing a stale one.
-    pub(super) ctrl_c_arm: Option<ctrl_c::CtrlCArm>,
-    /// Whether the last Esc press armed the clear for the next consecutive one.
-    ///
-    /// The clear is two consecutive Esc presses over a non-empty line and no
-    /// live run: the first press arms it with a notice and the second abandons
-    /// the line into the history, exactly as one Ctrl+C press does. Only its
-    /// own key and client reports leave the arm standing, so any other user
-    /// action starts a fresh sequence.
-    pub(super) escape_arm: bool,
+    /// The arm names the act the press armed, so a state the press no longer
+    /// matches starts a fresh sequence instead of firing a stale one, and only
+    /// its own key and client reports leave it standing. See `super::arm`.
+    pub(super) armed: Option<arm::Arm>,
     pub(super) notice: Option<String>,
     pub(super) error: Option<String>,
     pub(super) scroll: u16,
@@ -203,8 +194,7 @@ impl AppState {
             history_draft: None,
             pasted: Vec::new(),
             command_menu: None,
-            ctrl_c_arm: None,
-            escape_arm: false,
+            armed: None,
             notice: None,
             error: None,
             scroll: 0,
@@ -254,27 +244,21 @@ impl AppState {
     /// failure carried by an action becomes the error line instead of an error
     /// return, so a front end never has to recover from a state transition.
     ///
-    /// Two cross-cutting rules live here. Each layered arm - the Ctrl+C arm
-    /// and the Esc clear arm - is consecutive over the user's own actions, so
-    /// any other action the user asks for disarms it at its entry point, and
-    /// `Action::is_client_report` leaves it standing. And a produced
-    /// `Effect::SendTurn` starts the waiting phase of the run it requests,
-    /// whichever transition produced it, so the status row names that run from
-    /// the moment its request leaves for the network.
+    /// Two cross-cutting rules live here. The layered arm is consecutive over
+    /// the user's own actions, so any other action the user asks for disarms it
+    /// at its entry point, and `Action::is_client_report` leaves it standing.
+    /// And a produced `Effect::SendTurn` starts the waiting phase of the run it
+    /// requests, whichever transition produced it, so the status row names that
+    /// run from the moment its request leaves for the network.
     pub fn update(&mut self, action: Action) -> Vec<Effect> {
-        // Each layered arm is consecutive over the user's own actions: any
-        // other user action clears it - including the other key - while a
-        // client report leaves it standing for the second press.
-        if !action.is_client_report() {
-            if !matches!(action, Action::CtrlCPressed) {
-                self.ctrl_c_arm = None;
-            }
-            if !matches!(action, Action::EscapePressed) {
-                self.escape_arm = false;
-            }
+        // The layered arm is consecutive over the user's own actions: any other
+        // user action clears it - a press of the other layered key included -
+        // while a client report leaves it standing for the second press.
+        if !action.is_client_report() && !self.armed.is_some_and(|arm| arm.is_pressed_by(&action)) {
+            self.disarm();
         }
         let effects = match action {
-            Action::Bootstrapped(health) => self.apply_bootstrapped(health.readiness()),
+            Action::Bootstrapped(_health) => self.apply_bootstrapped(),
             Action::BootstrapFailed(error) => self.apply_bootstrap_failed(&error),
             Action::SessionsListed(summaries) => self.apply_sessions_listed(&summaries),
             Action::SessionsListFailed(error) => self.apply_failure(&error),
@@ -336,9 +320,6 @@ impl AppState {
             Action::BrowserFilterBackspace => self.apply_browser_filter_backspace(),
             Action::BrowserCursorMove(movement) => self.apply_browser_cursor_move(movement),
             Action::BrowserSelectionRequested => self.select_browser_session(),
-            Action::BrowserRenameRequested => self.request_session_rename(),
-            Action::BrowserArchiveRequested => self.request_session_archive(),
-            Action::BrowserTreeRequested => self.request_session_tree(),
             Action::NewSessionRequested => self.request_new_session(),
             Action::CtrlCPressed => self.apply_ctrl_c(),
             Action::EscapePressed => self.apply_escape(),
@@ -480,9 +461,9 @@ impl AppState {
 
     /// Returns the explanation the sessions browser shows in place of rows.
     ///
-    /// A tab the core cannot fill, a filter that selects nothing, and a list
-    /// that has not been read each carry their own text; `None` means the
-    /// browser has rows, or that an empty result needs no explanation.
+    /// A filter that selects nothing and a list that has not been read each
+    /// carry their own text; `None` means the browser has rows, or that an
+    /// empty result needs no explanation.
     #[must_use]
     pub const fn browser_empty_reason(&self) -> Option<&'static str> {
         self.browser.empty_reason(self.sessions_loaded)
@@ -599,19 +580,6 @@ impl AppState {
     #[must_use]
     pub const fn reasoning_epoch(&self) -> u64 {
         self.reasoning_epoch
-    }
-
-    /// Returns how many committed `tool_result` rows the transcript carries.
-    ///
-    /// A tool block pairs a call row with its result row, so a committed result
-    /// changes a block the cached prefix holds; a layout cache compares this
-    /// count to know whether its prefix still reflects the pairing.
-    #[must_use]
-    pub fn tool_result_count(&self) -> usize {
-        self.transcript()
-            .iter()
-            .filter(|row| row.kind() == MessageKindDto::ToolResult)
-            .count()
     }
 
     /// Returns how many transcript rows were appended since `epoch`, if the

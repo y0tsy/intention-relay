@@ -3,8 +3,8 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, RunId, SessionId,
-    TimestampDto, TurnId, UsageDto,
+    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId, TimestampDto,
+    TurnId, UsageDto,
 };
 
 /// The agent policy active for a run.
@@ -43,8 +43,7 @@ impl RunModeDto {
                 "invalid_run_mode",
                 ErrorCategoryDto::Internal,
                 "the durable run mode is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -111,8 +110,7 @@ impl RunStatusDto {
                 "invalid_run_status",
                 ErrorCategoryDto::Internal,
                 "the durable run status is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -156,8 +154,7 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
             "invalid_run_status_transition",
             ErrorCategoryDto::Conflict,
             "run status transition is not permitted",
-            ErrorRetryDto::Never,
-            None,
+            false,
         )?)
     }
 }
@@ -345,8 +342,8 @@ mod tests {
             Some(ErrorCategoryDto::Internal)
         );
         assert_eq!(
-            rejected.as_ref().err().map(ErrorDto::retry),
-            Some(ErrorRetryDto::Never)
+            rejected.as_ref().err().map(ErrorDto::retryable),
+            Some(false)
         );
     }
 
@@ -392,8 +389,8 @@ mod tests {
             Some(ErrorCategoryDto::Internal)
         );
         assert_eq!(
-            rejected.as_ref().err().map(ErrorDto::retry),
-            Some(ErrorRetryDto::Never)
+            rejected.as_ref().err().map(ErrorDto::retryable),
+            Some(false)
         );
     }
 }

@@ -54,12 +54,6 @@ pub(in crate::tui) const CHROME_ROWS: u16 = BLOCK_FRAME + BADGE_ROWS + STATUS_RO
 /// The rows the block occupies for a one-line buffer: its chrome and that line.
 pub(in crate::tui) const MIN_BLOCK_ROWS: u16 = CHROME_ROWS + 1;
 
-/// The mode badge before a session snapshot has named the mode.
-///
-/// The mode is durable session state and arrives with the snapshot, so the
-/// badge waits for it rather than guessing `build`.
-const MODE_PLACEHOLDER: &str = "mode @todo(core)";
-
 /// Returns the rows the input block needs for the state's buffer.
 ///
 /// A one-line buffer takes [`MIN_BLOCK_ROWS`] and every line break adds one
@@ -116,16 +110,14 @@ pub(in crate::tui) fn input_block(
 /// Returns the badge header: the session's real run mode and its effective
 /// provider model, each on its own badge wash.
 ///
-/// The model is the daemon's resolved configuration selection and arrives with
-/// the snapshot, so a session the daemon has named shows it. A session no
-/// snapshot has named yet shows no model chip rather than a fabricated model.
+/// The mode is durable session state and the model is the daemon's resolved
+/// configuration selection; both arrive with the snapshot, so a session no
+/// snapshot has named yet shows no badge rather than a fabricated one.
 fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
-    let (mode, mode_ink) = state
-        .session_mode()
-        .map_or((MODE_PLACEHOLDER, palette.todo_ink), |mode| {
-            (mode.as_str(), palette.badge_ink)
-        });
-    let mut badges = vec![(mode, mode_ink)];
+    let mut badges = Vec::new();
+    if let Some(mode) = state.session_mode() {
+        badges.push((mode.as_str(), palette.badge_ink));
+    }
     if let Some(model) = state.session_model() {
         badges.push((model, palette.badge_ink));
     }

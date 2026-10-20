@@ -766,7 +766,6 @@ mod tests {
             WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
                 .expect("the fixture workspace root is absolute"),
             0,
-            None,
         )
     }
 
@@ -1209,7 +1208,7 @@ mod tests {
         }
         assert_eq!(
             rows,
-            vec![5, 4, 0, 0],
+            vec![7, 5, 0, 0],
             "the slash opens the band, the narrowed list keeps it, and the commit closes it"
         );
         assert_eq!(

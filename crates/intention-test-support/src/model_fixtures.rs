@@ -118,7 +118,7 @@ impl ScriptedDriver {
 
 impl ModelExecutionDriver for ScriptedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(

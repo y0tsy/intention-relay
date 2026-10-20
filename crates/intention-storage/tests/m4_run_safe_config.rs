@@ -11,12 +11,8 @@ mod common;
 
 use common::{create_session, repository, time};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
-use intention_proto::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, IdempotencyKey, RunId, SessionId,
-};
+use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
+use intention_proto::{ConfigRevisionId, ErrorCategoryDto, IdempotencyKey, RunId, SessionId};
 use intention_storage::StorageRepositoryDto;
 
 #[test]
@@ -113,7 +109,7 @@ fn corrupted_run_configuration_snapshot_is_a_decode_failure_and_a_missing_row_st
         .expect_err("a malformed persisted snapshot is not decodable");
     assert_eq!(corrupted.code(), "storage_decode_failed");
     assert_eq!(corrupted.category(), ErrorCategoryDto::Internal);
-    assert_eq!(corrupted.retry(), ErrorRetryDto::Never);
+    assert!(!corrupted.retryable());
     assert!(!corrupted.to_string().contains("not-a-snapshot"));
 
     // A missing row remains transient unavailability, not corruption.
@@ -166,7 +162,7 @@ fn backend_failure_on_a_run_config_lookup_is_unavailable_not_not_found() {
             .expect_err("a backend read failure is unavailable");
         assert_eq!(error.code(), "storage_unavailable");
         assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
-        assert_ne!(error.retry(), ErrorRetryDto::Never);
+        assert!(error.retryable());
     }
 }
 
@@ -212,7 +208,7 @@ fn run_config_read_requires_a_persistable_snapshot() {
         .expect_err("an unpersistable stored snapshot is not served");
     assert_eq!(error.code(), "storage_decode_failed");
     assert_eq!(error.category(), ErrorCategoryDto::Internal);
-    assert_eq!(error.retry(), ErrorRetryDto::Never);
+    assert!(!error.retryable());
     assert!(
         !error
             .to_string()
@@ -227,26 +223,9 @@ fn snapshot(
     max_attempts: u8,
 ) -> ConfigSnapshotDto {
     let endpoint = endpoint.map_or_else(String::new, |value| format!("endpoint = \"{value}\"\n"));
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\n{endpoint}credential = \"recognizable-fixture-credential\"\n[provider.execution]\nattempt_timeout_seconds = {attempt_timeout_seconds}\nmax_attempts = {max_attempts}"
-        ),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("safe-config.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("configuration path is absolute"),
-        ),
-    ))
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\n{endpoint}credential = \"recognizable-fixture-credential\"\n[provider.execution]\nattempt_timeout_seconds = {attempt_timeout_seconds}\nmax_attempts = {max_attempts}"
+    )))
     .expect("safe configuration resolves");
-    ConfigSnapshotDto::new(
-        intention_proto::SchemaVersionDto::new(1, 0),
-        ConfigRevisionId::new(),
-        time(1),
-        resolved,
-    )
-    .expect("safe snapshot is valid")
+    ConfigSnapshotDto::new(ConfigRevisionId::new(), time(1), resolved)
 }

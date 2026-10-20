@@ -60,7 +60,6 @@ fn projection(session_id: SessionId, active_run: Option<RunProjectionDto>) -> Se
         RunModeDto::Build,
         None,
         active_run,
-        Vec::new(),
     )
     .expect("fixture session projection is valid")
 }

@@ -6,17 +6,17 @@
 //! between frames while only the visible window becomes a widget.
 //!
 //! [`TranscriptLayoutCache`] holds those rows keyed by the width they were laid
-//! out at, the transcript version the core reported, the reasoning expansion
-//! epoch, and the committed tool-result count:
+//! out at, the transcript version the core reported, and the reasoning
+//! expansion epoch:
 //!
 //! - the width changed: the wrap points moved, so the whole transcript is laid
 //!   out again;
 //! - the epoch moved and the core confirms only appends happened since the
 //!   cached one: only the appended rows are laid out and the cached prefix is
-//!   kept;
-//! - a reasoning expansion or a newly committed tool result moved: both insert
-//!   rows into or change a block the cached prefix holds, so the whole
-//!   transcript is laid out again;
+//!   kept, unless the appended rows commit a tool result, which re-pairs a
+//!   call block the prefix holds;
+//! - a reasoning expansion moved: it inserts rows into a block the cached
+//!   prefix holds, so the whole transcript is laid out again;
 //! - anything else - a replacement, a trim's front drain, a session switch, a
 //!   future epoch, or no cache yet - is a full replay.
 //!
@@ -37,6 +37,7 @@
 
 use std::ops::Range;
 
+use intention_proto::MessageKindDto;
 use revue::render::Modifier;
 use revue::style::Color;
 use revue::text::char_width;
@@ -708,15 +709,31 @@ pub(in crate::tui) fn display_width(text: &str) -> usize {
         .sum()
 }
 
-/// The committed transcript's rows, keyed by width and transcript version.
+/// Returns whether the rows appended past `cached` re-pair a call block.
+///
+/// A tool block draws a call row and the result that answers it as one block,
+/// so an appended `tool_result` changes a block an earlier call row owns - a
+/// row the cached prefix already holds. Such an append is a full replay, while
+/// every other append leaves the cached prefix current.
+fn pairs_an_earlier_call(state: &AppState, cached: usize, appended: usize) -> bool {
+    state
+        .transcript()
+        .get(cached..cached.saturating_add(appended))
+        .is_some_and(|rows| {
+            rows.iter()
+                .any(|row| row.kind() == MessageKindDto::ToolResult)
+        })
+}
+
+/// The committed transcript's rows, keyed by the layout input they reflect.
 ///
 /// The cache is what keeps a frame cheap: typing into the input line and the
 /// turn timer's ticks never touch the transcript, so the key still matches and
 /// a frame materialises the visible window without laying anything out.
 // @todo(revue): revue has no dirty tracking or virtualised rendering of its
-// own, so the invalidation is built here: the key carries the width, the
-// theme, the transcript epoch, the reasoning-expansion epoch, and the paired
-// tool-result count, and an append fast path keeps the cached prefix.
+// own, so the invalidation is built here: the key carries the width, the theme,
+// the transcript epoch, and the reasoning-expansion epoch, and an append fast
+// path keeps the cached prefix.
 pub(in crate::tui) struct TranscriptLayoutCache {
     /// The content width the cached rows were laid out at.
     width: usize,
@@ -735,12 +752,6 @@ pub(in crate::tui) struct TranscriptLayoutCache {
     /// the rows a cache holds stop being a prefix of the next layout: a moved
     /// epoch replays the whole transcript.
     reasoning_epoch: u64,
-    /// How many committed `tool_result` rows the cached rows pair.
-    ///
-    /// A tool block pairs a call row with the result that answers it, so a
-    /// committed result changes the block of an earlier call the cached prefix
-    /// holds; a moved count replays the whole transcript.
-    tool_results: usize,
     /// How many committed transcript rows the cached rows cover.
     len: usize,
     /// The laid-out rows, oldest first.
@@ -763,7 +774,6 @@ impl TranscriptLayoutCache {
             theme: Theme::Light,
             epoch: 0,
             reasoning_epoch: 0,
-            tool_results: 0,
             len: 0,
             rows: Vec::new(),
             spans: Vec::new(),
@@ -790,10 +800,12 @@ impl TranscriptLayoutCache {
     /// gap rows and the blocks paint one theme.
     ///
     /// The cached rows are current only while the width, the theme, the
-    /// transcript epoch, the reasoning expansion epoch, and the committed tool
-    /// results all match; anything else - a replacement, a trim's front drain,
-    /// a session switch, a resize, a theme change, an expansion, a result that
-    /// answers an earlier call, or no cache yet - is a full replay.
+    /// transcript epoch, and the reasoning expansion epoch all match; anything
+    /// else - a replacement, a trim's front drain, a session switch, a resize,
+    /// a theme change, an expansion, or no cache yet - is a full replay. An
+    /// append keeps the cached prefix unless it commits a tool result: a tool
+    /// block pairs a call row with the result that answers it, so a result
+    /// re-lays the block of an earlier call the prefix holds.
     pub(in crate::tui) fn rows(
         &mut self,
         state: &AppState,
@@ -805,13 +817,13 @@ impl TranscriptLayoutCache {
         let theme = state.effective_theme();
         let epoch = state.transcript_epoch();
         let reasoning_epoch = state.reasoning_epoch();
-        let tool_results = state.tool_result_count();
         let appended = if width == self.width
             && theme == self.theme
             && reasoning_epoch == self.reasoning_epoch
-            && tool_results == self.tool_results
         {
-            state.transcript_appended_since(self.epoch)
+            state
+                .transcript_appended_since(self.epoch)
+                .filter(|appended| !pairs_an_earlier_call(state, self.len, *appended))
         } else {
             None
         };
@@ -842,7 +854,6 @@ impl TranscriptLayoutCache {
                 self.epoch = epoch;
                 self.theme = theme;
                 self.reasoning_epoch = reasoning_epoch;
-                self.tool_results = tool_results;
                 self.len = state.transcript().len();
                 self.width = width;
                 self.append(laid_out, 0, palette);

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto};
 #[cfg(any(unix, test))]
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{
@@ -55,8 +55,8 @@ pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE
 /// byte itself stays 1 while the wire evolves in place, so the protection on
 /// the shared endpoint is the fail-closed typed decode: a peer that answers on
 /// the current endpoint with bytes this build cannot decode fails closed with
-/// the typed `stale_daemon_protocol` error instead of being reached as a
-/// compatible peer.
+/// the typed `invalid_local_protocol_response` error instead of being reached
+/// as a compatible peer.
 pub const WIRE_VERSION: u8 = 1;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
@@ -498,8 +498,7 @@ fn endpoint_in_use() -> ErrorDto {
         "local_daemon_endpoint_in_use",
         ErrorCategoryDto::Conflict,
         "the local daemon endpoint is already in use",
-        ErrorRetryDto::Immediate,
-        None,
+        true,
     )
     .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
 }

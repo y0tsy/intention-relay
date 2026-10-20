@@ -15,13 +15,13 @@ use std::time::{Duration, Instant};
 
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
-    GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId,
-    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_response,
-    encode_request, parse_session_frame, run_status_is_terminal,
+    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto,
+    IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto, ProtocolResultDto,
+    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto,
+    RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
+    SessionSnapshotDto, SessionSummariesDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
+    TextDeltaFrameDto, TurnId, decode_response, encode_request, parse_session_frame,
+    run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -270,9 +270,7 @@ impl IntentionClient {
             .request(ClientRequestDto::SendUserTurn(command))
             .await?
         {
-            ProtocolResultDto::TurnAccepted(turn) if turn.session_id() == session_id => {
-                Ok(turn.outcome())
-            }
+            ProtocolResultDto::TurnAccepted(turn) => Ok(turn.outcome()),
             _ => Err(invalid_response()),
         }
     }
@@ -295,11 +293,7 @@ impl IntentionClient {
             )))
             .await?
         {
-            ProtocolResultDto::TurnRemoved(removed)
-                if removed.session_id() == session_id && removed.turn_id() == turn_id =>
-            {
-                Ok(removed)
-            }
+            ProtocolResultDto::TurnRemoved(removed) => Ok(removed),
             _ => Err(invalid_response()),
         }
     }
@@ -325,11 +319,7 @@ impl IntentionClient {
             )))
             .await?
         {
-            ProtocolResultDto::RunCancelled(cancelled)
-                if cancelled.session_id() == session_id && cancelled.run_id() == run_id =>
-            {
-                Ok(cancelled)
-            }
+            ProtocolResultDto::RunCancelled(cancelled) => Ok(cancelled),
             _ => Err(invalid_response()),
         }
     }
@@ -352,9 +342,7 @@ impl IntentionClient {
             ))
             .await?
         {
-            ProtocolResultDto::SessionSnapshot(snapshot) if snapshot.session_id() == session_id => {
-                Ok(snapshot)
-            }
+            ProtocolResultDto::SessionSnapshot(snapshot) => Ok(snapshot),
             _ => Err(invalid_response()),
         }
     }
@@ -484,14 +472,13 @@ impl SessionStreamClient {
     ///
     /// # Errors
     ///
-    /// Returns a typed protocol, transport, or scoped-response error, or an
-    /// unavailable timeout error when the correlated reply does not arrive
-    /// before the bounded deadline.
+    /// Returns a typed protocol or transport error, or an unavailable timeout
+    /// error when the correlated reply does not arrive before the bounded
+    /// deadline.
     pub async fn subscribe(
         &self,
         subscription: SubscribeSessionCommandDto,
     ) -> DtoResult<SessionStreamSubscription> {
-        let session_id = subscription.session_id();
         let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
         let (mut sender, mut receiver) = connection.split();
         let request = encode_request(REQUEST_ID, ClientRequestDto::SubscribeSession(subscription));
@@ -503,11 +490,6 @@ impl SessionStreamClient {
         else {
             return Err(invalid_response());
         };
-        if snapshot.session_id() != session_id {
-            // The correlated reply belongs to the session this subscription
-            // asked for; another session's snapshot is a scoped-response error.
-            return Err(scope_error());
-        }
         Ok(SessionStreamSubscription {
             sender,
             receiver,
@@ -1145,11 +1127,14 @@ fn no_sessions_to_continue() -> DtoResult<ErrorDto> {
         "no_sessions_to_continue",
         ErrorCategoryDto::NotFound,
         "the daemon reports no session to continue",
-        ErrorRetryDto::Never,
-        None,
+        false,
     )
 }
 
+/// Returns the typed failure for a frame that belongs to another session.
+///
+/// Stream frames are uncorrelated, so the subscribed session identity is the
+/// only thing that proves a frame belongs on this connection.
 fn scope_error() -> ErrorDto {
     ErrorDto::validation(
         "invalid_session_subscription",

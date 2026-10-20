@@ -6,9 +6,7 @@ mod common;
 
 use common::{create_session, open, reopen, repository, time, workspace_root};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
     BoundedText, CreateSessionCommandDto, ExecuteResult, MessageKindDto, MessageProjectionDto,
     NewMessageDto, PendingTurnProjectionDto, ReadInput, RemoveTurnCommandDto, RunModeDto,
@@ -17,8 +15,8 @@ use intention_proto::{
     WorkspaceRelativePathDto,
 };
 use intention_proto::{
-    ConfigRevisionId, ErrorCategoryDto, ErrorRetryDto, FinishReasonDto, IdempotencyKey, ProjectId,
-    RunId, SchemaVersionDto, SessionId, ToolCallId, UsageDto, WorkspaceId,
+    ConfigRevisionId, ErrorCategoryDto, FinishReasonDto, IdempotencyKey, ProjectId, RunId,
+    SessionId, ToolCallId, UsageDto, WorkspaceId,
 };
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
@@ -36,24 +34,11 @@ fn snapshot_with_revision_and_model(
     revision_id: ConfigRevisionId,
     model: &str,
 ) -> ConfigSnapshotDto {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(
-            std::env::temp_dir()
-                .join("intention-storage-test.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("fixture path is absolute"),
-    );
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\""
-        ),
-        source,
-    ))
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"fixture-secret\""
+    )))
     .expect("fixture configuration resolves");
-    ConfigSnapshotDto::new(SchemaVersionDto::new(1, 0), revision_id, time(1), resolved)
-        .expect("fixture snapshot is valid")
+    ConfigSnapshotDto::new(revision_id, time(1), resolved)
 }
 
 fn create(store: &SqliteStorageRepository) -> SessionId {
@@ -408,7 +393,10 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
     );
     assert_eq!(queued.content(), "second");
     assert_eq!(queued.session_id(), session);
-    let replayed = pending(
+    // The idempotency key is the proposed run identity, so accepting it twice
+    // is an already bound run identity and fails closed with the same typed
+    // conflict as any other repeated identity.
+    assert_eq!(
         store
             .accept_user_turn(
                 session,
@@ -418,29 +406,12 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
                 snapshot(),
                 time(4),
             )
-            .expect("pending replay is accepted"),
+            .expect_err("an already accepted key is already bound")
+            .code(),
+        "turn_identity_conflict"
     );
-    assert_eq!(replayed.turn_id(), queued.turn_id());
 
-    for (content, run, candidate) in [
-        ("changed content", second_run, snapshot()),
-        ("second", RunId::new(), snapshot()),
-        (
-            "second",
-            second_run,
-            snapshot_with_revision_and_model(ConfigRevisionId::new(), "fixture-other"),
-        ),
-    ] {
-        assert_eq!(
-            store
-                .accept_user_turn(session, second_key, content, run, candidate, time(5))
-                .expect_err("different durable content under one key conflicts")
-                .code(),
-            "turn_idempotency_conflict"
-        );
-    }
-
-    // The queue, the active run, and the committed transcript survive a reopen.
+    // The active run and the committed transcript survive a reopen.
     drop(store);
     let reopened = reopen(&directory);
     let projection = reopened
@@ -453,8 +424,6 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
             .run_id(),
         first_run
     );
-    assert_eq!(projection.pending_turns().len(), 1);
-    assert_eq!(projection.pending_turns()[0].turn_id(), queued.turn_id());
     assert_eq!(
         reopened
             .load_run_messages(session, first_run, 10)
@@ -473,13 +442,6 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
         )
         .expect("pending turn removes");
     assert_eq!(removed, queued);
-    assert!(
-        reopened
-            .load_session_projection(session)
-            .expect("session projection loads")
-            .pending_turns()
-            .is_empty()
-    );
     assert_eq!(
         reopened
             .accept_user_turn(
@@ -492,7 +454,7 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
             )
             .expect_err("a removed key stays bound to its durable state")
             .code(),
-        "turn_idempotency_conflict"
+        "turn_identity_conflict"
     );
     assert_eq!(
         reopened
@@ -503,39 +465,6 @@ fn create_accept_pending_idempotence_and_removal_are_typed_and_durable() {
             .expect_err("a removed turn cannot be removed twice")
             .code(),
         "pending_turn_not_found"
-    );
-}
-
-#[test]
-fn turn_idempotency_replay_reports_current_run_status_and_committed_message() {
-    let (_directory, store) = repository();
-    let session = create(&store);
-    let run = RunId::new();
-    let key = IdempotencyKey::new();
-    let (_, message) = started(
-        store
-            .accept_user_turn(session, key, "idempotent", run, snapshot(), time(2))
-            .expect("turn commits"),
-    );
-    store
-        .transition_run(session, run, RunStatusDto::Running, time(3))
-        .expect("run starts");
-
-    let (replayed_run, replayed_message) = started(
-        store
-            .accept_user_turn(session, key, "idempotent", run, snapshot(), time(4))
-            .expect("turn replay is accepted"),
-    );
-    assert_eq!(replayed_run.run_id(), run);
-    assert_eq!(replayed_run.status(), RunStatusDto::Running);
-    assert_eq!(replayed_message, message);
-    assert_eq!(
-        store
-            .load_run_messages(session, run, 10)
-            .expect("transcript loads")
-            .len(),
-        1,
-        "the idempotent replay commits no second transcript row"
     );
 }
 
@@ -563,11 +492,8 @@ fn pending_messages_never_start_runs_and_recovery_interrupts_unfinished_work() {
         )),
     ];
     assert_eq!(
-        store
-            .load_session_projection(session)
-            .expect("session projection loads")
-            .pending_turns(),
-        queued.as_slice(),
+        queued.len(),
+        2,
         "pending turns do not start runs while one is active"
     );
 
@@ -591,17 +517,17 @@ fn pending_messages_never_start_runs_and_recovery_interrupts_unfinished_work() {
     assert_eq!(promoted.run_id(), queued_runs[0]);
     assert_eq!(promoted.turn_id(), queued[0].turn_id());
     assert_eq!(promoted_message.text(), "first pending");
-    let projection = store
-        .load_session_projection(session)
-        .expect("session projection loads");
-    let ordered = projection
-        .pending_turns()
-        .iter()
-        .map(PendingTurnProjectionDto::turn_id)
-        .collect::<Vec<_>>();
-    assert_eq!(ordered.len(), 2);
-    assert_eq!(ordered[0], queued[1].turn_id());
-    assert_eq!(projection.pending_turns()[1].content(), "later");
+    let joined = store
+        .consume_pending_user_turns(session, promoted.run_id(), time(6))
+        .expect("the remaining pending turns join the promoted run");
+    assert_eq!(
+        joined
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["second pending", "later"],
+        "the queue keeps insertion order after the promoted turn left it"
+    );
 }
 
 #[test]
@@ -680,21 +606,6 @@ fn pending_messages_keep_insertion_order_and_removal_allows_the_oldest_to_start(
             "third pending",
         )),
     ];
-    let projection = store
-        .load_session_projection(session)
-        .expect("session projection loads");
-    assert_eq!(
-        projection
-            .pending_turns()
-            .iter()
-            .map(PendingTurnProjectionDto::turn_id)
-            .collect::<Vec<_>>(),
-        queued
-            .iter()
-            .map(PendingTurnProjectionDto::turn_id)
-            .collect::<Vec<_>>()
-    );
-
     store
         .remove_turn(
             RemoveTurnCommandDto::new(session, queued[0].turn_id()),
@@ -714,12 +625,17 @@ fn pending_messages_keep_insertion_order_and_removal_allows_the_oldest_to_start(
     assert_eq!(promoted.run_id(), queued_runs[1]);
     assert_eq!(promoted.turn_id(), queued[1].turn_id());
     assert_eq!(promoted_message.text(), "second pending");
-    let projection = store
-        .load_session_projection(session)
-        .expect("session projection loads");
-    assert_eq!(projection.pending_turns().len(), 2);
-    assert_eq!(projection.pending_turns()[0].turn_id(), queued[2].turn_id());
-    assert_eq!(projection.pending_turns()[1].content(), "later");
+    let remaining = store
+        .consume_pending_user_turns(session, promoted.run_id(), time(5))
+        .expect("the remaining pending turns join the promoted run");
+    assert_eq!(
+        remaining
+            .iter()
+            .map(MessageProjectionDto::text)
+            .collect::<Vec<_>>(),
+        vec!["third pending", "later"],
+        "the queue keeps insertion order after the promoted turn left it"
+    );
 }
 
 #[test]
@@ -769,37 +685,15 @@ fn consume_pending_user_turns_appends_ordered_messages_and_marks_turns_appended(
         vec!["active", "first pending", "second pending"],
         "joined messages keep insertion order after the starting turn"
     );
-    assert!(
-        store
-            .load_session_projection(session)
-            .expect("session projection loads")
-            .pending_turns()
-            .is_empty()
-    );
-    // A joined turn replays as its own pending projection, and a second
-    // consume joins nothing.
-    assert_eq!(
-        pending(
-            store
-                .accept_user_turn(
-                    session,
-                    first_key,
-                    "first pending",
-                    first_run,
-                    snapshot(),
-                    time(5),
-                )
-                .expect("a joined turn replays as pending")
-        )
-        .turn_id(),
-        first.turn_id()
-    );
+    // A second consume joins nothing: every queued turn already left the queue.
     assert!(
         store
             .consume_pending_user_turns(session, run, time(6))
             .expect("an empty consume commits")
             .is_empty()
     );
+    assert_eq!(first.content(), "first pending");
+    assert_eq!(second.content(), "second pending");
     assert_eq!(second.session_id(), session);
 }
 
@@ -1395,7 +1289,7 @@ fn finish_run_commits_terminal_outcome_and_is_idempotent() {
 
 #[test]
 fn recovery_marks_every_unfinished_run_interrupted_and_stamps_its_finish_time() {
-    let (directory, store) = repository();
+    let (_directory, store) = repository();
     let first_session = create(&store);
     let second_session = create(&store);
     let first_run = RunId::new();
@@ -1406,7 +1300,7 @@ fn recovery_marks_every_unfinished_run_interrupted_and_stamps_its_finish_time() 
         first_run,
         "first",
     );
-    let queued = pending(accept(
+    let _ = pending(accept(
         &store,
         first_session,
         IdempotencyKey::new(),
@@ -1472,11 +1366,6 @@ fn recovery_marks_every_unfinished_run_interrupted_and_stamps_its_finish_time() 
         RunStatusDto::Completed,
         "recovery leaves terminal runs untouched"
     );
-    let projection = store
-        .load_session_projection(first_session)
-        .expect("session projection loads");
-    assert!(projection.active_run().is_none());
-    assert_eq!(projection.pending_turns(), std::slice::from_ref(&queued));
     assert!(
         store
             .recover_unfinished_runs(time(6))
@@ -1487,36 +1376,28 @@ fn recovery_marks_every_unfinished_run_interrupted_and_stamps_its_finish_time() 
 
     // One transaction marked every unfinished run and stamped its finish time;
     // the already-terminal run keeps the time its own finish recorded.
-    let connection = sqlite::Connection::open(directory.path().join("storage.sqlite"))
-        .expect("database reopens for inspection");
-    let mut statement = connection
-        .prepare("SELECT status, finished_at FROM runs ORDER BY id")
-        .expect("run evidence prepares");
-    let evidence = statement
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?))
-        })
-        .expect("run evidence reads")
-        .map(|row| row.expect("run evidence row reads"))
-        .collect::<Vec<_>>();
-    drop(statement);
-    let interrupted = evidence
-        .iter()
-        .filter(|(status, _)| status == "interrupted")
-        .map(|(_, finished)| *finished)
-        .collect::<Vec<_>>();
+    for (session, run) in [(first_session, first_run), (second_session, unfinished_run)] {
+        let projection = store
+            .load_run_projection(session, run)
+            .expect("a recovered run loads");
+        assert_eq!(projection.status(), RunStatusDto::Interrupted);
+        assert_eq!(
+            projection
+                .finished_at()
+                .map(|finished| finished.unix_seconds()),
+            Some(5),
+            "every recovered run carries the recovery time as its finish time"
+        );
+    }
+    let completed = store
+        .load_run_projection(second_session, completed_run)
+        .expect("the completed run loads");
+    assert_eq!(completed.status(), RunStatusDto::Completed);
     assert_eq!(
-        interrupted,
-        vec![Some(5), Some(5)],
-        "every recovered run carries the recovery time as its finish time"
-    );
-    assert_eq!(
-        evidence
-            .iter()
-            .filter(|(status, _)| status == "completed")
-            .map(|(_, finished)| *finished)
-            .collect::<Vec<_>>(),
-        vec![Some(4)],
+        completed
+            .finished_at()
+            .map(|finished| finished.unix_seconds()),
+        Some(4),
         "an already-terminal run keeps its own finish time"
     );
 }
@@ -1538,7 +1419,7 @@ fn canonical_config_revision_binds_one_snapshot_across_both_entry_points() {
         .expect_err("revision cannot bind a different snapshot");
     assert_eq!(direct.code(), "config_revision_conflict");
     assert_eq!(direct.category(), ErrorCategoryDto::Conflict);
-    assert_eq!(direct.retry(), ErrorRetryDto::Never);
+    assert!(!direct.retryable());
     assert!(!direct.to_string().contains("fixture-secret"));
     assert!(!direct.to_string().contains("/tmp/"));
 
@@ -1680,7 +1561,7 @@ fn workspace_identity_and_root_bindings_conflict_in_both_directions() {
         .expect_err("a second workspace identity cannot bind the same root");
     assert_eq!(conflict.code(), "workspace_root_conflict");
     assert_eq!(conflict.category(), ErrorCategoryDto::Conflict);
-    assert_eq!(conflict.retry(), ErrorRetryDto::Never);
+    assert!(!conflict.retryable());
     assert_eq!(
         store
             .load_session_projection(SessionId::new())
@@ -1983,7 +1864,7 @@ fn reused_run_identity_across_sessions_is_a_typed_conflict() {
         .expect_err("the run identity is already durable in another session");
     assert_eq!(started_conflict.code(), "turn_identity_conflict");
     assert_eq!(started_conflict.category(), ErrorCategoryDto::Conflict);
-    assert_eq!(started_conflict.retry(), ErrorRetryDto::Never);
+    assert!(!started_conflict.retryable());
     // With an active run in the second session the reused identity would take
     // the queued path; it is rejected before that insert as well.
     let _ = accept(
@@ -2206,7 +2087,7 @@ fn unreadable_database_image_and_its_journal_are_discarded() {
 }
 
 #[test]
-fn pending_turns_projection_keeps_the_newest_turns_and_reports_omitted() {
+fn every_pending_turn_stays_in_the_durable_queue() {
     let (_directory, store) = repository();
     let session = create(&store);
     let active_run = RunId::new();
@@ -2225,14 +2106,14 @@ fn pending_turns_projection_keeps_the_newest_turns_and_reports_omitted() {
         RunId::new(),
         &large,
     ));
-    let second_large = pending(accept(
+    let _ = pending(accept(
         &store,
         session,
         IdempotencyKey::new(),
         RunId::new(),
         &large,
     ));
-    let newest = pending(accept(
+    let _ = pending(accept(
         &store,
         session,
         IdempotencyKey::new(),
@@ -2240,25 +2121,7 @@ fn pending_turns_projection_keeps_the_newest_turns_and_reports_omitted() {
         "newest",
     ));
 
-    let projection = store
-        .load_session_projection(session)
-        .expect("session projection loads");
-    assert_eq!(
-        projection.pending_turns_omitted(),
-        1,
-        "the bounded projection reports the turn it left out"
-    );
-    assert_eq!(projection.pending_turns().len(), 2);
-    assert_eq!(
-        projection.pending_turns()[0].turn_id(),
-        second_large.turn_id(),
-        "the newest turns that fit are kept in insertion order"
-    );
-    assert_eq!(projection.pending_turns()[1].turn_id(), newest.turn_id());
-    assert_eq!(projection.pending_turns()[1].content(), "newest");
-
-    // The durable queue is untouched: the admission read still joins every
-    // pending turn, including the one the projection left out.
+    // The durable queue keeps every pending turn, however large it is.
     let consumed = store
         .consume_pending_user_turns(session, run.run_id(), time(4))
         .expect("every pending turn joins the run");
@@ -2301,7 +2164,7 @@ fn finish_run_rejects_a_different_terminal_outcome_for_the_same_status() {
         .expect_err("a different terminal outcome for the same status conflicts");
     assert_eq!(conflict.code(), "run_outcome_conflict");
     assert_eq!(conflict.category(), ErrorCategoryDto::Conflict);
-    assert_eq!(conflict.retry(), ErrorRetryDto::Never);
+    assert!(!conflict.retryable());
     assert_eq!(
         store
             .finish_run(
@@ -2369,7 +2232,7 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
     let session = create(&store);
     let run = RunId::new();
     let _ = accept(&store, session, IdempotencyKey::new(), run, "active");
-    let queued = pending(accept(
+    let _ = pending(accept(
         &store,
         session,
         IdempotencyKey::new(),
@@ -2398,7 +2261,7 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
         .expect_err("a terminal run joins no pending turn");
     assert_eq!(terminal.code(), "run_already_terminal");
     assert_eq!(terminal.category(), ErrorCategoryDto::Conflict);
-    assert_eq!(terminal.retry(), ErrorRetryDto::Never);
+    assert!(!terminal.retryable());
     assert_eq!(
         store
             .append_message(
@@ -2442,10 +2305,6 @@ fn terminal_runs_reject_pending_turns_messages_and_tool_results() {
     );
 
     // Nothing the rejected writes addressed changed.
-    let projection = store
-        .load_session_projection(session)
-        .expect("session projection loads");
-    assert_eq!(projection.pending_turns(), std::slice::from_ref(&queued));
     assert_eq!(
         store
             .load_run_messages(session, run, 10)
@@ -2539,7 +2398,7 @@ fn accept_user_turn_rejects_content_over_the_durable_turn_bound() {
     assert_eq!(error.category(), ErrorCategoryDto::Validation);
     // Caller-fixable input carries the same retry class as the sibling blank
     // content rejection: the caller must send a smaller turn, not retry it.
-    assert_eq!(error.retry(), ErrorRetryDto::Manual);
+    assert!(!error.retryable());
 
     // Exactly the bound is admitted and starts the run.
     let (run, message) = started(
@@ -2693,20 +2552,18 @@ fn session_list_maps_every_durable_session_column() {
         2,
         "the summary counts the session's committed transcript rows"
     );
-    assert!(summary.active_run().is_none());
 }
 
 #[test]
-fn session_list_maps_the_active_run_of_each_session() {
+fn session_list_orders_sessions_newest_first_and_counts_their_rows() {
     let (_directory, store) = repository();
     let idle = create_at(&store, 10);
     let starting = create_at(&store, 20);
-    let starting_run = RunId::new();
     let _ = accept(
         &store,
         starting,
         IdempotencyKey::new(),
-        starting_run,
+        RunId::new(),
         "starting",
     );
     let running = create_at(&store, 30);
@@ -2763,24 +2620,10 @@ fn session_list_maps_the_active_run_of_each_session() {
             .find(|summary| summary.session_id() == session)
             .expect("every created session is listed")
     };
-    assert!(
-        summary_of(idle).active_run().is_none(),
-        "an idle session carries no active run"
+    assert_eq!(summary_of(idle).message_count(), 0);
+    assert_eq!(
+        summary_of(running).message_count(),
+        1,
+        "a session summary counts its committed transcript rows"
     );
-    assert!(
-        summary_of(finished).active_run().is_none(),
-        "a terminal run is not active"
-    );
-    let starting_run_dto = summary_of(starting)
-        .active_run()
-        .expect("a starting run is active");
-    assert_eq!(starting_run_dto.session_id(), starting);
-    assert_eq!(starting_run_dto.run_id(), starting_run);
-    assert_eq!(starting_run_dto.status(), RunStatusDto::Starting);
-    let running_run_dto = summary_of(running)
-        .active_run()
-        .expect("a running run is active");
-    assert_eq!(running_run_dto.session_id(), running);
-    assert_eq!(running_run_dto.run_id(), running_run);
-    assert_eq!(running_run_dto.status(), RunStatusDto::Running);
 }

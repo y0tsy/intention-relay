@@ -1,14 +1,13 @@
-use std::sync::atomic::{AtomicI64, Ordering};
-
-use intention_client::SessionStreamState;
 use intention_proto::{
-    BoundedText, ConfigRevisionId, DaemonHealthDto, ErrorDto, ExecuteResult, GrepResult, MessageId,
-    MessageKindDto, MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto,
+    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageProjectionDto, RunId, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
-    ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto, WriteResult,
+    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ToolCallId,
+    WorkspaceRootDto,
+};
+use intention_test_support::fixtures::{
+    FIRST_SESSION, SECOND_SESSION, assistant_row, fixture_session, full_transcript, reasoning_row,
+    run, run_in, snapshot, snapshot_in_mode, stream_state, summary, summary_in_root, tool_call_row,
+    tool_result_row, user_row, workspace_root,
 };
 
 use super::{
@@ -16,134 +15,6 @@ use super::{
     InputCursorMove, InputHistoryMove, MenuMove, RunPhase, Screen, StreamStatus,
     TRANSCRIPT_DRAG_ROWS, Theme, ThemePreference, TranscriptScroll,
 };
-
-/// The canonical id of the first fixture session.
-const FIRST_SESSION: &str = "11111111-1111-4111-8111-111111111111";
-
-/// The canonical id of the second fixture session.
-const SECOND_SESSION: &str = "22222222-2222-4222-8222-222222222222";
-
-/// Returns the fixture session id spelled by one canonical UUID literal.
-fn fixture_session(value: &str) -> SessionId {
-    SessionId::parse(value).expect("the fixture session id is canonical")
-}
-
-/// Returns one fresh durable row identity for a committed fixture row.
-fn row_id() -> MessageId {
-    static NEXT: AtomicI64 = AtomicI64::new(0);
-    MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
-        .expect("the fixture row identity is positive")
-}
-
-fn workspace_root() -> WorkspaceRootDto {
-    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-        .expect("the process temporary directory is an absolute workspace root")
-}
-
-fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
-    run_in(session_id, run_id, status, None, 0)
-}
-
-/// Returns one run projection with the committed usage and open calls a test
-/// needs, and a finish time exactly when `status` is terminal.
-fn run_in(
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    usage: Option<intention_proto::UsageDto>,
-    open_tool_calls: u32,
-) -> RunProjectionDto {
-    let started_at =
-        TimestampDto::from_unix_seconds(1_726_000_000).expect("fixture timestamp is valid");
-    let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
-    RunProjectionDto::new(
-        session_id,
-        run_id,
-        TurnId::new(),
-        status,
-        ConfigRevisionId::new(),
-        usage,
-        started_at,
-        finished_at,
-        open_tool_calls,
-    )
-    .expect("fixture run projection is valid")
-}
-
-fn session_projection(
-    session_id: SessionId,
-    active_run: Option<RunProjectionDto>,
-) -> SessionProjectionDto {
-    SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        active_run,
-        Vec::new(),
-    )
-    .expect("the fixture session projection is coherent")
-}
-
-fn snapshot(
-    session_id: SessionId,
-    active_run: Option<RunProjectionDto>,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionSnapshotDto {
-    SessionSnapshotDto::with_projection(
-        session_id,
-        session_projection(session_id, active_run),
-        messages,
-    )
-    .expect("the fixture session snapshot is coherent")
-}
-
-/// Returns one session snapshot whose projection declares `mode`.
-fn snapshot_in_mode(
-    session_id: SessionId,
-    mode: RunModeDto,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionSnapshotDto {
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        mode,
-        None,
-        None,
-        Vec::new(),
-    )
-    .expect("the fixture session projection is coherent");
-    SessionSnapshotDto::with_projection(session_id, projection, messages)
-        .expect("the fixture session snapshot is coherent")
-}
-
-fn summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto {
-    summary_in_root(session_id, updated_at, workspace_root())
-}
-
-/// Returns one session summary durably bound to `root`.
-fn summary_in_root(
-    session_id: SessionId,
-    updated_at: i64,
-    root: WorkspaceRootDto,
-) -> SessionSummaryDto {
-    let updated_at = TimestampDto::from_unix_seconds(updated_at).expect("fixture time is valid");
-    SessionSummaryDto::new(
-        session_id,
-        ProjectId::new(),
-        WorkspaceId::new(),
-        RunModeDto::Build,
-        updated_at,
-        updated_at,
-        root,
-        0,
-        None,
-    )
-}
 
 /// Returns one fixture workspace root distinct from [`workspace_root`].
 fn other_workspace_root() -> WorkspaceRootDto {
@@ -158,181 +29,6 @@ fn other_workspace_root() -> WorkspaceRootDto {
 
 fn summaries(sessions: Vec<SessionSummaryDto>) -> SessionSummariesDto {
     SessionSummariesDto::new(sessions, 0).expect("the fixture session list is coherent")
-}
-
-fn stream_state(
-    session_id: SessionId,
-    run_id: RunId,
-    status: RunStatusDto,
-    messages: Vec<MessageProjectionDto>,
-) -> SessionStreamState {
-    SessionStreamState::from_snapshot(snapshot(
-        session_id,
-        Some(run(session_id, run_id, status)),
-        messages,
-    ))
-}
-
-/// Returns one client state holding exactly the rows it retains.
-///
-/// Rows are read into the state until its retained count stops growing, so the
-/// fixture measures the client's own window through the client instead of
-/// restating its bound.
-fn full_transcript(session_id: SessionId, run_id: RunId) -> SessionStreamState {
-    let mut state = SessionStreamState::new(session_id);
-    let mut retained = 0;
-    loop {
-        let row = reasoning_row(session_id, run_id, &format!("row {retained}"), "thought");
-        let read = SessionStreamState::from_snapshot(snapshot(
-            session_id,
-            Some(run(session_id, run_id, RunStatusDto::Running)),
-            vec![row],
-        ));
-        state
-            .reconcile(read)
-            .expect("the fixture read belongs to the state's own session");
-        if state.messages().len() == retained {
-            return state;
-        }
-        retained = state.messages().len();
-    }
-}
-
-fn user_row(session_id: SessionId, run_id: Option<RunId>, text: &str) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        run_id,
-        MessageKindDto::User,
-        text,
-        None,
-        None,
-    )
-    .expect("the fixture user row is coherent")
-}
-
-fn assistant_row(session_id: SessionId, run_id: RunId, text: &str) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::Assistant,
-        text,
-        None,
-        None,
-    )
-    .expect("the fixture assistant row is coherent")
-}
-
-/// Returns one committed assistant row carrying `reasoning` above its text.
-fn reasoning_row(
-    session_id: SessionId,
-    run_id: RunId,
-    text: &str,
-    reasoning: &str,
-) -> MessageProjectionDto {
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::Assistant,
-        text,
-        Some(reasoning.to_owned()),
-        None,
-    )
-    .expect("the fixture reasoning row is coherent")
-}
-
-/// Returns one parsed fixture tool identity.
-fn identity(tool_id: &str) -> ToolIdentityDto {
-    ToolIdentityDto::parse(tool_id).expect("the fixture tool identity is well-formed")
-}
-
-/// Returns one typed result payload of the declared `tool_id` fixture.
-fn payload(tool_id: ToolId, content: &str) -> ToolResult {
-    match tool_id {
-        ToolId::Read => ToolResult::Read(TextResult {
-            text: BoundedText::new(content).expect("the fixture text is bounded"),
-            truncated: false,
-        }),
-        ToolId::Glob => ToolResult::Glob(PathsResult {
-            paths: Vec::new(),
-            truncated: false,
-        }),
-        ToolId::Grep => ToolResult::Grep(GrepResult {
-            matches: Vec::new(),
-            truncated: false,
-        }),
-        ToolId::Write => ToolResult::Write(WriteResult { bytes: 0 }),
-        ToolId::Edit => ToolResult::Edit(WriteResult { bytes: 0 }),
-        ToolId::Execute => ToolResult::Execute(ExecuteResult {
-            text: TextResult {
-                text: BoundedText::new(content).expect("the fixture text is bounded"),
-                truncated: false,
-            },
-            process: Some(ToolProcessStatus::Success),
-        }),
-    }
-}
-
-/// Returns one committed tool-call row carrying `arguments` for `call_id`.
-fn tool_call_row(
-    session_id: SessionId,
-    run_id: RunId,
-    tool_id: &str,
-    arguments: &str,
-    call_id: ToolCallId,
-) -> MessageProjectionDto {
-    let tool = ToolRowDto::Call(
-        ToolCallRowDto::new(
-            call_id,
-            identity(tool_id),
-            ToolInput::from_arguments_json(tool_id, arguments).ok(),
-        )
-        .expect("the fixture call row is coherent"),
-    );
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::ToolCall,
-        arguments,
-        None,
-        Some(tool),
-    )
-    .expect("the fixture tool-call row is coherent")
-}
-
-/// Returns one committed completed tool-result row carrying `content` for
-/// `call_id`.
-fn tool_result_row(
-    session_id: SessionId,
-    run_id: RunId,
-    tool_id: &str,
-    content: &str,
-    call_id: ToolCallId,
-) -> MessageProjectionDto {
-    let id = ToolId::parse(tool_id).expect("the fixture tool is one of the declared tools");
-    let tool = ToolRowDto::Result(
-        ToolResultRowDto::new(
-            call_id,
-            identity(tool_id),
-            ToolResultStatusDto::Completed,
-            Some(payload(id, content)),
-            Vec::new(),
-        )
-        .expect("the fixture result row is coherent"),
-    );
-    MessageProjectionDto::new(
-        row_id(),
-        session_id,
-        Some(run_id),
-        MessageKindDto::ToolResult,
-        content,
-        None,
-        Some(tool),
-    )
-    .expect("the fixture tool-result row is coherent")
 }
 
 /// Applies one committed transcript row to `state` as a stream content frame.
@@ -524,10 +220,7 @@ fn bootstrap_lists_sessions_and_opens_the_selected_session() {
         vec![Effect::ListSessions, Effect::OpenSession(session_id)],
         "an explicitly selected session is opened without waiting for the list"
     );
-    assert_eq!(
-        state.connection(),
-        ConnectionStatus::Ready(intention_proto::DaemonReadinessDto::Ready)
-    );
+    assert_eq!(state.connection(), ConnectionStatus::Ready);
     assert_eq!(state.error(), None);
 }
 
@@ -989,6 +682,47 @@ fn a_slash_new_command_creates_a_session() {
 }
 
 #[test]
+fn a_slash_session_command_opens_the_session_its_identifier_names() {
+    let session_id = SessionId::new();
+    let mut state = AppState::new(None);
+    type_text(&mut state, &format!("/session {session_id}"));
+    let effects = run_command(&mut state);
+    assert_eq!(
+        effects,
+        vec![Effect::OpenSession(session_id)],
+        "the free-form word reaches the client read as the identifier it spells"
+    );
+    assert_eq!(state.input(), "", "a command never stays in the input line");
+    assert_eq!(state.notice(), None, "the read reports itself");
+
+    // The identifier is the argument the line must spell, and a word that is
+    // no durable identifier is refused by the transition that parses it.
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/session");
+    let effects = run_command(&mut state);
+    assert!(effects.is_empty());
+    assert_eq!(state.notice(), Some("missing argument \"session\""));
+
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/session not-an-identifier");
+    let effects = run_command(&mut state);
+    assert!(effects.is_empty(), "no client read leaves for a bad word");
+    assert_eq!(
+        state.notice(),
+        Some("/session requires a canonical session identifier")
+    );
+}
+
+#[test]
+fn a_slash_quit_command_leaves_the_front_end() {
+    let mut state = AppState::new(None);
+    type_text(&mut state, "/quit");
+    let effects = run_command(&mut state);
+    assert!(effects.is_empty(), "leaving asks for no client work");
+    assert!(state.should_quit(), "the exit needs no second press here");
+}
+
+#[test]
 fn an_unknown_slash_command_lists_the_known_commands() {
     let session_id = SessionId::new();
     let mut state = opened_session(session_id, Vec::new());
@@ -998,7 +732,7 @@ fn an_unknown_slash_command_lists_the_known_commands() {
     assert_eq!(state.input(), "");
     assert_eq!(
         state.notice(),
-        Some("unknown command /watch; known commands: /new /sessions /theme")
+        Some("unknown command /watch; known commands: /new /sessions /theme /session /quit")
     );
 }
 
@@ -1059,14 +793,16 @@ fn the_hint_menu_opens_on_a_leading_slash_and_stays_closed_otherwise() {
     let menu = state
         .command_menu()
         .expect("a leading slash opens the menu");
-    assert_eq!(menu.len(), 3, "a bare slash offers every command");
+    assert_eq!(menu.len(), 5, "a bare slash offers every command");
     assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
     assert_eq!(
         menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
         vec![
             "/new".to_owned(),
             "/sessions".to_owned(),
-            "/theme".to_owned()
+            "/theme".to_owned(),
+            "/session".to_owned(),
+            "/quit".to_owned()
         ],
         "a bare slash lists the registry in registry order"
     );
@@ -1081,15 +817,22 @@ fn the_hint_menu_filters_as_the_word_grows() {
         .expect("a prefix match keeps the menu open");
     assert_eq!(
         menu.rows().map(|row| row.label()).collect::<Vec<_>>(),
-        vec!["/sessions".to_owned()],
-        "s narrows the list to the command that starts with it"
+        vec!["/sessions".to_owned(), "/session".to_owned()],
+        "s narrows the list to the two commands that start with it"
     );
 
     type_text(&mut state, "e");
     assert_eq!(
         state.command_menu().map(|menu| menu.len()),
-        Some(1),
+        Some(2),
         "the list keeps narrowing as the word grows"
+    );
+
+    type_text(&mut state, "ssions");
+    assert_eq!(
+        state.command_menu().map(|menu| menu.len()),
+        Some(1),
+        "the longer word selects the one command it spells"
     );
 
     let mut state = AppState::new(None);
@@ -1137,19 +880,28 @@ fn the_hint_menu_highlight_moves_with_the_arrows_while_the_history_waits() {
     assert_eq!(
         state.command_menu().map(|menu| menu.highlight()),
         Some(2),
-        "Down keeps walking the three registered commands"
+        "Down keeps walking the registered commands"
     );
+    for expected in 3..5 {
+        state.update(Action::MenuMove(MenuMove::Down));
+        assert_eq!(
+            state.command_menu().map(|menu| menu.highlight()),
+            Some(expected)
+        );
+    }
     state.update(Action::MenuMove(MenuMove::Down));
     assert_eq!(
         state.command_menu().map(|menu| menu.highlight()),
-        Some(2),
+        Some(4),
         "the highlight stops at the list's last row"
     );
-    state.update(Action::MenuMove(MenuMove::Up));
-    assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(1));
-    state.update(Action::MenuMove(MenuMove::Up));
-    assert_eq!(state.command_menu().map(|menu| menu.highlight()), Some(0));
-
+    for expected in (0..4).rev() {
+        state.update(Action::MenuMove(MenuMove::Up));
+        assert_eq!(
+            state.command_menu().map(|menu| menu.highlight()),
+            Some(expected)
+        );
+    }
     state.update(Action::MenuMove(MenuMove::Up));
     assert_eq!(
         state.command_menu().map(|menu| menu.highlight()),
@@ -1166,21 +918,21 @@ fn the_hint_menu_highlight_moves_with_the_arrows_while_the_history_waits() {
 
 #[test]
 fn the_hint_menu_commits_the_highlighted_command_with_a_trailing_space() {
-    for (key, highlight) in [(Action::MenuAccept, 0), (Action::MenuAccept, 1)] {
+    for (highlight, expected) in [(0, "/sessions "), (1, "/session ")] {
         let mut state = AppState::new(None);
         type_text(&mut state, "/s");
         for _ in 0..highlight {
             state.update(Action::MenuMove(MenuMove::Down));
         }
-        state.update(key);
+        state.update(Action::MenuAccept);
         assert_eq!(
             state.input(),
-            "/sessions ",
+            expected,
             "the committed command is spelled out with one trailing space"
         );
         assert_eq!(
             state.cursor(),
-            "/sessions ".chars().count(),
+            expected.chars().count(),
             "the caret lands ready for the command's arguments"
         );
         assert!(
@@ -1476,9 +1228,25 @@ fn the_registry_answers_for_both_submission_and_the_menu() {
             "/{} is offered by the menu",
             command.name
         );
+        // A required argument is one the line must spell: the free-form one
+        // takes any word, a declared one takes its first value.
+        for argument in command
+            .arguments
+            .iter()
+            .filter(|argument| argument.required)
+        {
+            type_text(&mut state, " ");
+            type_text(
+                &mut state,
+                argument
+                    .values
+                    .first()
+                    .map_or("0b1a2c3d-0000-4000-8000-000000000000", |value| value.value),
+            );
+        }
         let effects = run_command(&mut state);
         assert!(
-            !effects.is_empty() || state.screen() != Screen::Chat,
+            !effects.is_empty() || state.screen() != Screen::Chat || state.should_quit(),
             "/{} is dispatched by the submission path",
             command.name
         );
@@ -1496,7 +1264,7 @@ fn the_registry_answers_for_both_submission_and_the_menu() {
     state.update(Action::InputSubmitted);
     assert_eq!(
         state.notice(),
-        Some("unknown command /nothing; known commands: /new /sessions /theme"),
+        Some("unknown command /nothing; known commands: /new /sessions /theme /session /quit"),
         "the unknown-command notice answers from the registry"
     );
 }
@@ -1876,52 +1644,14 @@ fn escape_closes_the_browser_without_changing_the_session() {
 fn the_browser_tabs_cycle_forward_and_backward() {
     let open = fixture_session(FIRST_SESSION);
     let mut state = opened_browser(open, vec![summary(open, 20)]);
-    for tab in [
-        BrowserTab::Exec,
-        BrowserTab::Favorites,
-        BrowserTab::Archived,
-        BrowserTab::CurrentFolder,
-        BrowserTab::All,
-    ] {
+    for tab in [BrowserTab::CurrentFolder, BrowserTab::All] {
         state.update(Action::BrowserTabNext);
         assert_eq!(state.browser_tab(), tab);
     }
-    for tab in [
-        BrowserTab::CurrentFolder,
-        BrowserTab::Archived,
-        BrowserTab::Favorites,
-        BrowserTab::Exec,
-        BrowserTab::All,
-    ] {
+    for tab in [BrowserTab::CurrentFolder, BrowserTab::All] {
         state.update(Action::BrowserTabPrevious);
         assert_eq!(state.browser_tab(), tab);
     }
-}
-
-#[test]
-fn a_stub_tab_shows_no_rows_and_names_the_missing_core_fact() {
-    let open = fixture_session(FIRST_SESSION);
-    let mut state = opened_browser(open, vec![summary(open, 20)]);
-    assert_eq!(
-        browser_row_ids(&state),
-        vec![open],
-        "the `All` tab selects every listed session"
-    );
-    state.update(Action::BrowserTabNext);
-    assert_eq!(state.browser_tab(), BrowserTab::Exec);
-    assert!(state.browser_rows().is_empty(), "a stub tab shows no row");
-    let reason = state
-        .browser_empty_reason()
-        .expect("a stub tab explains its empty state");
-    assert!(
-        reason.starts_with("@todo(core):"),
-        "the reason names the missing core fact: {reason}"
-    );
-    assert_eq!(
-        state.browser_cursor(),
-        0,
-        "a result without rows has no cursor"
-    );
 }
 
 #[test]
@@ -2064,29 +1794,6 @@ fn enter_without_a_row_notes_it_and_keeps_the_browser_open() {
     assert!(effects.is_empty());
     assert_eq!(state.screen(), Screen::Sessions);
     assert_eq!(state.notice(), Some("no session to select"));
-}
-
-#[test]
-fn the_unsupported_browser_requests_note_and_change_nothing() {
-    let first = fixture_session(FIRST_SESSION);
-    let mut state = opened_browser(first, vec![summary(first, 30)]);
-    for action in [
-        Action::BrowserRenameRequested,
-        Action::BrowserArchiveRequested,
-        Action::BrowserTreeRequested,
-    ] {
-        let effects = state.update(action.clone());
-        assert!(effects.is_empty(), "{action:?} asks for no client work yet");
-        assert!(
-            state
-                .notice()
-                .is_some_and(|notice| notice.contains("needs core support")),
-            "{action:?} reports why it is unsupported"
-        );
-        assert_eq!(state.screen(), Screen::Sessions);
-        assert_eq!(state.session_id(), Some(first));
-        assert_eq!(browser_row_ids(&state), vec![first]);
-    }
 }
 
 #[test]
@@ -2551,7 +2258,9 @@ fn a_trim_of_the_oldest_rows_reports_no_append_since_the_previous_epoch() {
     let run_id = RunId::new();
     let mut state = opened_session(session_id, Vec::new());
     state.update(Action::SessionStreamOpened(full_transcript(
-        session_id, run_id,
+        session_id,
+        run_id,
+        |index| reasoning_row(session_id, run_id, &format!("row {index}"), "thought"),
     )));
     let retained = state.transcript().len();
     let epoch = state.transcript_epoch();
@@ -2955,6 +2664,7 @@ fn the_session_mode_comes_from_the_snapshot_projection() {
     state.update(Action::SessionSnapshotLoaded(snapshot_in_mode(
         session_id,
         RunModeDto::Plan,
+        None,
         Vec::new(),
     )));
     assert_eq!(
@@ -3802,7 +3512,9 @@ fn an_expansion_clears_when_the_transcript_is_front_trimmed() {
     let run_id = RunId::new();
     let mut state = opened_session(session_id, Vec::new());
     state.update(Action::SessionStreamOpened(full_transcript(
-        session_id, run_id,
+        session_id,
+        run_id,
+        |index| reasoning_row(session_id, run_id, &format!("row {index}"), "thought"),
     )));
     let retained = state.transcript().len();
     state.update(Action::SelectTranscriptRows {

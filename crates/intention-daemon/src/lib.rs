@@ -23,6 +23,7 @@ use intention_engine::{
     ApplicationService, ModelRunExecutionOutcomeDto, ModelRunExecutionService, ModelSleepFuture,
     ModelTextDeltaPort, ModelTimePort, RunCancellation, SessionCommitDto, SessionCommitObserver,
     ToolExecutionPort, ToolInvocationRequestDto, ToolResultOutcomeDto, fail_starting_run,
+    terminalize_active_run,
 };
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, DtoResult, ErrorDto, MessageKindDto, RunId,
@@ -34,7 +35,7 @@ use intention_proto::{
     TextDeltaFrameDto, decode_request_line,
 };
 use intention_proto::{RunStatusDto, run_status_is_terminal};
-use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
+use intention_storage::StorageRepositoryDto;
 use intention_tools::WorkspaceRoot;
 use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint};
 
@@ -86,73 +87,24 @@ struct HostData {
     subscribers: HashMap<SessionId, Vec<Subscriber>>,
 }
 
-/// The one execution-recording seam of the daemon host.
+/// The execution handles one test or test-support host build records.
 ///
-/// Every admitted run registers its completion signal and hands its spawned
-/// execution task to this seam. A production build records nothing: the durable
-/// run registry and the one commit observer are all a production execution
-/// needs, and a detached task needs no owner. A test or test-support build
-/// records the per-run completion senders and the spawned task handles so a
-/// fixture can wait for the exact admitted execution and can abort and join
-/// every task it created. Only the seam implementation is conditional, so no
-/// production shape carries fixture state.
-trait ExecutionRecorder: Send + Sync {
-    /// Registers the completion signal of one newly admitted run.
-    fn register(&self, key: RunKey);
-
-    /// Takes ownership of one spawned execution task.
-    fn track(&self, task: tokio::task::JoinHandle<()>);
-
-    /// Reports that the exact registered execution has returned.
-    ///
-    /// The recorded sender stays in the recorder so the unified terminalizer
-    /// can report completion for runs it terminalizes after the executor task
-    /// has already returned (PR24-013).
-    fn signal(&self, key: RunKey);
-}
-
-/// Fixture-only inspection of the execution recorder.
-///
-/// It exists only in a test or test-support build, where the recorder keeps the
-/// state a fixture waits on and aborts; a production recorder has nothing to
-/// inspect.
-#[cfg(any(test, feature = "test-support"))]
-trait RecordedExecution: ExecutionRecorder {
-    /// Returns a receiver of the exact run's completion signal.
-    fn completion(&self, key: RunKey) -> Option<tokio::sync::watch::Receiver<bool>>;
-
-    /// Returns every execution task this recorder still owns, leaving none.
-    ///
-    /// The teardown boundary also releases every recorded completion signal, so
-    /// the recorder holds no per-run state after a fixture takes its tasks.
-    fn take_tasks(&self) -> Vec<tokio::task::JoinHandle<()>>;
-}
-
-/// The production execution recorder: a zero-sized no-op.
-#[cfg(not(any(test, feature = "test-support")))]
-#[derive(Default)]
-struct NoopExecutionRecorder;
-
-#[cfg(not(any(test, feature = "test-support")))]
-impl ExecutionRecorder for NoopExecutionRecorder {
-    fn register(&self, _key: RunKey) {}
-
-    fn track(&self, _task: tokio::task::JoinHandle<()>) {}
-
-    fn signal(&self, _key: RunKey) {}
-}
-
-/// The fixture execution recorder: keeps the completion sender of every
-/// admitted run and the handle of every spawned execution task.
+/// A production host records nothing: the durable run registry and the one
+/// commit observer are all a production execution needs, and a detached task
+/// needs no owner, so the field and its call sites do not exist there. A test
+/// or test-support build records the per-run completion senders and the
+/// spawned task handles so a fixture can wait for the exact admitted execution
+/// and can abort and join every task it created.
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Default)]
-struct RecordingExecutionRecorder {
+struct ExecutionRecorder {
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     completions: Mutex<HashMap<RunKey, tokio::sync::watch::Sender<bool>>>,
 }
 
 #[cfg(any(test, feature = "test-support"))]
-impl ExecutionRecorder for RecordingExecutionRecorder {
+impl ExecutionRecorder {
+    /// Registers the completion signal of one newly admitted run.
     fn register(&self, key: RunKey) {
         if let Ok(mut completions) = self.completions.lock() {
             let (completion, _) = tokio::sync::watch::channel(false);
@@ -160,6 +112,7 @@ impl ExecutionRecorder for RecordingExecutionRecorder {
         }
     }
 
+    /// Takes ownership of one spawned execution task.
     fn track(&self, task: tokio::task::JoinHandle<()>) {
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.push(task);
@@ -168,6 +121,11 @@ impl ExecutionRecorder for RecordingExecutionRecorder {
         }
     }
 
+    /// Reports that the exact registered execution has returned.
+    ///
+    /// The recorded sender stays in the recorder so a fixture can report
+    /// completion for runs the host terminalizes after the executor task has
+    /// already returned (PR24-013).
     fn signal(&self, key: RunKey) {
         if let Ok(completions) = self.completions.lock()
             && let Some(completion) = completions.get(&key)
@@ -175,10 +133,8 @@ impl ExecutionRecorder for RecordingExecutionRecorder {
             let _ = completion.send_replace(true);
         }
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl RecordedExecution for RecordingExecutionRecorder {
+    /// Returns a receiver of the exact run's completion signal.
     fn completion(&self, key: RunKey) -> Option<tokio::sync::watch::Receiver<bool>> {
         self.completions
             .lock()
@@ -187,10 +143,11 @@ impl RecordedExecution for RecordingExecutionRecorder {
             .map(|sender| sender.subscribe())
     }
 
+    /// Returns every execution task this recorder still owns, leaving none.
+    ///
+    /// The teardown boundary also releases every recorded completion signal, so
+    /// the recorder holds no per-run state after a fixture takes its tasks.
     fn take_tasks(&self) -> Vec<tokio::task::JoinHandle<()>> {
-        // The teardown boundary releases every recorded execution: the tasks
-        // are taken, and the completion senders are dropped with them, so a
-        // long-lived fixture host holds no per-run state past its teardown.
         if let Ok(mut completions) = self.completions.lock() {
             completions.clear();
         }
@@ -200,13 +157,6 @@ impl RecordedExecution for RecordingExecutionRecorder {
         std::mem::take(&mut tasks)
     }
 }
-
-/// The execution recorder one host build uses.
-#[cfg(not(any(test, feature = "test-support")))]
-type HostRecorder = NoopExecutionRecorder;
-
-#[cfg(any(test, feature = "test-support"))]
-type HostRecorder = RecordingExecutionRecorder;
 
 /// Reports one finished execution's terminal failure on stderr.
 ///
@@ -230,10 +180,22 @@ struct HostState {
     data: Mutex<HostData>,
     /// Wakes a shutdown drain whenever one execution task deregisters.
     executions: tokio::sync::Notify,
-    recorder: HostRecorder,
+    #[cfg(any(test, feature = "test-support"))]
+    recorder: ExecutionRecorder,
 }
 
 impl HostState {
+    /// Takes ownership of one spawned host task.
+    ///
+    /// A production host keeps no handle: a detached task needs no owner, so
+    /// the handle is dropped and the task runs on. A test or test-support host
+    /// records it so a fixture can abort and join every task it created.
+    fn track_task(&self, task: tokio::task::JoinHandle<()>) {
+        #[cfg(any(test, feature = "test-support"))]
+        self.recorder.track(task);
+        #[cfg(not(any(test, feature = "test-support")))]
+        drop(task);
+    }
     fn schedule_if_starting(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
         let key = (session_id, run_id);
         // Admission and the stop share this registry lock: a stop either
@@ -279,6 +241,7 @@ impl HostState {
         };
         entry.insert(cancellation.clone());
         drop(data);
+        #[cfg(any(test, feature = "test-support"))]
         self.recorder.register(key);
         let host = Arc::clone(self);
         let task = tokio::spawn(async move {
@@ -286,10 +249,9 @@ impl HostState {
             // cadence task, and one commit observer, and all three are dropped
             // with the run.
             let deltas = Arc::new(RunTextDeltas::new(Arc::clone(&host), key));
-            host.recorder
-                .track(tokio::spawn(publish_text_deltas_at_cadence(Arc::clone(
-                    &deltas,
-                ))));
+            host.track_task(tokio::spawn(publish_text_deltas_at_cadence(Arc::clone(
+                &deltas,
+            ))));
             let observer = HostCommitObserver {
                 host: Arc::clone(&host),
                 deltas: Some(Arc::clone(&deltas)),
@@ -332,9 +294,10 @@ impl HostState {
                 data.tasks.remove(&key);
             }
             host.executions.notify_waiters();
+            #[cfg(any(test, feature = "test-support"))]
             host.recorder.signal(key);
         });
-        self.recorder.track(task);
+        self.track_task(task);
     }
 
     /// Stops one active run for good.
@@ -384,16 +347,16 @@ impl HostState {
     /// commit.
     fn stop_active_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) -> DtoResult<()> {
         let stopped = self.facade.command_gate().run(|| {
-            let repository = self.facade.repository();
-            let run = repository.load_run_projection(session_id, run_id)?;
-            if run_status_is_terminal(run.status()) {
-                return Ok(false);
-            }
-            let outcome = RunOutcomeDto::new(RunStatusDto::Interrupted, None, None, None, None)?;
-            repository.finish_run(session_id, run_id, outcome, composition::now()?)?;
-            Ok(true)
+            terminalize_active_run(
+                self.facade.repository(),
+                session_id,
+                run_id,
+                RunStatusDto::Interrupted,
+                None,
+                composition::now()?,
+            )
         })?;
-        if stopped {
+        if stopped.is_some() {
             self.on_terminal(session_id, run_id);
         }
         Ok(())
@@ -449,19 +412,14 @@ impl HostState {
         failure_code: &str,
     ) -> DtoResult<()> {
         self.facade.command_gate().run(|| {
-            let repository = self.facade.repository();
-            let run = repository.load_run_projection(session_id, run_id)?;
-            if run_status_is_terminal(run.status()) {
-                return Ok(());
-            }
-            let outcome = RunOutcomeDto::new(
+            terminalize_active_run(
+                self.facade.repository(),
+                session_id,
+                run_id,
                 RunStatusDto::Failed,
-                None,
-                None,
-                Some(failure_code.to_owned()),
-                Some("the scheduled run execution failed".to_owned()),
+                Some((failure_code, "the scheduled run execution failed")),
+                composition::now()?,
             )?;
-            repository.finish_run(session_id, run_id, outcome, composition::now()?)?;
             Ok(())
         })
     }
@@ -499,7 +457,7 @@ impl HostState {
             })
             .await;
         });
-        self.recorder.track(task);
+        self.track_task(task);
     }
 
     /// Returns the currently active durable run when it is eligible for admission.
@@ -1197,7 +1155,8 @@ fn new_host(facade: DaemonApplicationFacade) -> Arc<HostState> {
         facade,
         data: Mutex::new(HostData::default()),
         executions: tokio::sync::Notify::new(),
-        recorder: HostRecorder::default(),
+        #[cfg(any(test, feature = "test-support"))]
+        recorder: ExecutionRecorder::default(),
     })
 }
 
@@ -1666,18 +1625,16 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use intention_config::{
-        ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-    };
+    use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_proto::{
-        ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonReadinessDto,
+        ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
         GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto,
         MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
         RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
         SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto, decode_response, encode_request,
         parse_daemon_message,
     };
-    use intention_proto::{ProjectId, RunId, SchemaVersionDto, TimestampDto};
+    use intention_proto::{ProjectId, RunId, TimestampDto};
     use intention_providers::{
         FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
         ModelEventStream, ModelExecutionDriver,
@@ -1701,27 +1658,15 @@ mod tests {
     }
 
     fn fixture_snapshot() -> ConfigSnapshotDto {
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("intention-daemon-unit.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("fixture configuration path is absolute"),
-        );
         let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n",
-            source,
         ))
         .expect("fixture configuration resolves");
         ConfigSnapshotDto::new(
-            SchemaVersionDto::new(1, 0),
             ConfigRevisionId::new(),
             TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
             resolved,
         )
-        .expect("fixture snapshot is credential-free")
     }
 
     fn fixture_facade_with_driver(
@@ -1741,7 +1686,7 @@ mod tests {
 
     impl ModelExecutionDriver for EmptyDriver {
         fn capabilities(&self) -> ModelCapabilitiesDto {
-            ModelCapabilitiesDto::new(true, true, true, false, false, true)
+            ModelCapabilitiesDto::new(true)
         }
 
         fn execute(
@@ -1757,7 +1702,7 @@ mod tests {
 
     impl ModelExecutionDriver for CompletedDriver {
         fn capabilities(&self) -> ModelCapabilitiesDto {
-            ModelCapabilitiesDto::new(true, true, true, false, false, true)
+            ModelCapabilitiesDto::new(true)
         }
 
         fn execute(
@@ -1871,8 +1816,7 @@ mod tests {
         let line = messages.receive_line().await.expect("health reply arrives");
         assert!(matches!(
             decode_response(&line, 2),
-            Ok(ProtocolResultDto::DaemonHealth(health))
-                if health.readiness() == DaemonReadinessDto::Ready
+            Ok(ProtocolResultDto::DaemonHealth(health)) if health == DaemonHealthDto::ready()
         ));
         // The peer releases its socket so the host's serving loop observes
         // end-of-stream; only then does the awaited connection task finish.

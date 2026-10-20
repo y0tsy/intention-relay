@@ -6,13 +6,11 @@ mod common;
 
 use common::{create_session, repository, time};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
-    BoundedText, ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto,
-    SessionId, TextResult, ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, UsageDto,
+    BoundedText, ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SessionId, TextResult,
+    ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
 use intention_storage::{
@@ -333,26 +331,9 @@ fn read_result_row(call_id: ToolCallId) -> ToolRowDto {
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
-        ),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("model-context.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("configuration path is absolute"),
-        ),
-    ))
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
+    )))
     .expect("safe configuration resolves");
-    ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
-        ConfigRevisionId::new(),
-        time(1),
-        resolved,
-    )
-    .expect("safe snapshot is valid")
+    ConfigSnapshotDto::new(ConfigRevisionId::new(), time(1), resolved)
 }

@@ -18,7 +18,7 @@
 //! | [`Palette::tab_active_bg`] | `#FCE2C4` | `#2F2F31` | the active tab's wash |
 //! | [`Palette::row_selected_bg`] | `#FADFC0` | `#333335` | the cursor row's wash |
 //! | [`Palette::row_alt_bg`] | `#FBF5EC` | `#0D0D0F` | every second row's zebra tint |
-//! | [`Palette::stub_bg`] | `#FBE4DF` | `#1C1C1E` | the `@todo(core)` empty state and welcome sub-blocks |
+//! | [`Palette::stub_bg`] | `#FBE4DF` | `#1C1C1E` | the empty state of a list the core reports no rows for |
 //! | [`Palette::input_bg`] | `#FFF4E2` | `#131315` | the chat input buffer rows |
 //! | [`Palette::badge_bg`] | `#EFE0C8` | `#28282A` | the badge wash of the input header and the welcome version |
 //! | [`Palette::badge_ink`] | `#5C4632` | `#CACACC` | the label ink of a badge |
@@ -46,7 +46,6 @@
 //! | [`Palette::reasoning_header`] | `#6D5A44` | `#7A7A7C` | the reasoning block's glyph and header |
 //! | [`Palette::reasoning_marker`] | `#8A5A2B` | `#A2A2A4` | the expand affordance of a collapsed reasoning block |
 //! | [`Palette::timer_ink`] | `#A16207` | `#9A9A9C` | the measured elapsed value |
-//! | [`Palette::todo_ink`] | `#8B7AA8` | `#929294` | the `@todo(core)` placeholder tone |
 //! | [`Palette::ink`] | `#2A211A` | `#DADADC` | body text |
 //! | [`Palette::ink_muted`] | `#7A6A58` | `#A6A6A8` | secondary text, hints, and the welcome lockup's trailing word |
 //! | [`Palette::ink_faint`] | `#A8967F` | `#626264` | dividers and separators |
@@ -167,8 +166,6 @@ pub struct Palette {
     pub reasoning_marker: Color,
     /// The ink of the elapsed value the front end measured.
     pub timer_ink: Color,
-    /// The ink of an `@todo(core)` placeholder the wire cannot fill yet.
-    pub todo_ink: Color,
     /// Body ink: the ordinary text of every row.
     pub ink: Color,
     /// Secondary ink: hints, legends, and column headers.
@@ -222,7 +219,6 @@ pub static LIGHT: Palette = Palette {
     reasoning_header: Color::rgb(0x6D, 0x5A, 0x44),
     reasoning_marker: Color::rgb(0x8A, 0x5A, 0x2B),
     timer_ink: Color::rgb(0xA1, 0x62, 0x07),
-    todo_ink: Color::rgb(0x8B, 0x7A, 0xA8),
     ink: Color::rgb(0x2A, 0x21, 0x1A),
     ink_muted: Color::rgb(0x7A, 0x6A, 0x58),
     ink_faint: Color::rgb(0xA8, 0x96, 0x7F),
@@ -278,7 +274,6 @@ pub static DARK: Palette = Palette {
     reasoning_header: Color::rgb(0x7A, 0x7A, 0x7C),
     reasoning_marker: Color::rgb(0xA2, 0xA2, 0xA4),
     timer_ink: Color::rgb(0x9A, 0x9A, 0x9C),
-    todo_ink: Color::rgb(0x92, 0x92, 0x94),
     ink: Color::rgb(0xDA, 0xDA, 0xDC),
     ink_muted: Color::rgb(0xA6, 0xA6, 0xA8),
     ink_faint: Color::rgb(0x62, 0x62, 0x64),
@@ -315,7 +310,7 @@ mod tests {
     ///
     /// [`Palette::error`] is not listed: it is the documented alias of
     /// [`Palette::scarlet`], and the alias is asserted separately.
-    fn roles(palette: &Palette) -> [(&'static str, Color); 40] {
+    fn roles(palette: &Palette) -> [(&'static str, Color); 39] {
         [
             ("canvas", palette.canvas),
             ("panel", palette.panel),
@@ -351,7 +346,6 @@ mod tests {
             ("reasoning_header", palette.reasoning_header),
             ("reasoning_marker", palette.reasoning_marker),
             ("timer_ink", palette.timer_ink),
-            ("todo_ink", palette.todo_ink),
             ("ink", palette.ink),
             ("ink_muted", palette.ink_muted),
             ("ink_faint", palette.ink_faint),

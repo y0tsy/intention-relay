@@ -24,7 +24,6 @@ pub fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         RunModeDto::Build,
         None,
         None,
-        Vec::new(),
     )
     .expect("fixture projection is valid")
 }

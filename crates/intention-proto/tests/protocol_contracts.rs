@@ -56,7 +56,7 @@ fn fixture_snapshot(session_id: SessionId, run_id: RunId) -> SessionSnapshotDto 
     .expect("fixture snapshot is valid")
 }
 
-fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSummaryDto {
+fn fixture_session_summary(session_id: SessionId) -> SessionSummaryDto {
     SessionSummaryDto::new(
         session_id,
         ProjectId::new(),
@@ -66,12 +66,11 @@ fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSumma
         timestamp(1_726_000_100),
         fixture_workspace_root(),
         2,
-        Some(fixture_run(session_id, run_id)),
     )
 }
 
-fn fixture_session_summaries(session_id: SessionId, run_id: RunId) -> SessionSummariesDto {
-    SessionSummariesDto::new(vec![fixture_session_summary(session_id, run_id)], 3)
+fn fixture_session_summaries(session_id: SessionId) -> SessionSummariesDto {
+    SessionSummariesDto::new(vec![fixture_session_summary(session_id)], 3)
         .expect("fixture session summaries are valid")
 }
 
@@ -133,7 +132,7 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
         ProtocolResultDto::RunCancelled(RunCancelledAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
-        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
+        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id)),
         ProtocolResultDto::SessionSubscribed(fixture_snapshot(session_id, run_id)),
     ]
 }
@@ -389,8 +388,7 @@ fn a_create_acceptance_carries_the_first_turn_evidence() {
 #[test]
 fn session_lists_round_trip_with_their_omitted_count() {
     let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let summaries = fixture_session_summaries(session_id, run_id);
+    let summaries = fixture_session_summaries(session_id);
     assert_eq!(summaries.omitted(), 3);
     let summary = &summaries.sessions()[0];
     assert_eq!(summary.session_id(), session_id);
@@ -399,10 +397,6 @@ fn session_lists_round_trip_with_their_omitted_count() {
     assert_eq!(summary.updated_at(), timestamp(1_726_000_100));
     assert_eq!(summary.workspace_root(), &fixture_workspace_root());
     assert_eq!(summary.message_count(), 2);
-    assert_eq!(
-        summary.active_run().map(RunProjectionDto::run_id),
-        Some(run_id)
-    );
 
     let line = serde_json::to_string(&encode_request(9, ClientRequestDto::ListSessions))
         .expect("session list request serializes");
@@ -508,28 +502,9 @@ fn session_summaries_and_text_deltas_validate_their_required_shape() {
     let run_id = RunId::new();
     assert_eq!(
         SessionSummariesDto::new(
-            vec![SessionSummaryDto::new(
-                SessionId::new(),
-                ProjectId::new(),
-                WorkspaceId::new(),
-                RunModeDto::Build,
-                timestamp(1_726_000_000),
-                timestamp(1_726_000_000),
-                fixture_workspace_root(),
-                0,
-                Some(fixture_run(session_id, run_id)),
-            )],
-            0,
-        )
-        .expect_err("an active run must belong to its summary session")
-        .code(),
-        "invalid_session_summaries"
-    );
-    assert_eq!(
-        SessionSummariesDto::new(
             vec![
-                fixture_session_summary(session_id, run_id),
-                fixture_session_summary(session_id, run_id),
+                fixture_session_summary(session_id),
+                fixture_session_summary(session_id),
             ],
             0,
         )
@@ -590,7 +565,7 @@ fn malformed_wire_lines_fail_closed() {
         parse_daemon_message("{")
             .expect_err("foreign bytes are a stale-peer failure")
             .code(),
-        "stale_daemon_protocol"
+        "invalid_local_protocol_response"
     );
 
     // A current envelope whose payload does not decode is this wire's own
@@ -598,7 +573,7 @@ fn malformed_wire_lines_fail_closed() {
     // daemon against the peer that answered.
     assert_eq!(
         parse_daemon_message(
-            r#"{"kind":"reply","data":{"id":1,"result":{"kind":"daemon_health","data":{}}}}"#
+            r#"{"kind":"reply","data":{"id":1,"result":{"kind":"unknown","data":{}}}}"#
         )
         .expect_err("a current envelope with an invalid payload fails closed")
         .code(),
@@ -613,7 +588,7 @@ fn malformed_wire_lines_fail_closed() {
             parse_daemon_message(foreign)
                 .expect_err("foreign bytes are a stale-peer failure")
                 .code(),
-            "stale_daemon_protocol",
+            "invalid_local_protocol_response",
             "{foreign} is not an envelope of the current wire"
         );
     }

@@ -124,14 +124,13 @@ pub fn fixed_error(code: &'static str) -> ProviderErrorDto {
 }
 
 fn error_dto(code: &'static str, retryable: bool) -> ProviderErrorDto {
-    ProviderErrorDto::unavailable(code, retryable, None)
+    ProviderErrorDto::unavailable(code, retryable)
         .expect("normalized provider error codes are non-blank adapter constants")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use intention_proto::ErrorRetryDto;
 
     // Text and reasoning reach the stream contract through these constructors
     // alone, so their canonical shape is part of the shared mapping evidence.
@@ -202,17 +201,9 @@ mod tests {
 
     #[test]
     fn provider_errors_keep_the_adapter_codes_retry_guidance_and_no_native_text() {
-        for (retryable, expected_code, expected_retry) in [
-            (
-                true,
-                "openrouter_provider_unavailable",
-                ErrorRetryDto::Delayed,
-            ),
-            (
-                false,
-                "openrouter_provider_request_rejected",
-                ErrorRetryDto::Never,
-            ),
+        for (retryable, expected_code) in [
+            (true, "openrouter_provider_unavailable"),
+            (false, "openrouter_provider_request_rejected"),
         ] {
             let error = provider_error(
                 "openrouter_provider_unavailable",
@@ -220,7 +211,7 @@ mod tests {
                 retryable,
             );
             assert_eq!(error.code(), expected_code);
-            assert_eq!(error.retry(), expected_retry);
+            assert_eq!(error.retryable(), retryable);
             assert!(
                 !serde_json::to_string(&error)
                     .expect("error serializes")
@@ -233,16 +224,16 @@ mod tests {
             true,
         );
         assert_eq!(error.code(), "generic_chat_provider_unavailable");
-        assert_eq!(error.retry(), ErrorRetryDto::Delayed);
+        assert!(error.retryable());
     }
 
     #[test]
     fn fixed_errors_are_non_retryable_and_never_carry_native_text() {
         let error = fixed_error("openrouter_provider_failure");
         assert_eq!(error.code(), "openrouter_provider_failure");
-        assert_eq!(error.retry(), ErrorRetryDto::Never);
+        assert!(!error.retryable());
         let error = fixed_error("generic_chat_provider_failure");
         assert_eq!(error.code(), "generic_chat_provider_failure");
-        assert_eq!(error.retry(), ErrorRetryDto::Never);
+        assert!(!error.retryable());
     }
 }

@@ -18,37 +18,19 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The daemon's readiness for requests.
+/// A version-free, credential-free health projection from the daemon authority.
 ///
 /// A daemon answers health only after durable recovery completed and it can
-/// serve requests, so this is the only readiness state a production path
-/// produces; another state is added when a drain path exists.
+/// serve requests, so the answer itself is the readiness fact: there is no
+/// second readiness state to report until a drain path exists.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DaemonReadinessDto {
-    /// The daemon can serve requests.
-    Ready,
-}
-
-/// A version-free, credential-free health projection from the daemon authority.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DaemonHealthDto {
-    readiness: DaemonReadinessDto,
-}
+pub struct DaemonHealthDto {}
 
 impl DaemonHealthDto {
     /// Creates the ready health projection a serving daemon answers with.
     #[must_use]
     pub const fn ready() -> Self {
-        Self {
-            readiness: DaemonReadinessDto::Ready,
-        }
-    }
-
-    /// Returns the daemon readiness state.
-    #[must_use]
-    pub const fn readiness(self) -> DaemonReadinessDto {
-        self.readiness
+        Self {}
     }
 }
 
@@ -309,15 +291,16 @@ pub struct SessionSummaryDto {
     updated_at: TimestampDto,
     workspace_root: WorkspaceRootDto,
     message_count: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    active_run: Option<RunProjectionDto>,
 }
 
 impl SessionSummaryDto {
     /// Creates the bounded public summary of one durable session.
+    ///
+    /// A summary carries no active run: a caller that needs one reads the
+    /// session's run projection.
     #[expect(
         clippy::too_many_arguments,
-        reason = "This public wire constructor preserves the established nine-field session summary contract."
+        reason = "This public wire constructor preserves the established eight-field session summary contract."
     )]
     #[must_use]
     pub const fn new(
@@ -329,7 +312,6 @@ impl SessionSummaryDto {
         updated_at: TimestampDto,
         workspace_root: WorkspaceRootDto,
         message_count: u64,
-        active_run: Option<RunProjectionDto>,
     ) -> Self {
         Self {
             session_id,
@@ -340,7 +322,6 @@ impl SessionSummaryDto {
             updated_at,
             workspace_root,
             message_count,
-            active_run,
         }
     }
 
@@ -391,12 +372,6 @@ impl SessionSummaryDto {
     pub const fn message_count(&self) -> u64 {
         self.message_count
     }
-
-    /// Returns the sole active run, if one exists.
-    #[must_use]
-    pub const fn active_run(&self) -> Option<RunProjectionDto> {
-        self.active_run
-    }
 }
 
 /// One bounded list of current session summaries.
@@ -436,19 +411,16 @@ impl SessionSummariesDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when one summary's active run belongs to a
-    /// different session or session identities are not unique.
+    /// Returns a validation error when session identities are not unique.
     pub fn new(sessions: Vec<SessionSummaryDto>, omitted: u32) -> DtoResult<Self> {
         let mut unique_session_ids = BTreeSet::new();
-        if sessions.iter().any(|summary| {
-            summary
-                .active_run()
-                .is_some_and(|run| run.session_id() != summary.session_id())
-                || !unique_session_ids.insert(summary.session_id())
-        }) {
+        if sessions
+            .iter()
+            .any(|summary| !unique_session_ids.insert(summary.session_id()))
+        {
             return Err(ErrorDto::validation(
                 "invalid_session_summaries",
-                "session summaries must carry unique sessions with their own active runs",
+                "session summaries must carry unique sessions",
             ));
         }
         Ok(Self { sessions, omitted })
@@ -842,39 +814,15 @@ pub const fn encode_reply(id: u64, result: ProtocolResultDto) -> ProtocolDaemonM
     ProtocolDaemonMessageDto::reply(id, result)
 }
 
-/// The envelope kinds of the current daemon wire.
-const DAEMON_MESSAGE_KINDS: [&str; 3] = ["reply", "rejection", "frame"];
-
 /// Parses one daemon line.
 ///
 /// # Errors
 ///
-/// Returns a typed `stale_daemon_protocol` unavailable error when the line is
-/// not an envelope of the current wire, so an adapter can offer a safe
-/// restart/reconnect action instead of reinterpreting foreign bytes. A line
-/// that names a current envelope kind whose payload does not decode is this
-/// wire's own failure, so it returns the typed
-/// `invalid_local_protocol_response` error instead of blaming a stale peer.
+/// Returns the typed `invalid_local_protocol_response` error when the line is
+/// not a current envelope of this wire, so a peer that answers with bytes this
+/// build cannot decode fails closed instead of being reached as compatible.
 pub fn parse_daemon_message(line: &str) -> DtoResult<ProtocolDaemonMessageDto> {
-    serde_json::from_str(line).map_err(|_| match envelope_kind(line) {
-        Some(kind) if DAEMON_MESSAGE_KINDS.contains(&kind) => invalid_wire_response(),
-        _ => ErrorDto::unavailable(
-            "stale_daemon_protocol",
-            "the local daemon does not speak the current local wire protocol",
-        ),
-    })
-}
-
-/// Returns the envelope kind one daemon line names, when it names one.
-fn envelope_kind(line: &str) -> Option<&str> {
-    #[derive(Deserialize)]
-    struct EnvelopeKindDto<'a> {
-        kind: &'a str,
-    }
-
-    serde_json::from_str::<EnvelopeKindDto<'_>>(line)
-        .ok()
-        .map(|envelope| envelope.kind)
+    serde_json::from_str(line).map_err(|_| invalid_wire_response())
 }
 
 /// Decodes the correlated answer to one request.
@@ -948,7 +896,6 @@ mod tests {
             crate::RunModeDto::Build,
             None,
             None,
-            Vec::new(),
         )
         .expect("fixture projection is valid")
     }
@@ -1010,23 +957,6 @@ mod tests {
             )
             .expect("subscription result deserializes"),
             result
-        );
-
-        // A bounded read reports its omitted pending turns, and the nested
-        // projection carries that count across the wire.
-        let trimmed = SessionSnapshotDto::with_projection(
-            session_id,
-            fixture_projection(session_id).with_pending_turns_omitted(3),
-            Vec::new(),
-        )
-        .expect("a snapshot with a trimmed projection is valid");
-        assert_eq!(trimmed.projection().pending_turns_omitted(), 3);
-        assert_eq!(
-            serde_json::from_str::<SessionSnapshotDto>(
-                &serde_json::to_string(&trimmed).expect("snapshot serializes")
-            )
-            .expect("snapshot deserializes"),
-            trimmed
         );
     }
 
@@ -1107,7 +1037,7 @@ mod tests {
             parse_daemon_message(&line)
                 .expect_err("a request line is not a daemon message")
                 .code(),
-            "stale_daemon_protocol"
+            "invalid_local_protocol_response"
         );
     }
 

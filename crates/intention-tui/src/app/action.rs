@@ -2,19 +2,19 @@
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto,
-    SessionId, SessionSnapshotDto, SessionSummariesDto,
+    DaemonHealthDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
+    SessionSnapshotDto, SessionSummariesDto,
 };
 
 use super::{MenuMove, ThemePreference};
 
-/// The readiness the client last reported for the local daemon.
+/// The connection state the client last reported for the local daemon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionStatus {
     /// Bootstrap is in flight.
     Connecting,
-    /// The daemon reported this readiness.
-    Ready(DaemonReadinessDto),
+    /// The daemon answered its health projection, so it can serve requests.
+    Ready,
     /// The last attempt failed; the error line carries the reason.
     Failed,
 }
@@ -229,12 +229,6 @@ pub enum Action {
     BrowserCursorMove(BrowserCursorMove),
     /// The user opened the session the sessions browser cursor points at.
     BrowserSelectionRequested,
-    /// The user asked to rename the selected session.
-    BrowserRenameRequested,
-    /// The user asked to archive the selected session.
-    BrowserArchiveRequested,
-    /// The user asked for the selected session's fork tree.
-    BrowserTreeRequested,
     /// The user asked for a new session.
     NewSessionRequested,
     /// The user pressed Ctrl+C: one key press with layered effects.

@@ -475,11 +475,10 @@ where
     ///
     /// `proposed_run_id` must be a deterministic function of the command's own
     /// identity: the same session and `IdempotencyKey` must always propose the
-    /// same [`RunId`], because the repository compares it when it replays an
-    /// accepted turn. A retry that proposes a fresh identity is
-    /// indistinguishable from the same key bound to different content and fails
-    /// with `turn_idempotency_conflict`, so a client could never learn that its
-    /// turn was already accepted.
+    /// same [`RunId`], because the repository rejects a proposed identity that
+    /// is already bound. A retry that proposes a fresh identity would write a
+    /// second turn for one command, so the key is the turn's identity and a
+    /// repeat fails with `turn_identity_conflict`.
     ///
     /// # Errors
     ///
@@ -633,11 +632,12 @@ fn schedule_from_context(
         None,
     )?
     .with_tools(advertised_tool_definitions())?;
-    // The constructed request must agree with the requested run identity and
-    // the durable starting-run selection before it becomes executable work.
-    if request.run_id() != run_id
-        || request.model() != context.safe_config().resolved().provider().model()
-    {
+    // The constructed request must agree with the requested run identity
+    // before it becomes executable work: the durable context is read by that
+    // identity, so a context for another run cannot become this schedule. The
+    // request carries the snapshot's own selection, and the executor re-checks
+    // the request it receives against that selection.
+    if request.run_id() != run_id {
         return Err(ErrorDto::validation(
             "invalid_model_run_schedule",
             "model scheduling request must match the durable starting run selection",

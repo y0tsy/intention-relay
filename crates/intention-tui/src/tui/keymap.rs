@@ -119,9 +119,6 @@ const fn sessions_action(key: &KeyEvent) -> Option<Action> {
     match key.key {
         Key::Char('q') if key.ctrl => Some(Action::Quit),
         Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
-        Key::Char('r') if key.ctrl => Some(Action::BrowserRenameRequested),
-        Key::Char('x') if key.ctrl => Some(Action::BrowserArchiveRequested),
-        Key::Char('f') if key.ctrl => Some(Action::BrowserTreeRequested),
         Key::Char(character) if !key.ctrl => Some(Action::BrowserFilterChar(character)),
         Key::Backspace => Some(Action::BrowserFilterBackspace),
         Key::Up => Some(Action::BrowserCursorMove(BrowserCursorMove::Up)),
@@ -295,15 +292,8 @@ mod tests {
         );
         assert_eq!(
             key_action(&KeyEvent::ctrl(Key::Char('r')), &sessions_state()),
-            Some(Action::BrowserRenameRequested)
-        );
-        assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('x')), &sessions_state()),
-            Some(Action::BrowserArchiveRequested)
-        );
-        assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('f')), &sessions_state()),
-            Some(Action::BrowserTreeRequested)
+            None,
+            "the browser binds no key for a command the core does not carry"
         );
         assert_eq!(
             key_action(&KeyEvent::new(Key::Escape), &sessions_state()),

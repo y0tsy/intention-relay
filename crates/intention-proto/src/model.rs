@@ -4,7 +4,7 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{CorrelationIdDto, DtoResult, ErrorDto, ErrorRetryDto, ToolCallId};
+use crate::{DtoResult, ErrorDto, ToolCallId};
 
 /// A validated model-generated function call with JSON object input.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -173,8 +173,7 @@ pub enum FinishReasonDto {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ProviderErrorDto {
     code: String,
-    retry: ErrorRetryDto,
-    correlation_id: Option<CorrelationIdDto>,
+    retryable: bool,
 }
 
 impl<'de> Deserialize<'de> for ProviderErrorDto {
@@ -186,43 +185,23 @@ impl<'de> Deserialize<'de> for ProviderErrorDto {
         #[serde(deny_unknown_fields)]
         struct RawProviderErrorDto {
             code: String,
-            retry: ErrorRetryDto,
-            #[serde(default)]
-            correlation_id: Option<CorrelationIdDto>,
+            retryable: bool,
         }
 
         let raw = RawProviderErrorDto::deserialize(deserializer)?;
-        Self::new(raw.code, raw.retry, raw.correlation_id).map_err(de::Error::custom)
+        Self::unavailable(raw.code, raw.retryable).map_err(de::Error::custom)
     }
 }
 
 impl ProviderErrorDto {
     /// Creates a safe normalized unavailable provider error.
     ///
+    /// `retryable` says a retry after a delay may succeed.
+    ///
     /// # Errors
     ///
     /// Returns a validation error when the stable code is blank.
-    pub fn unavailable(
-        code: impl Into<String>,
-        retryable: bool,
-        correlation_id: Option<CorrelationIdDto>,
-    ) -> DtoResult<Self> {
-        Self::new(
-            code,
-            if retryable {
-                ErrorRetryDto::Delayed
-            } else {
-                ErrorRetryDto::Never
-            },
-            correlation_id,
-        )
-    }
-
-    fn new(
-        code: impl Into<String>,
-        retry: ErrorRetryDto,
-        correlation_id: Option<CorrelationIdDto>,
-    ) -> DtoResult<Self> {
+    pub fn unavailable(code: impl Into<String>, retryable: bool) -> DtoResult<Self> {
         let code = code.into();
         if code.trim().is_empty() {
             return Err(ErrorDto::validation(
@@ -230,11 +209,7 @@ impl ProviderErrorDto {
                 "provider error code must not be empty",
             ));
         }
-        Ok(Self {
-            code,
-            retry,
-            correlation_id,
-        })
+        Ok(Self { code, retryable })
     }
 
     /// Returns the stable safe provider failure code.
@@ -243,16 +218,10 @@ impl ProviderErrorDto {
         &self.code
     }
 
-    /// Returns the retry guidance selected by provider normalization.
+    /// Returns whether a retry after a delay may succeed.
     #[must_use]
-    pub const fn retry(&self) -> ErrorRetryDto {
-        self.retry
-    }
-
-    /// Returns an opaque correlation identifier when available.
-    #[must_use]
-    pub const fn correlation_id(&self) -> Option<CorrelationIdDto> {
-        self.correlation_id
+    pub const fn retryable(&self) -> bool {
+        self.retryable
     }
 }
 

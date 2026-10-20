@@ -6,29 +6,25 @@
 )]
 mod common;
 
-use common::{FAKE_CREDENTIAL, explicit_source};
+use common::FAKE_CREDENTIAL;
 
 use intention_config::{ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
-use intention_proto::{ConfigRevisionId, SchemaVersionDto, TimestampDto};
+use intention_proto::{ConfigRevisionId, TimestampDto};
 
-const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit"}"#;
+const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000}}"#;
 
-const CURRENT_SCHEMA_WIRE: &str = r#"{"major":1,"minor":0}"#;
-const FOREIGN_SCHEMA_WIRE: &str = r#"{"major":2,"minor":0}"#;
 const VALID_REVISION_ID: &str = "44444444-4444-4444-8444-444444444444";
 
-/// Builds one snapshot wire from its schema version, revision identity, and
-/// resolved projection, so each case changes exactly one fragment.
-fn snapshot_wire(schema_version: &str, revision_id: &str, resolved: &str) -> String {
-    format!(
-        r#"{{"schema_version":{schema_version},"revision_id":"{revision_id}","captured_at":1700000000,"resolved":{resolved}}}"#
-    )
+/// Builds one snapshot wire from its revision identity and resolved projection,
+/// so each case changes exactly one fragment.
+fn snapshot_wire(revision_id: &str, resolved: &str) -> String {
+    format!(r#"{{"revision_id":"{revision_id}","captured_at":1700000000,"resolved":{resolved}}}"#)
 }
 
 /// Builds one resolved projection from its three policy fragments.
 fn resolved_wire(provider: &str, provider_execution: &str, context_window: &str) -> String {
     format!(
-        r#"{{"provider":{provider},"provider_execution":{provider_execution},"context_window":{context_window},"source_kind":"explicit"}}"#
+        r#"{{"provider":{provider},"provider_execution":{provider_execution},"context_window":{context_window}}}"#
     )
 }
 
@@ -56,7 +52,6 @@ fn resolve(execution: &str) -> ResolvedConfigDto {
         format!(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n{execution}"
         ),
-        explicit_source(),
     ))
     .expect("fixture configuration resolves")
 }
@@ -107,8 +102,7 @@ fn provider_policy_rejects_out_of_range_values_without_redacting_errors() {
             format!(
                 "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n{text}"
             ),
-            explicit_source(),
-        ))
+            ))
         .expect_err("out-of-range provider policy must fail");
         assert_eq!(error.code(), code);
         assert!(!error.to_string().contains(FAKE_CREDENTIAL));
@@ -134,7 +128,6 @@ fn startup_material_is_opaque_and_safe_projection_excludes_credential() {
         format!(
             "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n"
         ),
-        explicit_source(),
     ))
     .expect("startup material resolves");
     let resolved = material.safe_resolved();
@@ -149,7 +142,6 @@ fn startup_material_preserves_current_selection_only_for_provider_construction()
         format!(
             "schema_version = 1\n[provider]\nkind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\"\n"
         ),
-        explicit_source(),
     ))
     .expect("current-shape startup material resolves");
 
@@ -167,7 +159,6 @@ fn startup_material_preserves_current_selection_only_for_provider_construction()
 fn startup_material_returns_safe_errors_before_provider_construction() {
     let result = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \" \"\n",
-        explicit_source(),
     ));
     let error = result
         .err()
@@ -177,7 +168,7 @@ fn startup_material_returns_safe_errors_before_provider_construction() {
 }
 
 #[test]
-fn config_snapshot_fixture_decodes_and_rejects_a_foreign_schema() {
+fn config_snapshot_fixture_decodes_and_constructs_the_same_projection() {
     let fixture = include_str!("fixtures/config-snapshot-v1.json");
     let snapshot: ConfigSnapshotDto =
         serde_json::from_str(fixture).expect("config snapshot fixture must decode");
@@ -189,22 +180,11 @@ fn config_snapshot_fixture_decodes_and_rejects_a_foreign_schema() {
     assert_eq!(snapshot.resolved().provider().model(), "example-chat-model");
 
     let constructed = ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
         ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
         snapshot.resolved().clone(),
-    )
-    .expect("compatible snapshot schema is valid");
-    assert_eq!(constructed.schema_version(), SchemaVersionDto::new(1, 0));
-    assert!(
-        ConfigSnapshotDto::new(
-            SchemaVersionDto::new(2, 0),
-            ConfigRevisionId::new(),
-            TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
-            snapshot.resolved().clone(),
-        )
-        .is_err()
     );
+    assert_eq!(constructed.resolved(), snapshot.resolved());
 }
 
 #[test]
@@ -212,16 +192,14 @@ fn malformed_config_snapshot_wire_shapes_are_rejected() {
     // The baseline must decode, otherwise every case below passes vacuously.
     assert!(
         serde_json::from_str::<ConfigSnapshotDto>(&snapshot_wire(
-            CURRENT_SCHEMA_WIRE,
             VALID_REVISION_ID,
-            VALID_RESOLVED,
+            VALID_RESOLVED
         ))
         .is_ok()
     );
 
     let value_case = |provider: &str, execution: &str, window: &str| {
         snapshot_wire(
-            CURRENT_SCHEMA_WIRE,
             VALID_REVISION_ID,
             &resolved_wire(provider, execution, window),
         )
@@ -230,22 +208,18 @@ fn malformed_config_snapshot_wire_shapes_are_rejected() {
 
     for (label, wire) in [
         (
-            "foreign schema version",
-            snapshot_wire(FOREIGN_SCHEMA_WIRE, VALID_REVISION_ID, VALID_RESOLVED),
-        ),
-        (
             "non-canonical revision identity",
-            snapshot_wire(CURRENT_SCHEMA_WIRE, "not-an-id", VALID_RESOLVED),
+            snapshot_wire("not-an-id", VALID_RESOLVED),
         ),
         (
             "unknown snapshot field",
             format!(
-                r#"{{"schema_version":{CURRENT_SCHEMA_WIRE},"revision_id":"{VALID_REVISION_ID}","captured_at":1700000000,"resolved":{VALID_RESOLVED},"unexpected":true}}"#
+                r#"{{"revision_id":"{VALID_REVISION_ID}","captured_at":1700000000,"resolved":{VALID_RESOLVED},"unexpected":true}}"#
             ),
         ),
         (
             "empty resolved projection",
-            snapshot_wire(CURRENT_SCHEMA_WIRE, VALID_REVISION_ID, "{}"),
+            snapshot_wire(VALID_REVISION_ID, "{}"),
         ),
         (
             "unsupported provider kind",
@@ -396,7 +370,7 @@ fn resolved_config_public_contract_is_credential_free_and_closed() {
     assert_eq!(resolved.provider().kind(), ProviderKindDto::Openrouter);
     assert!(
         serde_json::from_str::<ResolvedConfigDto>(
-            r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"source_kind":"explicit","unexpected":true}"#
+            r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000},"unexpected":true}"#
         )
         .is_err()
     );

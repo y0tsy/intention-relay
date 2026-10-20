@@ -12,17 +12,16 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, FinishReasonDto, ProviderErrorDto, RunId,
-    SessionId, TimestampDto, ToolCallDto, UsageDto,
+    DtoResult, ErrorCategoryDto, ErrorDto, FinishReasonDto, ProviderErrorDto, RunId, SessionId,
+    TimestampDto, ToolCallDto, UsageDto,
 };
 use intention_proto::{
     MessageKindDto, MessageProjectionDto, NewMessageDto, RunProjectionDto, RunStatusDto,
-    TextDeltaChannelDto,
+    TextDeltaChannelDto, run_status_is_terminal,
 };
 pub use intention_providers::{
     AssistantReasoningDto, ModelCancellationSignal, ModelCancelledFuture, ModelEventDto,
-    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto,
-    ModelToolDefinitionDto,
+    ModelExecutionDriver, ModelMessageDto, ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto,
 };
 use intention_storage::{RunOutcomeDto, StorageRepositoryDto};
 use intention_tools::CancellationSignal as ToolCancellationSignal;
@@ -57,6 +56,40 @@ const RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 /// aborting `execute` with a DTO validation error (architecture 08).
 const MAX_ROUND_REASONING_ECHO_BYTES: usize = 512 * 1024;
 
+/// Terminalizes one still-active run for a host path outside the model
+/// executor.
+///
+/// A run that already reached a terminal status is left untouched and
+/// reported as `None`, so a stop or a failure that races a terminal commit is
+/// a no-op instead of a second write. A live run records the supplied terminal
+/// status with the supplied failure evidence and the run's finish time.
+///
+/// # Errors
+///
+/// Returns the repository's typed error when the run cannot be read or the
+/// terminal outcome cannot commit.
+pub fn terminalize_active_run<Repository>(
+    repository: &Repository,
+    session_id: SessionId,
+    run_id: RunId,
+    status: RunStatusDto,
+    failure: Option<(&str, &str)>,
+    occurred_at: TimestampDto,
+) -> DtoResult<Option<RunProjectionDto>>
+where
+    Repository: StorageRepositoryDto,
+{
+    let run = repository.load_run_projection(session_id, run_id)?;
+    if run_status_is_terminal(run.status()) {
+        return Ok(None);
+    }
+    let (error_code, error_message) = failure
+        .map(|(code, message)| (code.to_owned(), message.to_owned()))
+        .unzip();
+    let outcome = RunOutcomeDto::new(status, None, None, error_code, error_message)?;
+    terminalize_run(repository, session_id, run_id, outcome, occurred_at).map(Some)
+}
+
 /// Commits one terminal `Failed` outcome for exactly a current starting run.
 ///
 /// This narrow helper is used by application scheduling when a committed run
@@ -90,6 +123,30 @@ where
         Some(failure_code.into()),
         Some("the starting run could not be scheduled".to_owned()),
     )?;
+    terminalize_run(repository, session_id, run_id, outcome, occurred_at)
+}
+
+/// Commits one terminal run outcome with the run's finish time.
+///
+/// Every path that ends a run - the model executor, a host stop, a host
+/// scheduling failure, and the scheduling-failure helper above - commits
+/// through this one function, so the terminal status, the finish time, and the
+/// outcome columns have one owner.
+///
+/// # Errors
+///
+/// Returns the repository's typed error when the terminal run row cannot
+/// commit.
+fn terminalize_run<Repository>(
+    repository: &Repository,
+    session_id: SessionId,
+    run_id: RunId,
+    outcome: RunOutcomeDto,
+    occurred_at: TimestampDto,
+) -> DtoResult<RunProjectionDto>
+where
+    Repository: StorageRepositoryDto,
+{
     repository.finish_run(session_id, run_id, outcome, occurred_at)
 }
 
@@ -229,7 +286,6 @@ pub trait ToolExecutionPort: Send + Sync {
 #[derive(Clone, Default)]
 pub struct RunCancellation {
     model: ModelCancellationSignal,
-    tool: ToolCancellationSignal,
     notice_taken: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
 }
@@ -257,7 +313,6 @@ impl RunCancellation {
     /// One signal offers exactly one interruption notice.
     pub fn cancel(&self) {
         self.model.cancel();
-        self.tool.cancel();
     }
 
     /// Requests that the run stop for good.
@@ -284,7 +339,6 @@ impl RunCancellation {
     /// its own notice.
     pub fn reset(&self) {
         self.model.reset();
-        self.tool.reset();
         self.notice_taken.store(false, Ordering::Release);
     }
 
@@ -305,7 +359,7 @@ impl RunCancellation {
     /// Returns whether cancellation has been requested for this run.
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
-        self.model.is_cancelled() || self.tool.is_cancelled()
+        self.model.is_cancelled()
     }
 
     /// Returns a fresh independently awaitable future that completes on
@@ -322,9 +376,12 @@ impl RunCancellation {
     }
 
     /// Returns the synchronous signal one blocking tool invocation observes.
+    ///
+    /// It observes the run's one cancellation flag, so the tool path and the
+    /// model stream can never disagree about whether the run was interrupted.
     #[must_use]
     pub fn tool_signal(&self) -> ToolCancellationSignal {
-        self.tool.clone()
+        ToolCancellationSignal::from_shared(self.model.shared_flag())
     }
 }
 
@@ -663,12 +720,10 @@ where
                         // takes the budget: a round that finished while the
                         // signal was already being observed continues without a
                         // second row.
-                        if input.cancellation.take_interrupt_notice() {
-                            self.record_interrupt_notice(input)?;
-                            messages.push(interrupt_notice_message()?);
-                            extra_messages.push(interrupt_notice_message()?);
-                        } else {
-                            input.cancellation.reset();
+                        let notice = interrupt_notice_message()?;
+                        if self.settle_interrupt(input)? {
+                            messages.push(notice.clone());
+                            extra_messages.push(notice);
                         }
                         state.apply_window(&mut messages, &reasoning_attachments)?;
                         request = continuation_request(input, &messages, &reasoning_attachments)?;
@@ -818,12 +873,12 @@ where
                         if state.interrupted_tool() {
                             let _ = input.cancellation.take_interrupt_notice();
                             input.cancellation.reset();
-                        } else if input.cancellation.take_interrupt_notice() {
-                            self.record_interrupt_notice(input)?;
-                            messages.push(interrupt_notice_message()?);
-                            extra_messages.push(interrupt_notice_message()?);
                         } else {
-                            input.cancellation.reset();
+                            let notice = interrupt_notice_message()?;
+                            if self.settle_interrupt(input)? {
+                                messages.push(notice.clone());
+                                extra_messages.push(notice);
+                            }
                         }
                     }
                     self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
@@ -893,6 +948,28 @@ where
         Ok(committed)
     }
 
+    /// Answers one interruption boundary and reports whether it recorded the
+    /// notice.
+    ///
+    /// One interruption offers one notice, and the first boundary to reach the
+    /// sticky signal takes it: it commits the durable notice and re-arms the
+    /// signal, so the run continues with the next step. A later boundary that
+    /// observes the same signal finds no notice owed and clears the signal
+    /// instead of recording a second row for one interruption.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed validation or storage error when the notice cannot be
+    /// committed.
+    fn settle_interrupt(&self, input: &ModelRunExecutionInputDto) -> DtoResult<bool> {
+        if !input.cancellation.take_interrupt_notice() {
+            input.cancellation.reset();
+            return Ok(false);
+        }
+        self.record_interrupt_notice(input)?;
+        Ok(true)
+    }
+
     /// Commits every pending user message into the live run context.
     ///
     /// The storage transaction marks the turns as appended in the same commit
@@ -940,7 +1017,6 @@ where
     ) -> DtoResult<RoundOutcome> {
         use futures_util::{FutureExt, StreamExt, future::Either};
 
-        let mut lifecycle = ModelStreamLifecycleDto::new();
         let request_characters = ContextWindowState::request_characters(&request);
         state.begin_round();
         // The round claims its step index before its stream starts, so every
@@ -1008,7 +1084,7 @@ where
                 Some(Ok(event)) => event,
                 Some(Err(error)) => {
                     return Ok(RoundOutcome::Failed {
-                        retryable: error.retry() == ErrorRetryDto::Delayed,
+                        retryable: error.retryable(),
                         error: provider_failure(&error)?,
                     });
                 }
@@ -1039,12 +1115,6 @@ where
                     });
                 }
             };
-            if let Err(error) = lifecycle.accept(&event) {
-                return Ok(RoundOutcome::Failed {
-                    error,
-                    retryable: false,
-                });
-            }
             match event {
                 ModelEventDto::Started => {}
                 ModelEventDto::TextDelta { content } => {
@@ -1117,12 +1187,9 @@ where
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
-            if input.cancellation.take_interrupt_notice() {
-                let message = interrupt_notice_message()?;
-                self.record_interrupt_notice(input)?;
+            let message = interrupt_notice_message()?;
+            if self.settle_interrupt(input)? {
                 extra_messages.push(message);
-            } else {
-                input.cancellation.reset();
             }
             return Ok(());
         }
@@ -1131,12 +1198,9 @@ where
         futures_util::pin_mut!(delay, cancelled);
         match futures_util::future::select(cancelled, delay).await {
             Either::Left(((), _)) => {
-                if input.cancellation.take_interrupt_notice() {
-                    let message = interrupt_notice_message()?;
-                    self.record_interrupt_notice(input)?;
+                let message = interrupt_notice_message()?;
+                if self.settle_interrupt(input)? {
                     extra_messages.push(message);
-                } else {
-                    input.cancellation.reset();
                 }
                 Ok(())
             }
@@ -1227,9 +1291,13 @@ where
             error.map(|error| error.code().to_owned()),
             error.map(|error| error.message().to_owned()),
         )?;
-        let run =
-            self.repository
-                .finish_run(input.session_id, input.run_id, outcome, self.time.now())?;
+        let run = terminalize_run(
+            self.repository,
+            input.session_id,
+            input.run_id,
+            outcome,
+            self.time.now(),
+        )?;
         self.publish_status(input.session_id, input.run_id, run.status());
         Ok(run)
     }
@@ -1543,8 +1611,7 @@ fn provider_failure(error: &ProviderErrorDto) -> DtoResult<ErrorDto> {
         error.code(),
         ErrorCategoryDto::Unavailable,
         "the provider stream failed",
-        error.retry(),
-        error.correlation_id(),
+        error.retryable(),
     )
 }
 

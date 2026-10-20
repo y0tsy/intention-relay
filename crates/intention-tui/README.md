@@ -41,7 +41,7 @@ window, and no mode switch replaces the frame: `screen` names which surface owns
 the keyboard, not which window is drawn.
 
 The chat opens on its welcome surface while no session is open - the product
-lockup over a version/`AGENTS.md`/`MCPs`/`Skills` overview - and the interactive
+lockup over the version the binary was built as - and the interactive
 front ends open no session at all at launch, not even the most recent one: a
 session appears only for an explicit `--session`/`--continue`, `/new`, a selected
 browser row, or the first prompt, which creates the session it needs. In the
@@ -122,19 +122,26 @@ the user presses afterwards submits the line, and the run reaches the line as on
 paste.
 
 The command surface is one registry (`src/app/commands.rs`) and the hint band it
-feeds: `/new` (Session), `/sessions` (Navigation), and `/theme` (Appearance) are
-the registered commands, each carrying its name, one-line description, category,
-action, and declared arguments, and the registry is the single source for the
-submission path, the band, and every notice. `/theme` declares one optional
-argument, `theme`, whose values are the preference vocabulary itself (`auto`,
-`light`, and `dark`), and the parser reads only the registry: a submitted line
+feeds: `/new` (Session), `/sessions` (Navigation), `/theme` (Appearance),
+`/session` (Session), and `/quit` (Session) are the registered commands, each
+carrying its name, one-line description, category, action, and declared
+arguments, and the registry is the single source for the fullscreen submission
+path, the line REPL's parse, the band, and every notice. `/theme` declares one
+optional argument, `theme`, whose values are the preference vocabulary itself
+(`auto`, `light`, and `dark`), and `/session` declares one required free-form
+argument whose word the transition parses as a durable identifier. The parser
+reads only the registry: a submitted line
 resolves every
 word against the declarations, so an unknown value answers
 `unknown theme "purple" - expected auto or light or dark`, a word past the last declared
 argument answers `unexpected argument "now"`, and a declared value matches
 however it is spelled (`DARK` names `dark`). A slash
 is a command only as a line's *first* character: a slash anywhere else is
-ordinary text, and a line whose first character is a blank is a turn. While the
+ordinary text, and a line whose first character is a blank is a turn. The line
+REPL reads the same registry, so a line parses the same way in both front ends
+and an unknown name lists the same set in both; a command that drives a
+fullscreen surface (`/sessions`, `/theme`) is known there and answers that it
+needs the fullscreen front end. While the
 input's first character is `/` and the caret sits in or immediately after a
 word, the band opens directly above the input block as one more row region of
 the one chat panel. It is one surface with two vocabularies: while the caret is
@@ -273,22 +280,19 @@ Rules the panes keep:
   functions, so the live segment never looks provisional. A block longer than 15
   display rows shows its first fifteen and a marker naming the hidden ones, and
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
-- A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (the welcome overview's `AGENTS.md`, `MCPs`, and `Skills` chips), never a
-  fabricated one. The `mode` badge carries the same plate until a session
-  snapshot names the durable mode the session projection then carries. The
-  command hint band and the theme picker are the surfaces with no placeholder
-  at all: every band row - name, description, and category, or value,
-  description, and argument - is a front-end registry fact, and every picker
-  row is a theme fact, so nothing in either can be a `@todo(core)`. The model
-  badge and the usage segment are projection facts, not placeholders: the
-  badge names the effective model the session snapshot carries, and the
-  segment reads the terminal outcome's usage (`ctx in 1200 out 300`, or
-  `ctx not reported`).
-- Every `@todo(core)` marker that remains names a core fact the terminal lacks,
-  never work the front end performs for the core. The crate's `@todo(hack)`
-  markers name the work the adapter or the client still owes separately, and
-  are not part of that class.
+- Every surface reads a fact the daemon publishes, and a surface with no fact
+  to read renders nothing: the welcome overview lists the version alone, and
+  the input block draws no `mode` or `model` badge until a session snapshot
+  names them. No pane draws a placeholder for a fact the core does not carry.
+  The command hint band and the theme picker are the surfaces with no
+  placeholder at all: every band row - name, description, and category, or
+  value, description, and argument - is a front-end registry fact, and every
+  picker row is a theme fact. The model badge and the usage segment are
+  projection facts: the badge names the effective model the session snapshot
+  carries, and the segment reads the terminal outcome's usage
+  (`ctx in 1200 out 300`, or `ctx not reported`).
+- The crate's `@todo(hack)` markers name the work the adapter or the client
+  still owes.
 
 ## Palette
 
@@ -308,7 +312,7 @@ colour of its own.
 | `tab_active_bg` | `#FCE2C4` | `#2F2F31` | the active tab's wash |
 | `row_selected_bg` | `#FADFC0` | `#333335` | the cursor row's wash |
 | `row_alt_bg` | `#FBF5EC` | `#0D0D0F` | every second row's zebra tint |
-| `stub_bg` | `#FBE4DF` | `#1C1C1E` | the `@todo(core)` empty state and welcome sub-blocks |
+| `stub_bg` | `#FBE4DF` | `#1C1C1E` | the empty state of a list the core reports no rows for |
 | `input_bg` | `#FFF4E2` | `#131315` | the chat input buffer rows |
 | `badge_bg` | `#EFE0C8` | `#28282A` | the badge wash of the input header and the welcome version |
 | `badge_ink` | `#5C4632` | `#CACACC` | the label ink of a badge |
@@ -336,7 +340,6 @@ colour of its own.
 | `reasoning_header` | `#6D5A44` | `#7A7A7C` | the reasoning block's glyph and header |
 | `reasoning_marker` | `#8A5A2B` | `#A2A2A4` | the expand affordance of a collapsed reasoning block |
 | `timer_ink` | `#A16207` | `#9A9A9C` | the measured elapsed value |
-| `todo_ink` | `#8B7AA8` | `#929294` | the `@todo(core)` placeholder tone |
 | `ink` | `#2A211A` | `#DADADC` | body text |
 | `ink_muted` | `#7A6A58` | `#A6A6A8` | secondary text, hints, and the welcome lockup's trailing word |
 | `ink_faint` | `#A8967F` | `#626264` | dividers and separators |
@@ -395,16 +398,14 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 
 1. Tab: add the variant to `BrowserTab` in `src/app/browser.rs`, its `label`,
    its place in `BrowserTab::ALL`, its glyph in `ACTIVE_TAB`/`INACTIVE_TAB`
-   handling, and its neighbours in `next`/`previous`. A tab whose core fact does
-   not exist yet returns `Some(reason)` from `stub_reason`; the view renders
-   that reason as the tab's empty state.
+   handling, and its neighbours in `next`/`previous`. A tab selects rows by a
+   fact the session summary carries, so a tab whose fact the wire does not
+   publish does not exist.
 2. Column: add its share to `MODIFIED_PERCENT` and its minimum beside the
    others in `src/tui/screens/sessions.rs::columns`, then render it in
    `row_text`. Shares are percentages of the flexible width, so the table
-   stretches with the card; the title column takes what they leave. A value the
-   core does not carry yet is an explicit `@todo(core)` plate named by a
-   constant such as `EXEC_REASON`, `RENAME_NOTICE`, or `MODE_PLACEHOLDER`,
-   never a fabricated value.
+   stretches with the card; the title column takes what they leave. A column
+   renders a fact the session summary carries, never a fabricated value.
 3. Filtering, ordering, and the cursor clamp stay in
    `SessionsBrowserState::refresh`: the view lays rows out and decides nothing.
 
@@ -435,7 +436,8 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    on, and every other mouse event stays ignored.
 4. Handle the action in `src/app/state.rs::update` and put its transition body
    in `src/app/sessions.rs`, `browser.rs`, `run.rs`, or `input.rs`; a layered
-   key's arm lives in its own file (`ctrl_c.rs`, `escape.rs`).
+   key's arm lives in `src/app/arm.rs`, beside the key layers `ctrl_c.rs` and
+   `escape.rs`.
 
 ### A new slash command
 
@@ -444,9 +446,12 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 2. Add one `CommandSpec` entry to `COMMANDS` in `src/app/commands.rs` with its
    name, description, category, action, and declared arguments. An argument is
    an `ArgumentSpec` naming itself, its `ValueSpec` values with their one-line
-   descriptions, and whether it is required; the registry is the single source
-   for the submission path, the band, the argument completions, and every
-   notice, so nothing else spells a command name or value.
+   descriptions, and whether it is required; an argument that declares no value
+   is free-form and its word is the transition's to parse. The registry is the
+   single source for the submission path, the REPL's parse, the band, the
+   argument completions, and every notice, so nothing else spells a command
+   name or value. Both front ends dispatch `CommandAction` in an exhaustive
+   match, so a new action reaches both.
 3. Advertise it in `src/tui/panes/status.rs::DEFAULT_HINT`.
 
 ### A new client-backed behavior

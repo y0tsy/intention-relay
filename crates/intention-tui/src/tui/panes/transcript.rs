@@ -565,15 +565,14 @@ mod tests {
 
     use std::cell::RefCell;
     use std::ops::Range;
-    use std::sync::atomic::{AtomicI64, Ordering};
 
-    use intention_client::SessionStreamState;
     use intention_proto::{
-        BoundedText, ConfigRevisionId, MessageId, MessageKindDto, MessageProjectionDto, ProjectId,
-        RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto, SessionId,
-        SessionProjectionDto, SessionSnapshotDto, TextDeltaChannelDto, TextDeltaFrameDto,
-        TextResult, ToolCallId, ToolCallRowDto, ToolIdentityDto, ToolInput, ToolResult,
-        ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceId, WorkspaceRootDto,
+        MessageProjectionDto, RunId, RunStatusDto, SessionFrameDto, SessionId, TextDeltaChannelDto,
+        TextDeltaFrameDto, ToolCallId,
+    };
+    use intention_test_support::fixtures::{
+        assistant_row, full_transcript, reasoning_row, snapshot, stream_state, tool_call_row,
+        tool_result_row, user_row,
     };
     use revue::render::Modifier;
 
@@ -598,177 +597,6 @@ mod tests {
     /// A content width wide enough for the whole fixture set to lay out.
     const WIDTH: usize = 48;
 
-    /// Returns one fresh durable row identity for a committed fixture row.
-    fn row_id() -> MessageId {
-        static NEXT: AtomicI64 = AtomicI64::new(0);
-        MessageId::new(NEXT.fetch_add(1, Ordering::Relaxed) + 1)
-            .expect("the fixture row identity is positive")
-    }
-
-    /// Returns one committed user row carrying `text`.
-    fn user_row(session_id: SessionId, text: &str) -> MessageProjectionDto {
-        MessageProjectionDto::new(
-            row_id(),
-            session_id,
-            None,
-            MessageKindDto::User,
-            text,
-            None,
-            None,
-        )
-        .expect("the fixture user row is coherent")
-    }
-
-    /// Returns one committed assistant row carrying `text` and `reasoning`.
-    fn assistant_row(
-        session_id: SessionId,
-        run_id: RunId,
-        text: &str,
-        reasoning: Option<&str>,
-    ) -> MessageProjectionDto {
-        MessageProjectionDto::new(
-            row_id(),
-            session_id,
-            Some(run_id),
-            MessageKindDto::Assistant,
-            text,
-            reasoning.map(str::to_owned),
-            None,
-        )
-        .expect("the fixture assistant row is coherent")
-    }
-
-    /// Returns one committed tool row of `kind` bound to `call_id`.
-    fn tool_row(
-        session_id: SessionId,
-        run_id: RunId,
-        kind: MessageKindDto,
-        text: &str,
-        call_id: ToolCallId,
-    ) -> MessageProjectionDto {
-        let identity =
-            ToolIdentityDto::parse("read").expect("the fixture tool identity is well-formed");
-        let tool = match kind {
-            MessageKindDto::ToolCall => ToolRowDto::Call(
-                ToolCallRowDto::new(
-                    call_id,
-                    identity,
-                    ToolInput::from_arguments_json("read", text).ok(),
-                )
-                .expect("the fixture call row is coherent"),
-            ),
-            MessageKindDto::ToolResult => ToolRowDto::Result(
-                ToolResultRowDto::new(
-                    call_id,
-                    identity,
-                    ToolResultStatusDto::Completed,
-                    Some(ToolResult::Read(TextResult {
-                        text: BoundedText::new(text).expect("the fixture text is bounded"),
-                        truncated: false,
-                    })),
-                    Vec::new(),
-                )
-                .expect("the fixture result row is coherent"),
-            ),
-            _ => unreachable!("the tool-row fixture serves tool rows"),
-        };
-        MessageProjectionDto::new(
-            row_id(),
-            session_id,
-            Some(run_id),
-            kind,
-            text,
-            None,
-            Some(tool),
-        )
-        .expect("the fixture tool row is coherent")
-    }
-
-    /// Returns one run projection of `session_id` in `status`.
-    fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProjectionDto {
-        let started_at = intention_proto::TimestampDto::from_unix_seconds(1_726_000_000)
-            .expect("fixture timestamp is valid");
-        let finished_at = intention_proto::run_status_is_terminal(status).then_some(started_at);
-        RunProjectionDto::new(
-            session_id,
-            run_id,
-            TurnId::new(),
-            status,
-            ConfigRevisionId::new(),
-            None,
-            started_at,
-            finished_at,
-            0,
-        )
-        .expect("fixture run projection is valid")
-    }
-
-    /// Returns one live session-stream state over `messages`.
-    fn stream_state(
-        session_id: SessionId,
-        run_id: RunId,
-        messages: Vec<MessageProjectionDto>,
-    ) -> SessionStreamState {
-        SessionStreamState::from_snapshot(session_snapshot(
-            session_id,
-            Some(run(session_id, run_id, RunStatusDto::Running)),
-            messages,
-        ))
-    }
-
-    /// Returns one session snapshot carrying `messages` and no active run.
-    fn snapshot(session_id: SessionId, messages: Vec<MessageProjectionDto>) -> SessionSnapshotDto {
-        session_snapshot(session_id, None, messages)
-    }
-
-    /// Returns one client state holding exactly the rows it retains.
-    ///
-    /// Rows are read into the state until its retained count stops growing, so
-    /// the fixture measures the client's own window through the client instead
-    /// of restating its bound.
-    fn full_transcript(session_id: SessionId, run_id: RunId) -> SessionStreamState {
-        let mut state = SessionStreamState::new(session_id);
-        let mut retained = 0;
-        loop {
-            let row = assistant_row(session_id, run_id, &format!("row {retained}"), None);
-            let read = SessionStreamState::from_snapshot(session_snapshot(
-                session_id,
-                Some(run(session_id, run_id, RunStatusDto::Running)),
-                vec![row],
-            ));
-            state
-                .reconcile(read)
-                .expect("the fixture read belongs to the state's own session");
-            if state.messages().len() == retained {
-                return state;
-            }
-            retained = state.messages().len();
-        }
-    }
-
-    /// Returns one session snapshot whose projection carries `active_run`.
-    fn session_snapshot(
-        session_id: SessionId,
-        active_run: Option<RunProjectionDto>,
-        messages: Vec<MessageProjectionDto>,
-    ) -> SessionSnapshotDto {
-        let root = WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-            .expect("the process temporary directory is an absolute workspace root");
-        let projection = SessionProjectionDto::new(
-            ProjectId::new(),
-            session_id,
-            WorkspaceId::new(),
-            root,
-            RunModeDto::Build,
-            None,
-            active_run,
-            Vec::new(),
-        )
-        .expect("the fixture session projection is coherent");
-        SessionSnapshotDto::with_projection(session_id, projection, messages)
-            .expect("the fixture session snapshot is coherent")
-    }
-
     /// Returns the transcript the layout fixtures compare: a user card, an
     /// answer carrying every block kind, and a reasoning block.
     fn fixture_messages(session_id: SessionId, run_id: RunId) -> Vec<MessageProjectionDto> {
@@ -779,13 +607,8 @@ mod tests {
                       alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi \
                       omicron pi rho sigma tau";
         vec![
-            user_row(session_id, "# user card\n\n- one\n- two"),
-            assistant_row(
-                session_id,
-                run_id,
-                answer,
-                Some("first thought\nsecond thought"),
-            ),
+            user_row(session_id, None, "# user card\n\n- one\n- two"),
+            reasoning_row(session_id, run_id, answer, "first thought\nsecond thought"),
         ]
     }
 
@@ -794,6 +617,7 @@ mod tests {
         let mut state = AppState::new(None);
         state.update(Action::SessionSnapshotLoaded(snapshot(
             session_id,
+            None,
             fixture_messages(session_id, run_id),
         )));
         state
@@ -804,7 +628,10 @@ mod tests {
         let mut state = fixture_state(session_id, run_id);
         let rows = state.transcript().to_vec();
         state.update(Action::SessionStreamOpened(stream_state(
-            session_id, run_id, rows,
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+            rows,
         )));
         state
     }
@@ -840,7 +667,7 @@ mod tests {
     /// never an append.
     fn append_row(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
         state.update(Action::FrameReceived(SessionFrameDto::Content(
-            assistant_row(session_id, run_id, text, None),
+            assistant_row(session_id, run_id, text),
         )));
     }
 
@@ -1073,7 +900,8 @@ mod tests {
 
         state.update(Action::SessionSnapshotLoaded(snapshot(
             session_id,
-            vec![user_row(session_id, "a whole new session")],
+            None,
+            vec![user_row(session_id, None, "a whole new session")],
         )));
         let merged = state.transcript().len();
         let replayed = cache
@@ -1102,10 +930,13 @@ mod tests {
         let mut state = AppState::new(None);
         state.update(Action::SessionSnapshotLoaded(snapshot(
             session_id,
+            None,
             Vec::new(),
         )));
         state.update(Action::SessionStreamOpened(full_transcript(
-            session_id, run_id,
+            session_id,
+            run_id,
+            |index| assistant_row(session_id, run_id, &format!("row {index}")),
         )));
         let retained = state.transcript().len();
         let mut cache = TranscriptLayoutCache::new();
@@ -1117,7 +948,7 @@ mod tests {
         ranges.clear();
 
         state.update(Action::FrameReceived(SessionFrameDto::Content(
-            assistant_row(session_id, run_id, "the newest row", None),
+            assistant_row(session_id, run_id, "the newest row"),
         )));
         assert_eq!(
             state.transcript().len(),
@@ -1173,6 +1004,44 @@ mod tests {
     }
 
     #[test]
+    fn an_appended_tool_result_re_pairs_a_call_block_and_replays_the_transcript() {
+        let session_id = SessionId::new();
+        let run_id = RunId::new();
+        let mut state = opened_stream(session_id, run_id);
+        let call_id = ToolCallId::new();
+        let mut cache = TranscriptLayoutCache::new();
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
+            committed_blocks(&state, range, width, LIGHT)
+        });
+
+        // The call row appends on its own: the cached prefix stays current.
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
+            tool_call_row(session_id, run_id, "read", r#"{"path":"src"}"#, call_id),
+        )));
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
+            committed_blocks(&state, range, width, LIGHT)
+        });
+        assert_eq!(cache.layout_count(), 2, "the call row is a tail layout");
+
+        // Its result re-pairs the block that call row owns, and that block is
+        // inside the cached prefix, so the whole transcript is laid out again.
+        state.update(Action::FrameReceived(SessionFrameDto::Content(
+            tool_result_row(session_id, run_id, "read", "file contents", call_id),
+        )));
+        let mut ranges: Vec<Range<usize>> = Vec::new();
+        cache.rows(&state, WIDTH, LIGHT, |range, width| {
+            ranges.push(range.clone());
+            committed_blocks(&state, range, width, LIGHT)
+        });
+        assert_eq!(
+            ranges,
+            vec![0..state.transcript().len()],
+            "a committed tool result lays the whole transcript out again"
+        );
+        assert_eq!(cache.layout_count(), 3);
+    }
+
+    #[test]
     fn the_provisional_tail_is_laid_out_per_frame_and_never_cached() {
         let session_id = SessionId::new();
         let run_id = RunId::new();
@@ -1220,7 +1089,7 @@ mod tests {
 
         let committed = assistant_blocks(
             &state,
-            &assistant_row(session_id, run_id, text, None),
+            &assistant_row(session_id, run_id, text),
             0,
             WIDTH,
             LIGHT,
@@ -1258,7 +1127,7 @@ mod tests {
         // the one-row gap the transcript puts between them.
         let committed = assistant_blocks(
             &AppState::new(None),
-            &assistant_row(session_id, run_id, answer, Some(reasoning)),
+            &reasoning_row(session_id, run_id, answer, reasoning),
             0,
             WIDTH,
             LIGHT,
@@ -1283,7 +1152,7 @@ mod tests {
         let run_id = RunId::new();
         let blocks = assistant_blocks(
             &AppState::new(None),
-            &assistant_row(session_id, run_id, "", Some("weighing the call")),
+            &reasoning_row(session_id, run_id, "", "weighing the call"),
             0,
             WIDTH,
             LIGHT,
@@ -1315,25 +1184,19 @@ mod tests {
         let run_id = RunId::new();
         let call_id = ToolCallId::new();
         let messages = vec![
-            assistant_row(session_id, run_id, "", Some("weighing the call")),
-            tool_row(
+            reasoning_row(session_id, run_id, "", "weighing the call"),
+            tool_call_row(
                 session_id,
                 run_id,
-                MessageKindDto::ToolCall,
+                "read",
                 r#"{"path":"src/lib.rs"}"#,
                 call_id,
             ),
-            tool_row(
-                session_id,
-                run_id,
-                MessageKindDto::ToolResult,
-                "file contents",
-                call_id,
-            ),
+            tool_result_row(session_id, run_id, "read", "file contents", call_id),
         ];
         let mut state = AppState::new(None);
         state.update(Action::SessionSnapshotLoaded(snapshot(
-            session_id, messages,
+            session_id, None, messages,
         )));
         let rows = direct_rows(&state, WIDTH, LIGHT);
         let reasoning = rows
@@ -1402,7 +1265,7 @@ mod tests {
         // The commit lands the assistant row at exactly the row the live
         // segment was anchored at, carrying the same reasoning.
         state.update(Action::FrameReceived(SessionFrameDto::Content(
-            assistant_row(session_id, run_id, answer, Some(&reasoning)),
+            reasoning_row(session_id, run_id, answer, &reasoning),
         )));
         assert_eq!(state.transcript().len(), live_row + 1);
         assert_eq!(
@@ -1417,7 +1280,7 @@ mod tests {
         );
         let committed = assistant_blocks(
             &state,
-            &assistant_row(session_id, run_id, answer, Some(&reasoning)),
+            &reasoning_row(session_id, run_id, answer, &reasoning),
             live_row,
             WIDTH,
             LIGHT,
@@ -1566,10 +1429,12 @@ mod tests {
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let rows: Vec<_> = (0..3)
-            .map(|index| assistant_row(session_id, run_id, &format!("row {index}"), None))
+            .map(|index| assistant_row(session_id, run_id, &format!("row {index}")))
             .collect();
         let mut state = AppState::new(None);
-        state.update(Action::SessionSnapshotLoaded(snapshot(session_id, rows)));
+        state.update(Action::SessionSnapshotLoaded(snapshot(
+            session_id, None, rows,
+        )));
         // The transcript's display rows are `row 0`, a gap, `row 1`, a gap,
         // `row 2`; selecting rows 2 and 3 covers the second answer and its
         // following gap.
@@ -1632,12 +1497,8 @@ mod tests {
         let mut state = AppState::new(None);
         state.update(Action::SessionSnapshotLoaded(snapshot(
             session_id,
-            vec![assistant_row(
-                session_id,
-                run_id,
-                "the answer",
-                Some(&reasoning),
-            )],
+            None,
+            vec![reasoning_row(session_id, run_id, "the answer", &reasoning)],
         )));
         let mut cache = TranscriptLayoutCache::new();
         let marker = {
