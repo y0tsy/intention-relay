@@ -196,8 +196,6 @@ architecture 04's retention rules.
 
 -  Every remaining milestone (M6, M7, M8, M10, and M11) has an accepted activating specification before its
 implementation starts.
--  M3/M4 startup-only configuration, recorded revisions, sessions, runs, and bytes remain authoritative and unchanged;
-SQLite storage is the single live schema created directly on open.
 -  Slice 1.5 preserves durable meaning: the single storage schema is created on open under one integer stamp, where a
 stamp bump discards and recreates the database with no migration or compatibility layer, and tool and lifecycle
 semantics keep their recorded law.
@@ -383,7 +381,7 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 over the live loop;
 - kernel-child ingress, re-subscription reading current state, cancellation, slow-peer, and no-bypass fixtures;
 - supervision-topology fixtures;
-- M3/M4 tool denial, ordinary workspace addressing, and retained RLM preservation fixtures.
+- tool-denial and ordinary workspace-addressing fixtures.
 
 ### Acceptance outcomes
 
@@ -391,13 +389,12 @@ over the live loop;
 retry of an interrupted call;
 -  bridge ingress cannot bypass selection admission, `ToolCallId`, start/result evidence, or post-commit reread
 publication;
-- no ordinary M3/M4/M5 tool path, denial, or re-subscription read changes meaning.
+- no ordinary tool path, denial, or re-subscription read changes meaning.
 
 ### Exit criteria
 
 -  the activating specification's contracts, tests, coverage, and evidence are recorded;
 -  no two capability paths or registries exist, and supervision is topology only, never a second runtime or sandbox;
-- M3/M4 bytes and retained RLM history remain unchanged;
 - the milestone's activation evidence is recorded.
 
 ## Milestone 11: Capabilities and context — MCP, kernel, and Skills/context
@@ -416,8 +413,8 @@ typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 -  session-scoped private kernels with run-scoped namespaces, foreground cells, safe output, verified checkpoints,
 background-task restrictions, cancellation, recovery, and no-resume semantics (architecture 20);
 -  the project script library (`.ir/scripts`): agent-authored modules persisted as ordinary project files through the
-frozen tool descriptors, an exact import surface, bounded script-import evidence published as run facts, and no
-executable payload in checkpoint payload or metadata ([architecture 20](20-ipython-kernel-lifecycle.md));
+frozen tool descriptors, an exact import surface, and no executable payload in checkpoint payload or metadata
+([architecture 20](20-ipython-kernel-lifecycle.md));
 -  rich MIME/raw kernel output projection, bounded and credential-free, never substituting for the closed text-only safe
 projection;
 -  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
@@ -432,20 +429,16 @@ Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations fo
 - MCP connection-record, method-list discovery, invocation, disposal, and safe-projection fixtures;
 - kernel epoch, cell, checkpoint, restore, cancellation, and recovery fixtures;
 -  `.ir/scripts` import-surface fixtures (missing library, unaddressable library path, and kernel-side scope cases),
-reuse by reading the file in a fresh epoch, and bounded script-import evidence without source text or absolute paths;
+and reuse by reading the file in a fresh epoch;
 - kernel output projection fixtures without raw frames, MIME payloads, binary objects, or credentials;
 - Skill selection, context-source selection, and compaction fixtures plus no-current-state reconstruction;
-- provider driver, header-injection, and parser wire fixtures;
-- M3/M4 and retained IPython/RLM/provider/context preservation fixtures.
+- provider driver, header-injection, and parser wire fixtures.
 
 ### Acceptance outcomes
 
 -  no MCP connection record, kernel epoch, script module, or context family gains authority beyond its own contract;
 -  the kernel imports exactly the referenced library directory, a fresh run reuses a module only by reading the file,
 and checkpoint payload and metadata carry no script source;
--  an unrepresentable import-evidence list fails before publication with `kernel_script_library_unavailable` and is
-never truncated or stringified;
-- no M3/M4 or retained IPython/RLM/provider/context history changes meaning.
 
 ### Exit criteria
 

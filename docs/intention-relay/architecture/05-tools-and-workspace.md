@@ -212,9 +212,8 @@ trusted-local.
 
 ## Autopilot tool boundary
 
-Existing M3/M4 path-handling and confirmation behavior remains historical. The accepted Build Autopilot policy
-intentionally removes per-action confirmation for the configured Build surface. No phase can add discretionary
-confirmation or risk authorization between the identity check and the tool dispatch. The tool contracts, the
+Build Autopilot intentionally removes per-action confirmation for the configured Build surface. No phase can add
+discretionary confirmation or risk authorization between the identity check and the tool dispatch. The tool contracts, the
 model-visible set, and the loop details are owned by
 [Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md). This does not create a second tool path or
 bypass path. Plan `execute` remains available under advisory focus guidance and is not a sandbox;

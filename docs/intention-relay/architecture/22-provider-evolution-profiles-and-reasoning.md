@@ -121,12 +121,12 @@ admission. Attempts, retries, timeout ownership, and recovery are owned by [arch
 08](08-model-protocol-and-providers.md); no default, same-model, alternate endpoint, kind, or current-TOML fallback
 exists.
 
-## M4 behavior and historical records
+## Provider kinds and record state
 
-Provider selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter` and
-`generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. M3/M4
-records gain no entry, session-selection, reasoning-category, or capabilities state, and historical generic model IDs
-remain generic; no legacy selection bridge, synthetic binding, or `LegacyM4SelectionBindingDto` exists.
+Provider selection is explicit configuration. The only configuration kind strings are `openrouter` and
+`generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification. A record
+carries only state it recorded, a generic model ID stays generic, and no legacy selection bridge or synthetic binding
+exists.
 
 ## Dependencies, non-goals, and evidence
 

@@ -6,8 +6,7 @@ Owner: architecture 18.
 
 This document owns future MCP connection administration, discovery, bounded per-connection method lists, direct
 invocation, safe projections, disposal, recovery, and compatibility. It applies only to future run execution through
-the fixed `mcp` `ToolId`. Retained bounded user connection/catalog research remains historical provenance, not future
-MCP state.
+the fixed `mcp` `ToolId`.
 
 ## Ownership and non-authorities
 
@@ -26,10 +25,9 @@ provider selection.
 
 `mcp` stays one fixed `ToolId`; the model reaches it as an ordinary architecture-15 tool under the run's frozen
 selection, admission, tool loop, and post-commit publication rules. MCP never creates another ToolId, tool spec,
-plugin, direct primitive path, daemon, registry, or authority. Future work supersedes retained requirements for a
-preloaded catalog, no discovery, and quota gates, and it preserves the one
-gateway, typed boundary, private resources, idempotency, redaction, publication after commit, cancellation/disposal,
-and no-resume law.
+plugin, direct primitive path, daemon, registry, or authority. MCP carries no preloaded catalog and no quota gate, and
+it preserves the one gateway, typed boundary, private resources, idempotency, redaction, publication after commit,
+cancellation/disposal, and no-resume law.
 
 This document owns the field semantics of one user-editable, credential-free connection record, mirroring the
 provider endpoint rules ([architecture 22](22-provider-evolution-profiles-and-reasoning.md)):
@@ -118,7 +116,7 @@ and terminated on connection archival, idle disposal, failure, or daemon shutdow
 connections, never adopted or reattached after restart, and never treated as durable execution authority. HTTP connections and local
 process epochs are private daemon resources, never durable execution authority.
 
-MCP recovery validates historical MCP records, classifies unfinished calls, disposes private resources, establishes
+MCP recovery validates committed MCP records, classifies unfinished calls, disposes private resources, establishes
 fresh availability without dispatch, and never reconnects, polls, reattaches, respawns, retries, resumes, rediscovers, or
 repeats old discovery/invocation work. A fresh run imports no live process, connection handle, credential, or method
 list; it discovers again against the current connection record, and earlier discovery remains audit evidence only.
@@ -133,11 +131,10 @@ widen, or inspect private resources, and an interrupted child MCP call's partial
 Future MCP projections use typed requests ([architecture 03](03-daemon-transport-and-adapters.md))
 layered with the `model_tool_loop_v1` descriptor/model
 capability: live notifications through one post-commit gate; reconnect re-reads current state, and there is no event
-tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. M3/M4 and retained bounded-MCP/RLM
-rows that the current storage stamp still carries gain no synthetic connection, method, process, or authority state, and
-a database without that stamp is discarded whole rather than opened; historical M4 tool calls remain denial evidence,
-and no historical record, current server, endpoint, credential, schema, registry, configuration, ancestry, Goal, Skill,
-UI, logs, or remote continuation state may reconstruct missing MCP meaning.
+tail, cursor, or resynchronization. No caller receives a partial ordinary snapshot. No MCP record carries state it did
+not record, and no current state reconstructs meaning a record never had: a database without the current storage stamp
+is discarded whole rather than opened, and no record, server, endpoint, credential, schema, registry, configuration,
+ancestry, Goal, Skill, UI, log, or remote continuation state supplies missing MCP meaning.
 
 ## MCP detail: bounded gateway, bounds, and safe failures
 

@@ -6,8 +6,6 @@ Owner: architecture 21.
 
 This document owns future Goal context selection and evidence, Skill discovery and selection, the frozen context-source
 selection, and immutable compaction. It applies only to future run execution.
-Retained Goal, Skill, or compaction material remains research provenance and historical-only where it conflicts
-with architectures 15--20.
 
 ## Ownership and non-authorities
 
@@ -174,8 +172,7 @@ source-page sizes, resource values, provider evolution, architecture-23 session 
 delivery, physical Plan artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or
 production activation.
 
-M3/M4 and retained records gain no Goal, Skill, source selection, summary, applicability link,
-child, MCP, activity, or policy state. No current mutable state may reconstruct missing future context meaning.
+No record carries state it did not record, and no current state reconstructs meaning a record never had.
 
 Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 

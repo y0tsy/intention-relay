@@ -5,8 +5,7 @@
 Owner: architecture 19.
 
 This document owns future kernel-child ingress, safe delivery of committed results, cancellation propagation, and
-bridge-local recovery classification. It applies only to future run execution. Retained RLM bridge, child, and
-activity material remains research provenance and historical-only where it conflicts with architectures 15--18.
+bridge-local recovery classification. It applies only to future run execution.
 
 ## Ownership and one capability path
 
@@ -21,7 +20,7 @@ daemon, lifecycle, tool implementation, child executor, MCP client, provider sel
 or OS privilege boundary.
 
 Python/RLM facade code, direct model ingress, kernels, children, MCP servers, providers, adapters, bridge connections,
-current configuration, readiness, evidence, and retained RLM identities cannot create or widen
+current configuration, readiness, and evidence cannot create or widen
 tool, lifecycle, child, or reconciliation authority; every invocation reaches architecture 15's one daemon-owned,
 Rust-owned capability path.
 
@@ -124,12 +123,9 @@ implementation detail.
 ## Compatibility, dependencies, and non-goals
 
 M4 provider kinds remain `openrouter` and `generic-chat-completion-api`; model names do not select a provider or bridge
-behavior. Historical M4 tool calls remain denial evidence. Historical M3/M4 and retained RLM rows that the current
-storage stamp still carries gain no bridge ingress, operation, MCP, Skill, Goal, activity, or policy state, and a
-database without that stamp is discarded whole rather than opened, so no current mutable state may reconstruct
-missing bridge meaning. Retained RLM `SubAgentId`, `RlmParentLinkDto`, session/run-rooted
-trees, policy inheritance, queues, activity identities, and product limits remain historical only; no later bridge may
-reference exact legacy bytes, rewrite, normalize, or synthesize future state
+behavior. No bridge record carries state it did not record, and no current state reconstructs meaning a record never
+had: a database without the current storage stamp is discarded whole rather than opened. No later bridge may reference
+exact legacy bytes, rewrite, normalize, or synthesize future state
 ([architecture 00](00-principles-and-scope.md)).
 
 This document depends on architectures 15, 18, and 20. Related

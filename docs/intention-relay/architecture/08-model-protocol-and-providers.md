@@ -18,7 +18,7 @@ ModelExecutionDriver
   execute(ModelRequestDto, ModelCancellationSignal) -> ModelEventStream
 ```
 
-M4 defines text-only `ModelMessageDto` context, an optional system context, and `ModelStreamLifecycleDto`.
+The contract defines text-only `ModelMessageDto` context, an optional system context, and `ModelStreamLifecycleDto`.
 Every provider stream starts with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one
 terminal `Finished` event. The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) owns that one
 normalizing stream (the pending queue, the seeded start, the translation order, and the terminal fact), and each adapter
@@ -49,9 +49,8 @@ The optional system context is the frozen instruction text of [architecture
 30](30-instruction-sources-and-system-context.md): the daemon assembles it once per admitted run from the
 declared sources, it is bounded and credential-free, and the current drivers keep translating it into the
 leading system message with no driver-specific framing, rewrite, or provider-side scan; the request marks the end of
-that instruction block as an ephemeral prompt-cache breakpoint. Historical M3/M4 requests keep the system context
-absent. A driver never synthesizes, substitutes, reorders, or truncates instruction text, and a provider cannot inject
-or extend it.
+that instruction block as an ephemeral prompt-cache breakpoint. A driver never synthesizes, substitutes, reorders, or
+truncates instruction text, and a provider cannot inject or extend it.
 
 Provider SDK types cannot leave their provider crate. Only `intention-providers` declares `openrouter-rs` and
 `async-openai`, so any other crate that names either SDK namespace fails to compile; inside the crate each SDK stays in
@@ -123,13 +122,13 @@ Driver-specific rules stay with their adapter: OpenRouter maps its SDK finish-re
 wire finish-reason strings, OpenRouter delegates retryability to the SDK classifier, the generic adapter classifies HTTP
 status ranges with a provider `type` fallback, and each adapter owns its native wire shapes and error codes.
 
-The completed M4 daemon host starts the selected SDK-backed stream through the private provider composition path.
+The daemon host starts the selected SDK-backed stream through the private provider composition path.
 Provider crates continue to expose only provider-neutral contracts; runtime-owned execution and persistent delivery do
 not expose SDK resources.
 
-Provider/model selection is explicit configuration. During M4, the only configuration kind strings remain `openrouter`
+Provider/model selection is explicit configuration. The only configuration kind strings are `openrouter`
 and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification.
-`openai` is not an M4 configuration kind and requires a separately declared OpenAI Responses driver crate and contract
+`openai` is not a configuration kind and requires a separately declared OpenAI Responses driver crate and contract
 decision before it is introduced. The generic provider accepts text context/output, advertised tool definitions, usage,
 finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; multimodal and vendor
 extensions stay outside its capability declaration, which provider selection validates before any outbound request is
@@ -149,7 +148,7 @@ every place the replay would change, and it means work the provider layer must s
 The OpenRouter adapter ignores the transient attachment because its pinned SDK request type carries no reasoning
 field at all: through that kind reasoning is output-only, and a model whose wire validates the echo for tool calls
 (Claude, Gemini 3, DeepSeek) is not supported there. OpenRouter declares text, reasoning, tool-call, and streaming capability
-while its M4 foundation declares no multimodal or vendor-extension support. Capability negotiation happens once at
+while its declared foundation carries no multimodal or vendor-extension support. Capability negotiation happens once at
 provider selection: the selected driver's declaration must serve streamed text with tool calls, and the per-request
 execution path carries no capability check. A truncation limitation of that pinned SDK is recorded under
 [Retry and timeout ownership](#retry-and-timeout-ownership).
@@ -158,11 +157,9 @@ execution path carries no capability check. A truncation limitation of that pinn
 
 Resolved TOML configuration selects a provider entry and model; the named entry list, the global default, and the
 optional per-session selection are owned by [architectures 22](22-provider-evolution-profiles-and-reasoning.md) and
-[29](29-provider-session-and-profiles-protocol.md). M1 defines a serializable, credential-free `ConfigSnapshotDto`
-foundation containing a `ConfigRevisionId`, capture timestamp, and redacted resolved selection. M1 does not persist
-revisions, apply configuration to a running daemon, or attach snapshots to runs; M3/M4 own the startup application and
-recorded-revision workflows. A later run receives the
-immutable snapshot selected at startup.
+[29](29-provider-session-and-profiles-protocol.md). The credential-free `ConfigSnapshotDto` carries a `ConfigRevisionId`,
+a capture timestamp, and the redacted resolved selection. The daemon owns applying configuration at startup and the
+recorded-revision workflow, and a run receives the immutable snapshot selected at startup.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.

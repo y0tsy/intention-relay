@@ -22,8 +22,8 @@ instruction commands: instruction configuration is filesystem-level.
 Instruction text is not authority: it cannot create, widen, or remove a tool, provider selection, admission
 decision, child, MCP connection, kernel epoch, or reconciliation outcome, and it
 cannot prove that an external effect did or did not happen.
-The channel applies to newly admitted runs only; historical M3/M4 requests and runs keep their recorded meaning and gain
-no instruction state.
+The channel applies to newly admitted runs only: a run admitted before the channel existed carries no instruction state,
+and no current state reconstructs it.
 
 ## Instruction sources
 
@@ -148,8 +148,8 @@ Classification and redaction rules of [architecture 09](09-configuration-securit
 
 ## Compatibility and historical preservation
 
-M3/M4 requests keep the optional system context absent, and M3/M4 runs carry no instruction state. Historical records
-never gain a reconstructed instruction text, and a missing or unreadable materialized text leaves the
+A run admitted before the channel existed carries no instruction state, and no record gains a reconstructed instruction
+text; a missing or unreadable materialized text leaves the
 dependent fork or handoff blocked while unrelated history remains readable. The mechanism adds no second model protocol,
 no second storage schema, and no migration; it is part of the single live first-scope
 instruction contract.

@@ -70,8 +70,8 @@ denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`
 path; their owners may require typed URL, question, todo, retained-content, plan, child-agent, or MCP-method references
 instead. No tool requires confirmation. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
-Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); the removed `IRCR` /
-`typed-tlv-v1` / SHA-256 canonical codec is not replaced by a competing codec. Semantic changes require a new record
+Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); no competing codec
+replaces that typed record form. Semantic changes require a new record
 version; labels, executor handles, live readiness, and opaque owner resources are excluded from identity.
 
 ## Base-tool initial contracts
