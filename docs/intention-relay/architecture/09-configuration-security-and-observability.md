@@ -3,7 +3,7 @@
 **Current policy.**
 
 This document defines TOML-only configuration, configuration persistence, open-text credential handling, credential
-isolation, configuration snapshots, daemon diagnostics, and operational observability. It does not introduce remote
+isolation, configuration snapshots, and operational observability. It does not introduce remote
 authentication, cloud secrets management, or multi-user configuration.
 
 ## TOML-only configuration
@@ -101,7 +101,7 @@ on Unix; the application performs no permission check and issues no warning;
 -  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, and
 `configuration_revisions` records, plan files, UI DTOs, and normal logs. `execute` is trusted-local and may
 inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
-- errors, logs, and diagnostic bundles never carry credentials;
+- errors and logs never carry credentials;
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel
 ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)) injects a real credential from the environment
@@ -139,19 +139,17 @@ committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation D
 
 ## Observability
 
-Daemon-owned observability must expose typed, safe operational data:
+Daemon-owned observability exposes only typed, safe operational data the daemon can emit:
 
 - daemon health and readiness;
 - the live wire version and stale-peer detection;
 - connection/subscription health;
 - session/run states and durations;
-- pending turns and their count;
 - provider/model identity without credentials;
 - usage where reported;
 - tool lifecycle and policy outcomes;
-- VFR/Headroom decisions with safe metadata;
-- plan revision/status;
-- typed failure/correlation identifiers.
+- the bounded sizes of emitted results;
+- closed failure codes and the correlation references that tie a failure to its run, turn, and tool call.
 
 Adapters render observations. They do not infer daemon health from presentation timing.
 
@@ -190,4 +188,4 @@ Makefile](12-quality-gates-and-makefile.md).
 - exact TOML layout and include/import policy, if any;
 - user experience for config edits and daemon-restart-required changes;
 - credential entry at the startup boundary (no rotation command);
-- transcript/log retention and diagnostic export policy.
+- transcript and log retention policy.

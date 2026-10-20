@@ -73,7 +73,7 @@ The final user-facing tool names and DTO fields may differ, but they must retain
 The Headroom module owns:
 
 - typed compression eligibility and transform decisions;
-- the CCR storage contract and its implementation selection;
+- the CCR read-through view contract and its implementation selection;
 - references and retrieval metadata;
 - the `retrieve` tool contract;
 - safe compression observability.
@@ -81,16 +81,14 @@ The Headroom module owns:
 ### Required behavior
 
 - Headroom runs after a normalized tool result is available.
-- Original or normalized source content is retained according to CCR policy before a compressed model-context
-  representation relies on it.
-- The model receives a typed reference when recovery is available.
-- `retrieve` resolves one or more references, or returns a typed missing/expired error.
+- The durable tool result is the record. The CCR store is a bounded read-through view of it: it adds no retention
+  policy, no rotation, and no expiry, and it owns no lifecycle of its own.
+- A compressed model-context representation refers to the durable tool result, and the model receives a typed
+  reference when recovery is available.
+- `retrieve` resolves one or more references to their durable tool results, or returns a typed missing error.
 - Headroom does not erase the audit trail of the pre-compression result.
-- Expiry, capacity, and storage failures are explicit policy outcomes.
-
-Retention duration, rotation/compaction behavior, and expiry are deferred decisions: the delivered modules carry
-`@todo(vfr)` and `@todo(headroom)` markers naming the deferred rule where it applies, and the activating specification
-selects the values.
+- The view carries no size bound of its own: the durable result's own output window bounds what it can return, and a
+  storage failure is an explicit typed outcome.
 
 ## Deterministic extension ordering
 
@@ -115,14 +113,16 @@ original/retrieved content.
 | Physical tool result | Ephemeral primitive output. | Indirect/auditable as policy permits. | No direct guarantee. |
 | Normalized result | Durable tool record after VFR. | Yes, by default. | Candidate input. |
 | Compressed result | Headroom-specific context. | Metadata only by default. | Yes, when selected. |
-| CCR original | Retrieval backing content. | Not automatically. | Only through `retrieve`. |
+| CCR original | The durable tool result, read through the CCR view. | Not automatically. | Only through `retrieve`. |
 
 ## Failure behavior
 
 - An invalid VFR mapping fails back to a normal safe read result or a typed tool failure according to configured fail
   policy; it never emits an unresolvable placeholder.
-- Failure to retain required CCR content prevents an unsafe compressed reference from reaching the model.
-- An expired CCR reference returns a typed, observable result; it does not fabricate recovered content.
+- A reference is offered only once its durable tool result is committed, so a compressed reference never points at
+  content the record does not carry.
+- A reference that resolves to no durable tool result returns a typed, observable result; it does not fabricate
+  recovered content.
 - A transform failure records which stage failed without exposing source content or secrets in normal diagnostics.
 
 ## Required tests and outcomes
@@ -132,8 +132,7 @@ original/retrieved content.
 | VFR independence | Read tool test with VFR disabled/enabled. | Base read succeeds without linking VFR behavior into its implementation. |
 | VFR round trip | Fixture/property test for representation plus expand. | Expanded sections map to the original allowed source. |
 | Raw path | Workspace/VFR integration test. | Raw read obeys workspace policy and returns full permitted content. |
-| Headroom retrieval | Compression/CCR test. | `retrieve` returns retained original while unexpired. |
-| Expiry | Clock-controlled retention test. | Expired reference returns typed missing/expired outcome. |
+| Headroom retrieval | Compression/CCR test. | `retrieve` returns the durable tool result the reference names; an unresolved reference returns the typed missing outcome. |
 | Ordering | Full pipeline integration test. | VFR precedes persistence and Headroom precedes model-context insertion. |
 | UI/model distinction | Event and model-request capture test. | Adapter sees normalized content; model receives intended compressed content. |
 | Disabled extensions | Feature/config test. | Tool pipeline remains correct with each extension independently disabled. |
@@ -141,7 +140,7 @@ original/retrieved content.
 ## Quality-gate integration
 
 The VFR and Headroom modules live in `intention-tools` and are covered by its declared 60% line floor; their
-transform, retrieval, expiry, ordering, and adapter/model distinction tests are blocking `make verify` inputs in the
+transform, retrieval, ordering, and adapter/model distinction tests are blocking `make verify` inputs in the
 single feature configuration. Base tools stay free of transform behavior as an organization and review rule, not a
 separate crate boundary. See [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
@@ -156,7 +155,7 @@ and any base-tool private linkage to either transform.
 Deferred with `@todo` markers in the modules when they land:
 
 - exact VFR language set and size thresholds;
-- CCR backend, maximum capacity, retention duration, and rotation/compaction behavior;
+- CCR backend;
 - which metadata becomes visible in UI;
 - whether content is encrypted at rest in a later version;
 - exact fallback policy for VFR parser failures.

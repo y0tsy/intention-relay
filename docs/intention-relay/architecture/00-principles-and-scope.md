@@ -59,9 +59,9 @@ persisted under the one-transaction state-change law of [architecture 04](04-ses
 
 ### 9. Plan and Build are separate policies
 
-Plan and Build share an agent loop but have distinct tool policies. Plan may read the workspace and mutates only plan
-files in the daemon-defined plans directory through the plan owner. `execute` cannot be fully constrained and therefore
-has an explicit prompt policy, risk policy, and audit trail.
+Plan and Build share an agent loop but have distinct tool policies. Plan denies the project-mutating `write`/`edit`
+tools and mutates only plan files in the daemon-defined plans directory through the plan owner. `execute` cannot be
+fully constrained and therefore has an explicit prompt policy, risk policy, and audit trail.
 
 ### 10. Test-driven delivery is architectural
 
@@ -150,7 +150,7 @@ work; the second stays owned by the named slice.
 | Topic | Decision required |
 | --- | --- |
 | Transcript retention | Retention and compaction policy for transcript rows and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 8. |
-| CCR backend | Initial memory/SQLite retention strategy, limits, rotation, and expiry behavior ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). The M7 modules carry `@todo(headroom)` markers for the deferred values. |
+| CCR backend | The read-through view's storage backend ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). The durable tool result is the record, so the view carries no retention, rotation, expiry, or capacity policy. |
 
 ## Deferred decisions
 

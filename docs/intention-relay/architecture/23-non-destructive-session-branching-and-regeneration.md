@@ -112,7 +112,8 @@ carrying the parent `RunId` it regenerates (the concrete field lands with the ac
 ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
 capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
 immediate-child projections in stable creation order. They are not tree-wide event streams. A peer that does not
-speak the live wire fails closed with the typed `stale_daemon_protocol` error before any request is served.
+speak the live wire fails closed with the typed `invalid_local_protocol_response` error before any request is
+served.
 
 ## Detailed protocol DTOs, field tables, and bounds
 
@@ -148,12 +149,10 @@ and the source session keeps them.
 A fork child begins idle and owns no run-start path of its own: every child run starts from an ordinary user turn under
 the normal admission rules, with the frozen context already in place as the child's own history.
 
-`RenameSessionCommandDto`, `ArchiveSessionCommandDto`, and `RestoreSessionCommandDto` each carry a session ID, expected
-ordinary session sequence, and a globally stable `SessionPresentationOperationId`; rename also carries a
-`SessionTitleDto`. Equal repeats return the original accepted result. A reused operation ID with different semantics
-fails `session_presentation_operation_conflict`; a stale sequence fails `session_changed`. A command that already
-observes its requested presentation state succeeds with `changed = false` and appends no event. Archive still performs
-its mandatory idle check before either outcome.
+`RenameSessionCommandDto`, `ArchiveSessionCommandDto`, and `RestoreSessionCommandDto` each carry a session ID and
+`expected_ordinary_session_sequence`; rename also carries a `SessionTitleDto`. A stale sequence fails
+`session_changed`. A command that already observes its requested presentation state succeeds with `changed = false`
+and appends no event. Archive still performs its mandatory idle check before either outcome.
 
 `GetConversationTreeQueryDto` takes one `SessionId`. `SessionBranchesDto` returns that session's root summary, the
 session's own summary, and its immediate children in stable creation order. A tree is intentionally live between reads:
@@ -233,7 +232,6 @@ fork_operation_conflict
 fork_source_changed
 fork_boundary_ineligible
 session_archive_not_idle
-session_presentation_operation_conflict
 session_changed
 ```
 

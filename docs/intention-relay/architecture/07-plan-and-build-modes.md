@@ -98,9 +98,11 @@ revision durably; editing the body rewrites the single file and commits the matc
 | Create plan artifact | Explicit plan service/tool workflow. | Allowed through typed plan workflow. |
 | `execute` | Allowed under Build Autopilot. | Fully available and audited; the model receives advisory guidance not to mutate state, but the process is not technically contained. |
 
-Plan mode retains a runtime restriction for regular typed filesystem tools: ordinary project `write`/`edit` remains
-denied. This is deliberately different from `execute`, which is available for convenient investigation and may alter
-state beyond tool-level path policy. Plan therefore has a product focus, not a shell containment guarantee.
+Plan mode denies the project-mutating tool descriptors: ordinary project `write` and `edit` fail at execution with a
+typed policy error. `execute` is not structurally denied in Plan mode, because a shell cannot be contained by a
+descriptor list; it stays fully available, the Plan focus instruction guides it, and the audit records what it ran.
+Plan mode therefore denies the descriptors that mutate the project and does not prevent project mutation: a shell
+command can change the same bytes. Plan has a product focus, not a containment guarantee.
 
 Mode does not currently filter the tool definitions advertised in model requests: both Plan and Build requests advertise
 all six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Mode-based advertisement filtering
@@ -126,24 +128,21 @@ contribution cannot widen or narrow tool policy, and a Build run's projection ne
 
 ## Mode invariants
 
-1. Plan `execute` is available and audited but is never described as sandboxed or guaranteed read-only.
-2. Plan project `write`/`edit` remain incompatible through ordinary typed tools.
-3. Plan prompt guidance cannot create authority, change mode, or prevent side effects.
-4. Build Autopilot has no per-action confirmation barrier for configured active capabilities.
-5. Build Autopilot authority originates only from an explicit user Plan approval or Build start transition.
-6. Plan approval records the exact session-scoped plan number and its revision.
-7. Same-Session continuation preserves `SessionId` but creates a new `RunId`.
-8. The old Plan run, provider request, tool call, process, kernel, MCP, and bridge state are never resumed or reattached.
-9. The Build run binds an immutable mode, Autopilot policy, plan reference, and safe context projection.
-10. Optional handoff uses a bounded immutable safe projection and creates an independent Session; it transfers no
+These invariants are specific to Plan and Build mode. Global rules hold everywhere and keep their owners: unattended
+execution with no confirmation gate, structural security, and workspace addressing in [00 Principles and
+Scope](00-principles-and-scope.md); credential isolation and the numeric limits in [09 Configuration, Security, and
+Observability](09-configuration-security-and-observability.md); the gates that verify them in [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md).
+
+1. Plan denies the project-mutating `write` and `edit` descriptors; `execute` stays available, advisory-guided, and
+audited.
+2. Build Autopilot authority originates only from an explicit user Plan approval or Build start transition.
+3. Plan approval records the exact session-scoped plan number and its revision.
+4. Plan approval starts the Build run in the same Session under a new `RunId`; the old Plan run, provider request,
+tool call, process, kernel, MCP, and bridge state are never resumed or reattached.
+5. The Build run binds an immutable mode, Autopilot policy, plan reference, and safe context projection.
+6. Optional handoff uses a bounded immutable safe projection and creates an independent Session; it transfers no
 authority or live resources.
-11. All effects remain behind the single daemon-owned typed capability path.
-12. No external effect occurs inside a durable transaction.
-13. A started operation interrupted or lost before a final result commits a bounded partial result and permits the next
-model step; it is never automatically retried, resumed, or treated as rolled back.
-14. Recovery always uses a new `RunId`.
-15. Audit is evidence, not proof of rollback or the absence of external effects.
-16. No secret, raw provider resource, or live handle crosses a public or durable projection.
 
 ## Plan lifecycle
 

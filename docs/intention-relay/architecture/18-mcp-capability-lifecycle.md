@@ -49,8 +49,9 @@ exactly as a provider endpoint is ([architecture
 secret-bearing URL is never durable identity. The one opaque credential lives only in the daemon's private loading
 boundary ([architecture 09](09-configuration-security-and-observability.md)); the reference is resolved there for a call
 and is never a token, key, keychain locator, header, SDK value, socket, process handle, raw frame, raw result, or server
-error body, and none of those enters a DTO, log, diagnostic, card, model context, or safe result. A connection edit takes
-effect for later calls and never retargets an already-committed call or an already-sent model step.
+error body, and none of those enters a DTO, log, diagnostic, card, model context, or safe result. The selected transports
+are user-created outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/output services. A connection
+edit takes effect for later calls and never retargets an already-committed call or an already-sent model step.
 
 ## Discovery and the frozen method set
 
@@ -145,15 +146,10 @@ and remote method, with its bounded schema text. It is never an arbitrary method
 name outside that selection, raw JSON transport, arbitrary header map, or automatic exposure of a method discovered
 after admission, and a method whose schema is malformed or over-bound is unavailable.
 
-A connection has `Project` or `Session` scope; the user alone creates, edits, archives, restores, and selects a
-connection, and a model may only prepare a draft under the selected proposal rules. There is no per-method approval
-step: a method the connection record exposes is available to the run's frozen selection without a separate user
-decision. Credentials, OAuth material, SDK objects, sockets, and child-process handles remain private daemon material and
-never enter a DTO, log, diagnostic, card, model context, or safe result. The selected transports are
-user-created outgoing `HTTP`/`HTTPS` connections and user-created local standard-input/output services. A local
-service is started lazily per connection and is terminated on connection archival, idle disposal, failure, or daemon
-shutdown; it is never attached by a later daemon, shared across connections, treated as a durable worker, or managed as
-a long-lived process.
+There is no per-method approval step: a method the connection record exposes is available to the run's frozen
+selection without a separate user decision. The connection record's scope, its user-owned create/edit/archive/restore
+lifecycle, its credential privacy, and its transport selection are stated once in "One fixed tool and one connection
+record"; the local service lifecycle once in "Cancellation and recovery".
 
 Every MCP call passes the same frozen tool selection, daemon-bound authority, typed admission, durable outcome,
 cancellation, redaction, and post-commit publication rules as another model-visible tool. The run's selection records

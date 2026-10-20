@@ -279,25 +279,25 @@ Goal: independently enabled transforms over the base tool pipeline, delivered as
 
 -  The VFR module: mapping, expansion/raw tools (`expand` and the raw-read path as future `ToolId` variants), and model
 instructions as the `Vfr` contribution of [architecture 30](30-instruction-sources-and-system-context.md);
-- The Headroom module: the CCR retention contract and the retrieve tool;
+- The Headroom module: the CCR read-through contract over the durable tool result and the retrieve tool;
 - deterministic composition with the workspace/tool pipeline;
 - adapter/model representation policy;
-- retention, rotation, and expiry recorded as `@todo(vfr)`/`@todo(headroom)` markers in the modules until an
-activating specification selects the deferred values.
+- the deferred VFR language set and size thresholds recorded as `@todo(vfr)` markers in the module until an activating
+specification selects the values.
 
 ### Tests first
 
 - VFR transform/expand/raw fixtures;
-- Headroom retention/retrieval/expiry fixtures;
+- Headroom retrieval and missing-reference fixtures;
 - full pipeline-order integration test;
 - UI/model representation distinction test;
--  coverage fixtures for transform, expiry, retrieval, and error paths under the `intention-tools` line floor
+-  coverage fixtures for transform, retrieval, and error paths under the `intention-tools` line floor
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
 ### Exit criteria
 
--  VFR and Headroom operate as independently enabled modules; `retrieve` returns retained content while valid,
-with typed expiry behavior afterward;
+-  VFR and Headroom operate as independently enabled modules; `retrieve` returns the durable tool result its reference
+names and reports a typed missing outcome otherwise;
 - base tools stay free of transform behavior, and no separate extension crate exists;
 -  The modules meet `intention-tools`' declared line floor ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 

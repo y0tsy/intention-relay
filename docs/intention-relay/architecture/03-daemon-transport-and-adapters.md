@@ -89,8 +89,8 @@ typed wire messages; Tokio, interprocess, socket, endpoint-path, and I/O-half re
 carries requests, replies, rejections, and frames alike.
 
 Oversize messages are rejected before payload allocation or write; an incomplete or closed message stream is
-`local_daemon_connection_unavailable`; a peer that does not speak the current wire is the typed `stale_daemon_protocol`
-failure. The connect wait is bounded exactly once, by the transport's own `CONNECT_TIMEOUT`. The transport preserves the
+`local_daemon_connection_unavailable`; a peer that does not speak the current wire is the typed
+`invalid_local_protocol_response` failure. The connect wait is bounded exactly once, by the transport's own `CONNECT_TIMEOUT`. The transport preserves the
 Unix modes and endpoint-reclaim rules above; an identity-verified probe at bind is the only stale-endpoint-removal path,
 and a dropped listener never unlinks its endpoint. Its required transport test target exercises real endpoint
 connections, ordered correlated request/reply exchanges, concurrent reader/writer use, frame delivery, framing safety
@@ -191,8 +191,9 @@ Two protections cover a peer from another build. The single live wire version is
 instance identifier (`WIRE_VERSION`), so a daemon whose build declared a different value owns a different endpoint
 and is never reached. The byte itself stays 1 while the wire evolves in place, so the protection on the shared
 endpoint is the fail-closed decode: a peer that answers on the current endpoint with bytes this build cannot decode
-is rejected with the typed `stale_daemon_protocol` error (`category: unavailable`) instead of being reinterpreted.
-The adapter should offer a safe restart/reconnect action and never silently reinterpret mismatched payloads.
+is rejected with the typed `invalid_local_protocol_response` error (`category: validation`) instead of being
+reinterpreted. The adapter should offer a safe restart/reconnect action and never silently reinterpret mismatched
+payloads.
 
 The client sends typed requests, and committed frames arrive on the same connection after a session subscription. The
 client applies live frames after the result it received and re-reads current state after a reconnect.
@@ -282,7 +283,7 @@ architectural proof that presentation logic is isolated.
 
 ## Daemon restart semantics
 
-On daemon startup, before it reports `DaemonReadinessDto::Ready`:
+On daemon startup, before it answers its health projection:
 
 1. resolve and open the platform state database, creating the complete current storage schema directly on open;
 2. record the credential-free startup `ConfigSnapshotDto` revision;
@@ -302,7 +303,7 @@ follow-up run.
 | Shared daemon | `intention-test-support` fixture-host integration and TUI client test connect to one fixture daemon with an explicit test-only session ID. | Both observe equal typed health and snapshot DTOs for the same session. |
 | Startup race | Multi-client bootstrap integration test. | Exactly one daemon host is created. |
 | Permission boundary | Socket/pipe permission integration test. | A different OS user cannot connect. |
-| Stale peer | Client/server compatibility test. | An earlier-build daemon owns a different endpoint name, and a foreign peer on the current endpoint fails with the typed `stale_daemon_protocol` error. |
+| Foreign peer | Client/server compatibility test. | An earlier-build daemon owns a different endpoint name, and a foreign peer on the current endpoint fails with the typed `invalid_local_protocol_response` error. |
 | Wire conformance | Typed-wire contract and rewritten transport integration tests. | Every request kind round-trips with its named result kind, malformed lines are answered with typed rejections, and frames carry committed values without positions. |
 | Reconnect | Subscription integration test. | A new request receives the current durable snapshot, a reconnect re-reads current state, and no request claims replayed history. |
 | Restart | Persisted active-run recovery test. | Recovery completes before ready; every pre-existing unfinished run becomes `interrupted`, pending turns stay durable input, and no provider/tool call resumes. |
@@ -514,16 +515,16 @@ text above is the live policy.
   drops the preview, restores the committed preference, and closes. The picker's `Esc` is its own keymap layer, so the
   chat's cancel, clear, and exit arms are unreachable while it is open; the Esc layering is the open band, then the
   picker, then a live run's cancel, then the input-clear arm, then the exit.
-- Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter: `/new`
-  creates a session, `/sessions` opens the browser panel, and `/theme` selects the theme its optional `theme` argument
-  names (`auto`, `light`, or `dark`; a declared value matches however it is spelled) or opens the picker when the
-  argument is
-  omitted. An unknown
-  command answers with the known set, an unknown value answers `unknown theme "purple" - expected auto or light or dark`, and a
-  word past the last declared argument answers `unexpected argument "now"`. One registry is the single source for every
-  command's name, description, category, action, and declared arguments — their values, value descriptions, order, and
-  whether they are required — so the submission path, the band, and every notice are built from the one declaration and
-  nothing outside it spells a command name or value. While the input's first character is `/` and the caret sits in or
+- Interaction. A command is a submitted line beginning with `/` as its first character, never a bare letter, and the
+  front end registers exactly five: `/new` creates a session, `/sessions` opens the browser panel, `/theme` selects the
+  theme its optional `theme` argument names (`auto`, `light`, or `dark`; a declared value matches however it is spelled)
+  or opens the picker when the argument is omitted, `/session` opens the session its required identifier names, and
+  `/quit` leaves the front end. One registry is the single source for every command's name, description, category,
+  action, and declared arguments — their values, value descriptions, order, and whether they are required — so the
+  fullscreen submission path, the band, every notice, and the line REPL's own parse resolve through the one declaration,
+  and nothing outside it spells a command name or value. An unknown command answers with the known set, an unknown value
+  answers `unknown theme "purple" - expected auto or light or dark`, and a word past the last declared argument answers
+  `unexpected argument "now"`. While the input's first character is `/` and the caret sits in or
   immediately after a word, the band opens directly above the input block. It ranks the registered commands while the
   caret is in the command word, and the declared values of the argument word the caret is in — `[Value] [Description]
   [Argument]` in the same three columns — with the same rule: a prefix beats an ordered subsequence, then registry or

@@ -73,10 +73,9 @@ sequenceDiagram
 
 ## Delivery, cancellation, and recovery
 
-Results, fragments, and publication are architecture 15's records alone, demultiplexed by `ToolCallId`; the bridge adds
-no second start marker, result stream, terminal-result frame, commit boundary, or ordering record, and it reuses
-architecture 15's effect, before-start/interruption, partial-result, cancellation, and recovery rules rather than
-restating them.
+Results, fragments, and publication are architecture 15's records alone, demultiplexed by `ToolCallId`, including its
+start marker, commit boundary, ordering, effect, before-start/interruption, partial-result, cancellation, and recovery
+rules ([architecture 15](15-tool-registry-and-model-tool-loop.md)).
 
 Channel close does not stop a run; the run stop remains owner-controlled and the bridge only propagates it. `run.cancel`
 signals the registered in-flight call, which ends with its bounded `Partial` result and notice ([architecture
@@ -102,23 +101,19 @@ delivery cannot create a bridge-owned sequence, start a child, rediscover/invoke
 ## Bridge detail: bounds and safe failures
 
 The spawned child's typed client adds no transport, bound, or deadline of its own: it uses the existing local wire and
-its frame bound, the host's slow-peer path, and architecture 15's durable record bounds ([architecture
-03](03-daemon-transport-and-adapters.md)). There is no broader buffer, alternate deadline,
-truncation rule, or unbounded queue, and a slow or detached peer is bounded without blocking execution, persistence, or
-healthy peers. The bridge keeps no unfinished-call counter: each call passes architecture 15's admission contract
-before any external action, and the bridge never treats channel state as authoritative or repeats external work.
+its frame bound, the host's slow-peer path, and architecture 15's durable record bounds and admission contract
+([architecture 03](03-daemon-transport-and-adapters.md), [architecture
+15](15-tool-registry-and-model-tool-loop.md)).
 
 The closed bridge safe failures through `ErrorDto` are:
 
 ```text
-daemon_tool_gateway_required
 bridge_authority_unavailable
 ```
 
-A caller that would reach a tool or primitive path directly fails `daemon_tool_gateway_required`; a kernel-originated
-call the daemon cannot resolve to its spawned child and active run fails `bridge_authority_unavailable` before effect.
-They disclose no credential, path, raw input, Python/Jupyter value, provider resource, process topology, or
-implementation detail.
+A kernel-originated call the daemon cannot resolve to its spawned child and active run fails
+`bridge_authority_unavailable` before effect. It discloses no credential, path, raw input, Python/Jupyter value,
+provider resource, process topology, or implementation detail.
 
 ## Compatibility, dependencies, and non-goals
 

@@ -81,18 +81,16 @@ ErrorDto
   code: stable machine-readable code
   category: validation | policy | not_found | conflict | unavailable | internal
   message: safe human-readable message
-  retry: never | immediate | delayed | manual
-  correlation_id: optional `CorrelationIdDto` UUID diagnostic reference
+  retryable: whether repeating the same request can succeed
 ```
 
-`CorrelationIdDto` accepts only a canonical UUID string and is an opaque reference, not diagnostic content. An error
-carries no dynamic detail payload: user-visible context is code-owned safe guidance, never a path, an OS error, a
-command line, a stack trace, or file content. A tool failure is the one bounded exception: tool failures return the
+An error carries no dynamic detail payload: user-visible context is code-owned safe guidance, never a path, an OS
+error, a command line, a stack trace, or file content. A tool failure is the one bounded exception: tool failures return the
 workspace-relative path and the OS error verbatim, bounded; never the absolute root, a resolved symlink target, the
 command line, or file content.
 
 Messages are code-owned safe guidance. Runtime data must never be interpolated into `message` or placed in a
-map/`serde_json::Value`. `Display` remains exactly `code: message` and never renders correlation data.
+map/`serde_json::Value`. `Display` remains exactly `code: message`.
 
 Provider secrets, filesystem content not intended for display, raw stack traces, and SDK objects never appear in
 `ErrorDto`.
@@ -149,9 +147,8 @@ equality is typed structural equality, and record identity is a typed revision i
 Validation occurs at the boundary that has the necessary context.
 
 The error category follows the boundary that detected the mismatch: a peer that does not speak the live local wire
-fails as the typed `stale_daemon_protocol` error with `ErrorDto { category: unavailable }` (architecture 03, "Protocol
-lifecycle"), while a malformed request line is a `validation` failure answered with a typed identity-less rejection. The
-difference is intentional.
+fails as the typed `invalid_local_protocol_response` error with `ErrorDto { category: validation }` (architecture 03,
+"Protocol lifecycle"), and a malformed request line is the same failure answered with a typed identity-less rejection.
 
 Validation cannot be delegated only to UI. Tauri and TUI may provide ergonomic pre-validation, but daemon validation is
 authoritative.

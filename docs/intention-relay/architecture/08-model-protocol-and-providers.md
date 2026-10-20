@@ -18,14 +18,14 @@ ModelExecutionDriver
   execute(ModelRequestDto, ModelCancellationSignal) -> ModelEventStream
 ```
 
-The contract defines text-only `ModelMessageDto` context, an optional system context, and `ModelStreamLifecycleDto`.
-Every provider stream starts with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one
-terminal `Finished` event. The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) owns that one
-normalizing stream (the pending queue, the seeded start, the translation order, and the terminal fact), and each adapter
-implements only the `EventTranslator` seam over its own native items. A second start, a fact before start or after
-finish, duplicate usage, or a second finish fails validation. `ModelRunExecutionService` consumes an injected stream,
-requires exact
-persisted/current safe-selection equality before execution, owns cancellation late-event suppression, deadlines, and
+The contract defines text-only `ModelMessageDto` context and an optional system context. Every provider stream starts
+with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one terminal `Finished` event.
+The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) is the only order enforcer: every adapter
+stream is built from its normalizing stream, which owns the pending queue, the seeded start, the translation order, and
+the terminal fact, while each adapter implements only the `EventTranslator` seam over its own native items. A terminal
+fact ends the stream and admits nothing behind it, so a consumer reads an already ordered stream and does not
+re-validate it. `ModelRunExecutionService` consumes an injected stream, requires exact persisted/current safe-selection
+equality before execution, owns cancellation late-event suppression, deadlines, and
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
 provider-neutral delay futures and safe timestamps, never Tokio, and its transient `ModelTextDeltaPort` observes every
@@ -38,8 +38,8 @@ Core DTO families:
 | DTO | Responsibility |
 | --- | --- |
 | `ModelRequestDto` | System context, text messages, advertised typed `ModelToolDefinitionDto` tool definitions, the transient assistant reasoning attachment (same-run today; the previous-turn replay is the open `@todo(provider)`), and run identity. |
-| `ModelCapabilitiesDto` | Supported input, output, reasoning, tool, multimodal, vendor-extension, and streaming capability declarations. |
-| `ModelEventDto` | Text, reasoning, tool, usage, lifecycle, and provider-normalized stream events. |
+| `ModelCapabilitiesDto` | The one capability declaration provider selection checks: whether the driver serves streamed text with tool calls. |
+| `ModelEventDto` | Text, reasoning, tool, usage, start and finish, and provider-normalized stream events. |
 | `ToolCallDto` | Typed tool identity and typed tool input. |
 | `UsageDto` | Provider-normalized usage values with explicit unknown/not-reported states. |
 | `FinishReasonDto` | Typed terminal reason. |
@@ -82,9 +82,9 @@ sequenceDiagram
   M-->>R: Typed stream events
 ```
 
-The provider adapter translates native formats into typed DTOs. It must not erase a capability merely because another
-current provider lacks it. Instead, `ModelCapabilitiesDto` describes support and provider selection validates the
-declaration once before any request is built.
+The provider adapter translates native formats into typed DTOs. `ModelCapabilitiesDto` carries one requirement: a driver
+must serve streamed text with tool calls, because every run is built that way. Provider selection checks that
+declaration once, before any request is built, and fails with `unsupported_model_capability` when it is absent.
 
 ## Initial provider drivers
 
@@ -130,9 +130,9 @@ Provider/model selection is explicit configuration. The only configuration kind 
 and `generic-chat-completion-api`; the latter preserves any non-blank model ID without model-name classification.
 `openai` is not a configuration kind and requires a separately declared OpenAI Responses driver crate and contract
 decision before it is introduced. The generic provider accepts text context/output, advertised tool definitions, usage,
-finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; multimodal and vendor
-extensions stay outside its capability declaration, which provider selection validates before any outbound request is
-prepared. Reasoning output is normalized as
+finish reasons, `tool_calls` tool-call fragments, and textual `reasoning_content` output; its capability declaration is
+the one requirement above, which provider selection validates before any outbound request is prepared. Reasoning output
+is normalized as
 `ModelEventDto::ReasoningDelta`, and when a configured thinking-mode gateway requires it the adapter
 serializes the same round's accepted reasoning as `reasoning_content` on the assistant tool-call message of the same-run
 continuation, as transient request state with no durable representation; an empty channel is only a presence marker.
@@ -147,8 +147,8 @@ every place the replay would change, and it means work the provider layer must s
 `@todo(core)` stub.
 The OpenRouter adapter ignores the transient attachment because its pinned SDK request type carries no reasoning
 field at all: through that kind reasoning is output-only, and a model whose wire validates the echo for tool calls
-(Claude, Gemini 3, DeepSeek) is not supported there. OpenRouter declares text, reasoning, tool-call, and streaming capability
-while its declared foundation carries no multimodal or vendor-extension support. Capability negotiation happens once at
+(Claude, Gemini 3, DeepSeek) is not supported there. OpenRouter's declaration satisfies the one requirement, so
+provider selection accepts it. Capability negotiation happens once at
 provider selection: the selected driver's declaration must serve streamed text with tool calls, and the per-request
 execution path carries no capability check. A truncation limitation of that pinned SDK is recorded under
 [Retry and timeout ownership](#retry-and-timeout-ownership).
@@ -275,9 +275,9 @@ an interrupt during the retry wait starts the next attempt immediately.
 | --- | --- | --- |
 | SDK isolation | Compile/dependency test. | OpenRouter SDK types do not escape provider crate public API. |
 | Event normalization | Provider fixture stream tests. | Equivalent native sequences map to valid ordered `ModelEventDto` values. |
-| Capability check | Model contract test. | A declaration without streamed text or tool calls fails closed with `unsupported_model_capability` at provider selection. |
+| Capability check | Model contract test. | A declaration that does not serve streamed text with tool calls fails closed with `unsupported_model_capability` at provider selection. |
 | Tool advertisement | Model/adapter/runtime/daemon-host tests. | The outgoing request contains the six active tool definitions in advertisement order, both adapters translate them without `tool_choice`, a driver without tool-call support is rejected at provider selection, and the advertisement survives the tool-result continuation request. |
-| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; multimodal and vendor extensions stay outside the declared capabilities. The echo's scope is the same run today; replaying the session's earlier steps is the open `@todo(provider)` of [Streaming and tool calls](#streaming-and-tool-calls) and needs its own test evidence. |
+| Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; the capability declaration states only streamed text with tool calls. The echo's scope is the same run today; replaying the session's earlier steps is the open `@todo(provider)` of [Streaming and tool calls](#streaming-and-tool-calls) and needs its own test evidence. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
 | Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |

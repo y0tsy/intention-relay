@@ -85,15 +85,16 @@ frozen configuration revision. An acceptance that cannot start a run reports
 
 ### Required semantics
 
-- repeating an accepted turn with the same `IdempotencyKey` and unchanged content returns the recorded outcome instead
-of writing a second turn, while the same key with different content fails with `turn_idempotency_conflict`;
+- the proposed run identity is a deterministic function of the `IdempotencyKey`, so repeating a command proposes an
+identity the durable turn already recorded and fails as a typed `turn_identity_conflict` instead of writing a second
+turn;
 -  a pending turn keeps its own proposed `RunId`, selected immutable configuration revision, and `ConfigRevisionId`,
 used if it starts the successor run;
 -  the runtime appends pending turns to the live run context at the next boundary — after the provider response that
 ended a model step, or after a tool batch — in insertion order as user messages, and the storage transaction marks them
 `appended` so a turn joins exactly one run context;
-- a user can inspect pending turns through `SessionProjectionDto.pending_turns` and remove a not-yet-seen one with
-`turn.remove`; removal commits the removal and renumbers nothing;
+- a user can remove a not-yet-seen pending turn with `turn.remove`; removal commits the removal and renumbers
+nothing;
 -  pending turns are durable input: a restart preserves them, and a pending turn whose run ended before the join starts
 the successor run through ordinary acceptance once the session has no active run;
 -  a failed or interrupted prior run does not silently inject partial assistant content into the successor run's
@@ -132,8 +133,8 @@ front end paints.
 
 Recovery is one immediate transaction over every unfinished run: each run that is not terminal becomes `Interrupted`
 and records its `finished_at` time inside that same transaction, so a restart cannot leave a half-applied recovery. A
-session projection that would exceed the pending-turn projection bound keeps the newest pending turns that fit, in
-insertion order, and reports how many were omitted through `SessionProjectionDto.pending_turns_omitted`.
+session projection carries committed state only; the pending-turn queue is read and consumed by the turn-queue
+transaction that appends it to a run context.
 
 ## Transaction and publication order
 
