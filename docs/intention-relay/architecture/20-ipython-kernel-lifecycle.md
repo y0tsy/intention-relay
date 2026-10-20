@@ -6,13 +6,11 @@ Owner: architecture 20.
 
 This document owns future session-scoped IPython kernel processes, run-scoped kernel epochs and namespaces, foreground
 cells, namespace checkpoints, kernel-local background work, safe kernel projections, and kernel recovery. It applies
-only to future run execution. Retained session-scoped IPython/RLM material remains research provenance and
-historical-only where it conflicts with architectures 15--19.
+only to future run execution.
 
 ## Ownership and non-authorities
 
-The removed execution-meaning machinery ([architecture
-02](02-dto-and-contract-policy.md)) leaves no live path; 15 owns frozen tool
+Architecture 15 owns frozen tool
 selection, direct tool admission, `ToolCallId`, generic tool-loop records, the committed call start, and publication;
 18 owns MCP connection records, discovery, method lists, invocation, and recovery; 19 owns the kernel child's
 typed-client ingress, delivery, and ingress recovery.
@@ -29,8 +27,7 @@ authority.
 One live `KernelEpochId` names the run-scoped namespace and execution window of exactly one admitted `RunId`; the
 session kernel process that hosts it is not an executable epoch and never carries a usable namespace across runs. A new
 run receives a fresh epoch and a fresh namespace; only the verified checkpoint may seed it. The
-single canonical lifetime statement is in *Kernel detail* below. Fixed idle/concurrency limits in retained research are
-historical provenance, not future run policy.
+single canonical lifetime statement is in *Kernel detail* below.
 
 This document owns the semantic fields of the credential-free kernel selection in the future typed run record
 (typed serde JSON, [architecture 02](02-dto-and-contract-policy.md)):
@@ -45,7 +42,6 @@ KernelSelectionV1
   checkpoint_policy = Disabled | Optional | Required
   host_request_contract_revision
   safe_projection_revision
-  script_library_reference
 ```
 
 The selection freezes executable contract, never a live process or namespace, and excludes process/kernel/daemon epoch
@@ -54,10 +50,8 @@ endpoints, current interpreter/environment, registry, readiness, child graph, an
 unsupported, or mismatched selection blocks dependent kernel work before process creation or restoration and never falls
 back to current state.
 
-One additive bounded reference joins the selection: `script_library_reference` points at a `KernelScriptLibraryV1` value
-(contract, import-surface, and evidence revisions for the logical workspace-relative path `.ir/scripts`). It is
-credential-free and content-free, carries no
-absolute or symlink-target path, and its absence means an empty import surface.
+The project script library is the fixed workspace-relative path `.ir/scripts`. It is code-owned, so the selection
+carries no reference to it and no record versions it.
 
 A `KernelEpochId` is created lazily only after a supported active run is reread, the exact kernel and tool selections
 validate, required live capacity exists, and no cancellation gate applies; it opens that run's fresh namespace. The
@@ -123,7 +117,7 @@ and architecture 15 assigns the `ToolCallId`, admits, starts, records, and publi
 create a listener, registry, direct primitive path, or result channel. Cell closure, run termination, cancellation,
 kernel disposal, and restart prevent new host requests.
 
-## Project script library and script evidence
+## Project script library
 
 Agent-authored reusable modules live as ordinary project files under the logical workspace-relative path `.ir/scripts`
 (`.ir` is the project-local hidden root), created and edited only through the frozen `write` and `edit` descriptors and
@@ -131,29 +125,23 @@ run through `execute` or a foreground cell.
 The library is file material, not kernel state: it is never a namespace, checkpoint, epoch, task, or host-request
 resource, and no selection, cell, or checkpoint carries its source.
 
-An epoch's import surface is exactly the library directory named by `script_library_reference`; the parent, the
-workspace root as a second library, and any other path never enter it. The directory is addressed as
+An epoch's import surface is exactly that library directory; the parent, the workspace root as a second library, and
+any other path never enter it. The directory is addressed as
 `WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary
 ([architecture 05](05-tools-and-workspace.md)), so
 no lexical symlink or containment check gates the surface. A missing library directory yields an empty import surface,
-so a project without saved modules behaves as if the capability were absent; an unreadable library directory fails
-before effect with `kernel_script_library_unavailable`. Python-level import errors inside a cell stay ordinary safe
-`Error` output under the closed text-only projection. A fresh run reuses a module by reading the file inside its own
-epoch; namespace, cell, task, and checkpoint state are never carried over to provide reuse, and the trusted-local
+so a project without saved modules behaves as if the capability were absent. A cell's imports need no separate record:
+an import that fails is the cell's error, surfaced through the cell's output and terminal result. A fresh run reuses a
+module by reading the file inside its own epoch; namespace, cell, task, and checkpoint state are never carried over to
+provide reuse, and the trusted-local
 model is unchanged: library code is project material, not a sandbox, and direct Python OS APIs remain outside the
 facade. A library path, an import, or a persisted module grants no lifecycle, tool, MCP, or bridge
 authority, and it never substitutes for a frozen registry selection. No secret material enters the library: credentials,
 tokens, endpoints, and provider values are never written into it, and the redaction rules of [architecture
 09](09-configuration-security-and-observability.md) apply to every path and error this capability produces.
 
-Every foreground cell that imports library modules records bounded script-import evidence: for each imported module the
-logical workspace-relative path, inside bounded counts and sizes. Evidence contains no source text, no absolute or
-symlink-target path, and no Python value, and it is published as run facts through architecture 15's post-commit
-publication gate under this document's cell rules. Evidence that cannot be represented inside its bounds fails before
-publication with `kernel_script_library_unavailable`; it is never truncated, sampled, or stringified. Verified
-checkpoint metadata may record the script-library reference as safe verification metadata, while checkpoint payload and
-metadata keep excluding script source and any executable payload. Deleting a module stays an explicit user or agent
-action through the ordinary tools; idle disposal, checkpoint replacement, and restart never collect one.
+Deleting a module stays an explicit user or agent action through the ordinary tools; idle disposal, checkpoint
+replacement, and restart never collect one.
 
 ## Checkpoints and namespace restoration
 
@@ -177,8 +165,7 @@ Payload is deterministic, typed, versioned, bounded, and private. The first-scop
 serializer. Payload and metadata contain no executable payload or code, open file/process/socket/task handle,
 provider/MCP/Jupyter resource, raw Jupyter frame, provider SDK object, credential, endpoint, raw
 traceback, or implementation resource; unsupported or non-serializable values are explicitly omitted with typed safe
-metadata, never guessed or stringified. Verified metadata may additionally carry the project script-library reference;
-the payload never carries script source.
+metadata, never guessed or stringified. Payload and metadata never carry script source.
 Payload, metadata, verification, and publication are atomic: a failed write leaves the previous checkpoint intact and
 never becomes the verified one. One verified checkpoint exists per session kernel selection, and a new verified
 checkpoint replaces it. Checkpoint payload stays private to the daemon-owned session
@@ -234,16 +221,15 @@ Future kernel delivery uses typed requests ([architecture 03](03-daemon-transpor
 correlated results followed by live notifications.
 Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Delivery is read-only: it cannot
 create a kernel process, restore a namespace, execute a cell, repeat a host request, start a child, or invoke
-MCP. Partial delivery is never permitted. M3/M4 and retained IPython/RLM rows that the current storage stamp still
-carries gain no kernel selection, epoch, namespace, checkpoint, typed-client, child, MCP, activity, or policy state, and
-a database without that stamp is discarded whole rather than opened; M4 tool calls remain denial evidence, and no
-current kernel, process, checkpoint, registry, configuration, bridge, provider, model, graph, or UI state may
-reconstruct missing meaning. The trusted-local model remains explicit: direct Python OS APIs can
-bypass the facade and are not sandboxed or fully observable.
+MCP. Partial delivery is never permitted. No record carries state it did not record: a kernel selection, epoch,
+namespace, checkpoint, or typed-client handle never appears on a row that did not record it, and no current kernel,
+process, checkpoint, registry, configuration, bridge, provider, model, graph, or UI state reconstructs meaning a record
+never had. A database under a different storage stamp is discarded whole rather than opened. The trusted-local model
+remains explicit: direct Python OS APIs can bypass the facade and are not sandboxed or fully observable.
 
 ## Kernel detail: DTO family, bounds, and safe failures
 
-Only four kernel names are DTOs, because only they cross a boundary. The cell's invocation and its terminal result are
+Only three kernel names are DTOs, because only they cross a boundary. The cell's invocation and its terminal result are
 architecture 15's existing tool-call request and terminal result, which the cell's output already becomes
 ([architecture 15](15-tool-registry-and-model-tool-loop.md)):
 
@@ -251,13 +237,11 @@ architecture 15's existing tool-call request and terminal result, which the cell
 KernelOutputChunkDto           safe output notification on architecture 15's stream
 KernelHostRequestDto           the kernel child's host request
 KernelHostResponseDto          its correlated response
-KernelScriptImportEvidenceDto  a published run fact
 ```
 
 The remaining kernel shapes are values inside their own records, not DTOs: `KernelExecutionBindingV1` binds one
-foreground cell, `KernelScriptLibraryV1` is the value the selection's `script_library_reference` points at, and the
-checkpoint payload stays private to the daemon-owned session kernel service. Attempt status is attempt evidence
-([architecture 15](15-tool-registry-and-model-tool-loop.md)), not a kernel-owned status DTO.
+foreground cell, and the checkpoint payload stays private to the daemon-owned session kernel service. Attempt status is
+attempt evidence ([architecture 15](15-tool-registry-and-model-tool-loop.md)), not a kernel-owned status DTO.
 
 A kernel is session-scoped: one daemon-owned session actor owns at most one IPython kernel process, never shared across
 sessions/projects/users/daemon instances, inheriting the session's `WorkspaceRoot` as context metadata without owning
@@ -285,7 +269,6 @@ kernel_concurrency_limit_exceeded
 kernel_execution_unavailable
 kernel_execution_timeout
 kernel_output_unrepresentable
-kernel_script_library_unavailable
 kernel_checkpoint_unavailable
 kernel_state_restore_unavailable
 ```
@@ -295,8 +278,8 @@ implementation detail.
 
 ## Dependencies, non-goals, and evidence
 
-This document depends on architectures 15, 18, and 19 and owns the project script library path, selection, and
-evidence contract. It does not define Python/Jupyter dependencies, process supervision, storage/wire
+This document depends on architectures 15, 18, and 19 and owns the constant project script library path. It does not
+define Python/Jupyter dependencies, process supervision, storage/wire
 tags, migrations, retention, encryption, resource-limit values, RLM executor topology, Skills/Goals/context, provider
 evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or production
 activation.
