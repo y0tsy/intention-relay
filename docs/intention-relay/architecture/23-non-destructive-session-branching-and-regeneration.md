@@ -31,10 +31,9 @@ History is append-only. A user fork creates a new independent child `SessionId` 
 “Rewind” is explanatory language only: it never truncates, replaces, deletes, rolls back, or switches the source history
 or an external effect.
 
-Every root and descendant share one `ConversationTreeId`. A child records its immediate `ParentSessionId`, caller-stable
-`ForkOperationId`, and immutable `ForkBoundaryDto`. Roots use the selected UUIDv5 URL namespace and canonical name
-`intention-relay/conversation-tree-v1/<canonical-session-uuid>`; children copy their persisted parent's tree ID. Forks
-remain within one `ProjectId`, `WorkspaceId`, and immutable `WorkspaceRoot`.
+Every root and descendant form one tree rooted at the root session's `SessionId`. A child records its immediate
+`ParentSessionId`, caller-stable `ForkOperationId`, and immutable `ForkBoundaryDto`. Forks remain within one
+`ProjectId`, `WorkspaceId`, and immutable `WorkspaceRoot`.
 
 ```mermaid
 flowchart LR
@@ -75,19 +74,17 @@ ancestor or sibling history. The child context starts from its own snapshot and 
 Missing, corrupt, unknown, or incompatible data blocks dependent work before an effect and never falls back to a live
 source, current catalog, provider, file, index, registry, bridge, kernel, MCP, or UI state.
 
-Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing,
-canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
-02](02-dto-and-contract-policy.md), and under the single-version policy ([architecture
-00](00-principles-and-scope.md)) there is one live shape per record. Cross-run reasoning transfer is `Disabled` in v1
-([architecture 22](22-provider-evolution-profiles-and-reasoning.md)), so no fork record carries reasoning references.
+Cross-run reasoning transfer is `Disabled` in v1 ([architecture
+22](22-provider-evolution-profiles-and-reasoning.md)), so no fork record carries reasoning references.
 
 `WorkspaceStateDto::Unverified` is the only initial workspace-state value. It makes no claim about files, processes,
 repositories, remote systems, or effects. A fork never clones or rolls back machine state.
 
 ## Atomic lineage and idempotency
 
-Future storage adds fork-owned records for conversation trees, child lineage, base snapshots, and fork operations under
-the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
+Future storage adds the base snapshot record and the fork-operation idempotency record under the one-transaction
+state-change law of [architecture 04](04-sessions-runs-events-and-storage.md); the child's lineage lives on the
+ordinary session row.
 
 One transaction validates the source head, then commits the child projection, lineage,
 base snapshot, optional anchor, and idempotency result; no external action occurs inside it.
@@ -127,7 +124,7 @@ ForkSessionResultDto
 GetForkPreviewQueryDto
 ForkPreviewDto
 GetConversationTreeQueryDto
-ConversationTreeLevelDto
+SessionBranchesDto
 ConversationBranchSummaryDto
 RenameSessionCommandDto
 ArchiveSessionCommandDto
@@ -137,9 +134,10 @@ RestoreSessionCommandDto
 `ForkSessionCommandDto` contains source session identity, the typed boundary, `ForkOperationId`, expected source
 sequence, and an optional validated title. It
 never accepts a client-selected child ID, raw snapshot, raw event, configuration path, credential, workspace path, or
-opaque implementation value. `ForkSessionResultDto` is bounded and returns child and tree identities, immediate parent,
-accepted boundary, optional child-anchor `TurnId`, snapshot and context schema versions, inherited future defaults, and
-the closed `unverified` workspace notice; it does not return the base snapshot inside a transport response.
+opaque implementation value. `ForkSessionResultDto` is bounded and returns the child identity, the immediate parent,
+and the root identity, accepted boundary, optional child-anchor `TurnId`, snapshot and context schema versions,
+inherited future defaults, and the closed `unverified` workspace notice; it does not return the base snapshot inside a
+transport response.
 
 `GetForkPreviewQueryDto` takes only a source session and a candidate typed boundary. `ForkPreviewDto` returns a fresh
 source sequence, accepted boundary data, safe inherited future defaults, the deterministic fallback title, counts and
@@ -157,15 +155,15 @@ fails `session_presentation_operation_conflict`; a stale sequence fails `session
 observes its requested presentation state succeeds with `changed = false` and appends no event. Archive still performs
 its mandatory idle check before either outcome.
 
-`GetConversationTreeQueryDto` contains a `ConversationTreeId` and an optional parent `SessionId`. It returns the
-requested parent's immediate child summaries in stable creation order; asking without a parent returns the root
-summary. A tree is intentionally live between reads: new, renamed, archived, restored, or otherwise changed branches
-appear in the next read, and no read promises a revision-consistent tree snapshot.
+`GetConversationTreeQueryDto` takes one `SessionId`. `SessionBranchesDto` returns that session's root summary, the
+session's own summary, and its immediate children in stable creation order. A tree is intentionally live between reads:
+new, renamed, archived, restored, or otherwise changed branches appear in the next read, and no read promises a
+revision-consistent tree snapshot.
 
 `ConversationBranchSummaryDto` exposes only branch identity, immediate parent, creation ordering data, safe title or
 stable fallback, archive state, mode, fork point, and `unverified` workspace state.
 The immutable base snapshot and its retained source content are not list data. Tree and lineage reads validate that
-every named session belongs to the same tree, project, and workspace.
+every named session belongs to the same root, project, and workspace.
 
 `SessionTitleDto` is bounded to 128 Unicode scalar values after trim and NFC normalization, and rejects blank, control,
 and bidi-override characters. An adapter may request a title when it forks; otherwise the daemon stores a deterministic
@@ -180,12 +178,12 @@ length encoding, canonicalization-version byte, and SHA-256 digest construction 
 02](02-dto-and-contract-policy.md). Under the single-version policy ([architecture
 00](00-principles-and-scope.md)) each record keeps exactly one live shape.
 
-- `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`,
-`4 conversation_tree_id`, `5 boundary`, `6 source_boundary_sequence`, `7 effective_instruction_text`, `8
-materialized_model_messages`, `9 inherited_future_defaults`, `10 workspace_state`.
-- `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 conversation_tree_id`, `4 boundary`,
-`5 source_head_sequence`, `6 inherited_future_defaults`, `7 workspace_state`, `8 inherited_reference_counts`. Field 5 is
-the selected boundary sequence, not the current source head observed during the fork operation; field 8 carries the
+- `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`, `4 boundary`,
+`5 source_boundary_sequence`, `6 effective_instruction_text`, `7 materialized_model_messages`, `8
+inherited_future_defaults`, `9 workspace_state`.
+- `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 boundary`, `4 source_head_sequence`,
+`5 inherited_future_defaults`, `6 workspace_state`, `7 inherited_reference_counts`. Field 4 is
+the selected boundary sequence, not the current source head observed during the fork operation; field 7 carries the
 counts and safe types of what the child inherits, read from the source records rather than stored in the preview.
 - `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 title_present`,
 `5 requested_title`.
@@ -217,8 +215,7 @@ with the typed `local_protocol_message_too_large` failure. Boundaries, base snap
 remain indefinitely readable under the initial archive-only retention policy.
 
 Fork provenance is stored as committed records: fork, anchor materialization, rename, archive, and restore each commit
-a durable record alongside the ordinary session and run records, and the closed conversation-tree lineage commits
-`ConversationTreeCreated` and `ConversationBranchLinked` records. Generic metadata records and a synthetic
+a durable record alongside the ordinary session and run records. Generic metadata records and a synthetic
 source-session fork record are not acceptable audit boundaries.
 
 Inherited usage is source provenance and is never charged to the child a second time. Child totals count only
@@ -244,8 +241,8 @@ They disclose no credential, path, source content, raw provider data, or impleme
 
 ## Compatibility, dependencies, and non-goals
 
-No migration exists: a database under an older stamp is discarded and recreated. Root lineage records are created for
-live-schema sessions (on creation or at first branch); no synthetic parent/anchor/run/event is written.
+No migration exists: a database under an older stamp is discarded and recreated. A root session carries no lineage
+record, and no synthetic parent/anchor/run/event is written.
 
 A fork begins with no run and no execution authority. It cannot transfer a provider request/client/credential, tool
 action, kernel task, MCP process, or unfinished effect. Later child runs select their own immutable
