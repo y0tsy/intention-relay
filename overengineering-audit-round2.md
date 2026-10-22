@@ -58,13 +58,15 @@ documentation half in documents 00, 02, 03, 04, 06, 07, 08, 09, 11, 18, 19, and 
 `Resolved 2026-10-14 (implemented)` tags this wave earns; see [Wave R12 in detail](#wave-r12-in-detail-implemented-code-tails).
 The branch is ahead of `origin/cleanup/overengineering-removal`; `5e9c471` is the newest commit.
 
-**Closure wave.** The uncommitted wave on `cleanup/overengineering-removal` closes the remaining findings: the
+**Closure wave.** Commits `e1c27fe` (code), `a0366d9` (process), `e9cc6ef` (documents), and `1d62d23` (this record)
+on `cleanup/overengineering-removal` close the remaining findings: the
 per-turn identity machinery (`RunId` proposals, `IdempotencyKey`, `ConfigRevisionId`, the `configuration_revisions`
 table, the replay path, and `turn.remove`) is deleted while every accepted turn still queues durably, a run row
 carries its frozen credential-free `config_snapshot_json`, storage failures collapse to two codes, tool input schemas
 are derived from the typed input DTOs, the `WIRE_VERSION` byte and the notices apparatus are gone, the README states
 what the product is instead of restating its documents, and the document set carries no removal narration, ceremony
-clauses, or evidence lines. Project/workspace identity is deferred by decision (F2-5). See
+clauses, or evidence lines. `d43fc9a` refreshes the webpki patches past three advisories. Project/workspace identity is
+deferred by decision (F2-5). See
 [Work status](#work-status-2026-10-22) and [Closure wave in detail](#closure-wave-in-detail).
 
 ## Work status (2026-10-22)
@@ -1102,7 +1104,8 @@ Validation of the commit: `cargo check --workspace --all-targets --locked --all-
 
 ## Closure wave in detail
 
-The uncommitted wave on `cleanup/overengineering-removal` closes every finding that the working-tree wave left open.
+Commits `e1c27fe`, `a0366d9`, and `e9cc6ef` on `cleanup/overengineering-removal` close every finding that the
+working-tree wave left open.
 
 | Finding | Change |
 | --- | --- |
@@ -1118,3 +1121,7 @@ The uncommitted wave on `cleanup/overengineering-removal` closes every finding t
 F2-5 (project/workspace identity) is the one finding this wave does not take: `projects`, `workspace_roots`, the
 per-session `ProjectId`/`WorkspaceId` proposals, and the one-root-one-binding resolution stay as they are. It is
 recorded as deferred, not as resolved.
+
+Validation of the final tree (`d43fc9a`): `cargo check --workspace --all-targets --locked --all-features` is clean,
+`cargo clippy --workspace --all-targets --locked --all-features -- -Dwarnings` is clean, `make verify` is green, and
+the suite reports 876 tests passed with 2 skipped.
