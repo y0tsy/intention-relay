@@ -181,7 +181,7 @@ async fn observe_run_until_terminal(
             "the run reaches a terminal status before the deadline"
         );
         match tokio::time::timeout(Duration::from_secs(1), subscription.receive()).await {
-            Ok(Ok(StreamStep::Frame(frame))) => frames.push(frame),
+            Ok(Ok(StreamStep::Frame { frame, .. })) => frames.push(frame),
             Ok(Ok(StreamStep::Closed(_))) => {
                 panic!("the daemon closed the run stream before the run terminalized")
             }

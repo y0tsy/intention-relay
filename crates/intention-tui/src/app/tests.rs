@@ -1,3 +1,4 @@
+use intention_client::SessionStreamState;
 use intention_proto::{
     ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageProjectionDto, RunId, RunModeDto,
     RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
@@ -33,7 +34,7 @@ fn summaries(sessions: Vec<SessionSummaryDto>) -> SessionSummariesDto {
 
 /// Applies one committed transcript row to `state` as a stream content frame.
 fn commit_row(state: &mut AppState, row: MessageProjectionDto) {
-    let effects = state.update(Action::FrameReceived(SessionFrameDto::Content(row)));
+    let effects = receive(state, SessionFrameDto::Content(row));
     assert!(
         effects.is_empty(),
         "a committed row asks for no client work"
@@ -162,12 +163,7 @@ fn tool_call_in_flight(at: u64) -> (AppState, SessionId, RunId, ToolCallId) {
     let run_id = RunId::new();
     let call_id = ToolCallId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     state.update(Action::ElapsedReported { millis: at });
     commit_row(
         &mut state,
@@ -189,14 +185,47 @@ fn tool_call_in_flight(at: u64) -> (AppState, SessionId, RunId, ToolCallId) {
 /// The open-call count is the projection's own committed fact, so this is the
 /// only frame that names a call in flight.
 fn publish_open_calls(state: &mut AppState, session_id: SessionId, run_id: RunId, open_calls: u32) {
-    let effects = state.update(Action::FrameReceived(SessionFrameDto::Status(run_in(
-        session_id,
-        run_id,
-        RunStatusDto::Running,
-        None,
-        open_calls,
-    ))));
+    let effects = receive(
+        state,
+        SessionFrameDto::Status(run_in(
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+            None,
+            open_calls,
+        )),
+    );
     assert!(effects.is_empty(), "a status frame asks for no client work");
+}
+
+/// Applies one frame the way the live subscription does.
+///
+/// The client applies every frame to the one session state it exposes and hands
+/// the frame, what it changed, and its result to the front end, so a test
+/// derives a frame through the same entry the production pump uses instead of
+/// restating the client's rules.
+fn receive(state: &mut AppState, frame: SessionFrameDto) -> Vec<Effect> {
+    let mut derived = state
+        .session_state()
+        .cloned()
+        .unwrap_or_else(|| SessionStreamState::new(frame_session(&frame)));
+    let update = derived
+        .apply_frame(frame.clone())
+        .expect("the fixture frame belongs to the state's own session");
+    state.update(Action::FrameReceived {
+        frame,
+        update,
+        state: Box::new(derived),
+    })
+}
+
+/// Returns the session one frame belongs to.
+fn frame_session(frame: &SessionFrameDto) -> SessionId {
+    match frame {
+        SessionFrameDto::Content(row) => row.session_id(),
+        SessionFrameDto::Status(run) => run.session_id(),
+        SessionFrameDto::TextDelta(delta) => delta.session_id(),
+    }
 }
 
 #[test]
@@ -2061,17 +2090,18 @@ fn a_text_delta_shows_provisional_text_and_a_committed_row_clears_it() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "hel")));
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "lo")));
+    receive(&mut state, delta(session_id, run_id, 0, "hel"));
+    receive(&mut state, delta(session_id, run_id, 0, "lo"));
     assert_eq!(state.provisional_text(), "hello");
     assert!(
         state.transcript().is_empty(),
         "a delta is not committed state"
     );
 
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "hello"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "hello")),
+    );
     assert_eq!(
         state.provisional_text(),
         "",
@@ -2086,10 +2116,8 @@ fn a_new_model_step_replaces_the_provisional_tail() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "first")));
-    state.update(Action::FrameReceived(delta(
-        session_id, run_id, 1, "second",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "first"));
+    receive(&mut state, delta(session_id, run_id, 1, "second"));
     assert_eq!(state.provisional_text(), "second");
 }
 
@@ -2098,24 +2126,16 @@ fn the_reasoning_channel_buffers_apart_from_the_answer_it_precedes() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(reasoning_delta(
-        session_id, run_id, 0, "weigh",
-    )));
-    state.update(Action::FrameReceived(reasoning_delta(
-        session_id, run_id, 0, "ing",
-    )));
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, reasoning_delta(session_id, run_id, 0, "weigh"));
+    receive(&mut state, reasoning_delta(session_id, run_id, 0, "ing"));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     assert_eq!(state.provisional_reasoning(), "weighing");
     assert_eq!(state.provisional_text(), "the answer");
 
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "the answer"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "the answer")),
+    );
     assert_eq!(
         state.provisional_reasoning(),
         "",
@@ -2137,12 +2157,10 @@ fn the_key_expansion_targets_the_live_reasoning_segment_while_it_streams() {
         "a step that streamed no reasoning has nothing to expand"
     );
 
-    state.update(Action::FrameReceived(reasoning_delta(
-        session_id,
-        run_id,
-        0,
-        "a thought",
-    )));
+    receive(
+        &mut state,
+        reasoning_delta(session_id, run_id, 0, "a thought"),
+    );
     state.update(Action::ExpandReasoning { row: None });
     assert_eq!(
         state.reasoning_expansion(state.live_reasoning_row()),
@@ -2197,6 +2215,37 @@ fn the_adapter_renders_the_clients_reconciled_rows() {
 }
 
 #[test]
+fn the_subscription_open_keeps_the_clients_transcript_version() {
+    // The front end holds the client's state and not a second derivation of it:
+    // the version a frame is measured against is the one the subscription
+    // opened with, so the first committed row after a stream opens is one
+    // append past it and never a replacement of rows nobody moved.
+    let session_id = SessionId::new();
+    let run_id = RunId::new();
+    let rows = vec![
+        user_row(session_id, Some(run_id), "hello"),
+        assistant_row(session_id, run_id, "hi"),
+    ];
+    let mut state = opened_session(session_id, rows.clone());
+    state.update(Action::SessionStreamOpened(stream_state(
+        session_id,
+        run_id,
+        RunStatusDto::Running,
+        rows,
+    )));
+    let epoch = state.transcript_epoch();
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "a later answer")),
+    );
+    assert_eq!(
+        state.transcript_appended_since(epoch),
+        Some(1),
+        "the row the stream appended is one append past the version the open left"
+    );
+}
+
+#[test]
 fn a_content_frame_reports_every_row_appended_since_an_epoch() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
@@ -2208,17 +2257,19 @@ fn a_content_frame_reports_every_row_appended_since_an_epoch() {
         "a transcript that changed nothing appended nothing"
     );
 
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "first"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "first")),
+    );
     assert!(
         state.transcript_epoch() > epoch,
         "a committed row moves the epoch"
     );
     assert_eq!(state.transcript_appended_since(epoch), Some(1));
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "second"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "second")),
+    );
     assert_eq!(state.transcript_appended_since(epoch), Some(2));
     assert_eq!(
         state.transcript_appended_since(state.transcript_epoch()),
@@ -2265,9 +2316,10 @@ fn a_trim_of_the_oldest_rows_reports_no_append_since_the_previous_epoch() {
     let retained = state.transcript().len();
     let epoch = state.transcript_epoch();
 
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "the newest row"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "the newest row")),
+    );
     assert_eq!(
         state.transcript().len(),
         retained,
@@ -2285,9 +2337,10 @@ fn a_closed_stream_leaves_the_transcript_epoch_where_it_was() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "hi"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "hi")),
+    );
     let epoch = state.transcript_epoch();
 
     state.update(Action::SessionStreamEnded);
@@ -2304,7 +2357,7 @@ fn a_frame_without_a_subscription_is_dropped() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = AppState::new(None);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "stale")));
+    receive(&mut state, delta(session_id, run_id, 0, "stale"));
     assert_eq!(state.provisional_text(), "");
     assert_eq!(state.error(), None);
 }
@@ -2318,34 +2371,13 @@ fn a_frame_from_another_run_of_the_session_never_colours_the_projected_run() {
     let run_id = RunId::new();
     let other_run = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id, other_run, 0, "other",
-    )));
+    receive(&mut state, delta(session_id, other_run, 0, "other"));
     assert_eq!(state.error(), None, "the frame belongs to this session");
     assert_eq!(state.provisional_text(), "");
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Waiting),
         "the projected run keeps the phase its own frames named"
-    );
-}
-
-#[test]
-fn a_frame_from_another_session_reports_a_scope_failure() {
-    let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let foreign = SessionId::new();
-    let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(foreign, run_id, 0, "foreign")));
-    assert!(
-        state.error().is_some(),
-        "a frame outside the scope is never applied"
-    );
-    assert_eq!(state.provisional_text(), "");
-    assert_eq!(
-        state.run_phase(),
-        Some(RunPhase::Waiting),
-        "the rejected frame never colours the projected run"
     );
 }
 
@@ -2360,11 +2392,10 @@ fn a_run_another_window_started_becomes_the_projected_run() {
     let mut state = running_session(session_id, finished, RunStatusDto::Completed);
     assert_eq!(state.live_run(), None, "a finished run is not live");
 
-    state.update(Action::FrameReceived(SessionFrameDto::Status(run(
-        session_id,
-        started,
-        RunStatusDto::Running,
-    ))));
+    receive(
+        &mut state,
+        SessionFrameDto::Status(run(session_id, started, RunStatusDto::Running)),
+    );
     assert_eq!(state.run_status(), Some(RunStatusDto::Running));
     assert_eq!(
         state.live_run().map(RunProjectionDto::run_id),
@@ -2388,9 +2419,14 @@ fn a_row_another_window_committed_joins_the_transcript() {
     let finished = RunId::new();
     let started = RunId::new();
     let mut state = running_session(session_id, finished, RunStatusDto::Completed);
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, started, "the other window's answer"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(
+            session_id,
+            started,
+            "the other window's answer",
+        )),
+    );
     assert_eq!(state.transcript().len(), 1);
     assert_eq!(
         state.transcript()[0].run_id(),
@@ -2492,7 +2528,7 @@ fn the_runs_own_reports_leave_the_armed_stop_standing() {
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     state.update(Action::CtrlCPressed);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "tok")));
+    receive(&mut state, delta(session_id, run_id, 0, "tok"));
     state.update(Action::ElapsedReported { millis: 200 });
     let effects = state.update(Action::CtrlCPressed);
     assert_eq!(effects, vec![Effect::CancelRun { session_id, run_id }]);
@@ -2504,11 +2540,10 @@ fn a_run_that_ended_between_two_presses_arms_the_exit_instead_of_quitting() {
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
     state.update(Action::CtrlCPressed);
-    state.update(Action::FrameReceived(status_frame(
-        session_id,
-        run_id,
-        RunStatusDto::Completed,
-    )));
+    receive(
+        &mut state,
+        status_frame(session_id, run_id, RunStatusDto::Completed),
+    );
     let effects = state.update(Action::CtrlCPressed);
     assert!(effects.is_empty(), "the stop arm did not outlive its run");
     assert!(
@@ -2641,11 +2676,10 @@ fn a_terminal_status_frame_reports_the_final_status() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(status_frame(
-        session_id,
-        run_id,
-        RunStatusDto::Completed,
-    )));
+    receive(
+        &mut state,
+        status_frame(session_id, run_id, RunStatusDto::Completed),
+    );
     assert_eq!(state.run_status(), Some(RunStatusDto::Completed));
     assert_eq!(state.notice(), Some("run completed"));
     let effects = state.update(Action::CancelRunRequested);
@@ -2787,7 +2821,7 @@ fn a_create_request_that_never_started_a_run_leaves_no_waiting_phase() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut live = running_session(session_id, run_id, RunStatusDto::Running);
-    live.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    receive(&mut live, delta(session_id, run_id, 0, "half"));
     assert_eq!(live.run_phase(), Some(RunPhase::Answering));
     live.update(Action::SessionCreateFailed {
         carried_first_turn: false,
@@ -2814,16 +2848,12 @@ fn the_reasoning_stream_starts_the_thinking_phase_and_the_answer_stream_the_answ
         Some(RunPhase::Waiting),
         "a fresh subscription waits for the token it will see first"
     );
-    state.update(Action::FrameReceived(reasoning_delta(
-        session_id, run_id, 0, "weighing",
-    )));
+    receive(
+        &mut state,
+        reasoning_delta(session_id, run_id, 0, "weighing"),
+    );
     assert_eq!(state.run_phase(), Some(RunPhase::Thinking));
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     assert_eq!(state.run_phase(), Some(RunPhase::Answering));
 }
 
@@ -2832,18 +2862,12 @@ fn a_terminal_status_ends_the_live_phase() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     assert_eq!(state.run_phase(), Some(RunPhase::Answering));
-    state.update(Action::FrameReceived(status_frame(
-        session_id,
-        run_id,
-        RunStatusDto::Completed,
-    )));
+    receive(
+        &mut state,
+        status_frame(session_id, run_id, RunStatusDto::Completed),
+    );
     assert_eq!(
         state.run_phase(),
         None,
@@ -2897,12 +2921,7 @@ fn one_result_leaves_the_watch_while_another_call_is_in_flight() {
     let first = ToolCallId::new();
     let second = ToolCallId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     state.update(Action::ElapsedReported { millis: 1_000 });
     commit_row(
         &mut state,
@@ -2940,12 +2959,7 @@ fn the_watch_names_the_open_calls_the_projection_reports() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     state.update(Action::ElapsedReported { millis: 1_000 });
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 1_700 });
@@ -3001,13 +3015,10 @@ fn a_call_of_another_run_never_names_this_runs_working_phase() {
     // The next run of the same session reports its own open-call count: the
     // previous run's call is not this run's fact.
     let next_run = RunId::new();
-    let effects = state.update(Action::FrameReceived(SessionFrameDto::Status(run_in(
-        session_id,
-        next_run,
-        RunStatusDto::Running,
-        None,
-        1,
-    ))));
+    let effects = receive(
+        &mut state,
+        SessionFrameDto::Status(run_in(session_id, next_run, RunStatusDto::Running, None, 1)),
+    );
     assert!(effects.is_empty(), "a status frame asks for no client work");
     state.update(Action::ElapsedReported { millis: 2_700 });
     assert_eq!(
@@ -3022,12 +3033,7 @@ fn a_tool_call_before_any_elapsed_report_never_names_working() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(
-        session_id,
-        run_id,
-        0,
-        "the answer",
-    )));
+    receive(&mut state, delta(session_id, run_id, 0, "the answer"));
     commit_row(
         &mut state,
         tool_call_row(session_id, run_id, "read", "{}", ToolCallId::new()),
@@ -3066,7 +3072,7 @@ fn opening_a_session_rebases_the_phase_on_its_own_run() {
     let first = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(first, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(first, run_id, 0, "the answer")));
+    receive(&mut state, delta(first, run_id, 0, "the answer"));
     assert_eq!(state.run_phase(), Some(RunPhase::Answering));
 
     let second = SessionId::new();
@@ -3101,7 +3107,7 @@ fn a_closed_stream_drops_the_provisional_tail() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    receive(&mut state, delta(session_id, run_id, 0, "half"));
     assert_eq!(
         state.run_phase(),
         Some(RunPhase::Answering),
@@ -3241,7 +3247,7 @@ fn a_stream_delivering_a_frame_restores_the_reconnect_budget() {
         RunStatusDto::Running,
         Vec::new(),
     )));
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    receive(&mut state, delta(session_id, run_id, 0, "half"));
     assert_eq!(
         state.update(Action::SessionStreamFailed(failure())),
         vec![Effect::Connect],
@@ -3328,7 +3334,7 @@ fn a_lost_stream_re_reads_the_session_after_the_reconnect() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
     let mut state = running_session(session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(delta(session_id, run_id, 0, "half")));
+    receive(&mut state, delta(session_id, run_id, 0, "half"));
     let effects = state.update(Action::SessionStreamEnded);
     assert_eq!(effects, vec![Effect::Connect]);
     assert_eq!(state.connection(), ConnectionStatus::Connecting);
@@ -3523,9 +3529,10 @@ fn an_expansion_clears_when_the_transcript_is_front_trimmed() {
     });
     state.update(Action::ExpandReasoning { row: Some(1) });
     assert_eq!(state.reasoning_expansion(1), 100);
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        assistant_row(session_id, run_id, "the newest row"),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(assistant_row(session_id, run_id, "the newest row")),
+    );
     assert_eq!(
         state.transcript().len(),
         retained,

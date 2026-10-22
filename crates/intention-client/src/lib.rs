@@ -514,8 +514,18 @@ pub struct SessionStreamSubscription {
 /// One observation of a live session stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StreamStep {
-    /// One committed or transient frame.
-    Frame(SessionFrameDto),
+    /// One committed or transient frame, beside what it changed.
+    Frame {
+        /// The frame as the daemon sent it.
+        frame: SessionFrameDto,
+        /// What the frame changed in the subscription's committed state.
+        ///
+        /// The subscription applies every frame to the one
+        /// [`SessionStreamState`] it exposes, so this value is the derivation's
+        /// own report: a caller reads it instead of re-deriving the acceptance
+        /// decision from the frame.
+        update: FrameUpdate,
+    },
     /// The daemon closed the connection.
     ///
     /// The failure is the client's own local transport classification; a
@@ -529,7 +539,10 @@ impl SessionStreamSubscription {
     ///
     /// Content and status frames are applied to the committed state before they
     /// are returned, and a connection the daemon closed is the client's own
-    /// classification rather than an error.
+    /// classification rather than an error. The state this subscription exposes
+    /// is the one derivation of every frame it received: a caller renders from
+    /// [`SessionStreamSubscription::state`] and reads the reported update, and
+    /// never applies the frame a second time to a copy of its own.
     ///
     /// # Errors
     ///
@@ -548,8 +561,8 @@ impl SessionStreamSubscription {
             Err(error) => return Err(error),
         };
         let frame = parse_session_frame(&line)?;
-        let _update = self.state.apply_frame(frame.clone())?;
-        Ok(StreamStep::Frame(frame))
+        let update = self.state.apply_frame(frame.clone())?;
+        Ok(StreamStep::Frame { frame, update })
     }
 
     /// Returns the committed state of this fixed session scope.

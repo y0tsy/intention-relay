@@ -22,8 +22,8 @@ use intention_test_support::fixtures::{
     tool_result_row_with, workspace_root,
 };
 use intention_tui::app::{
-    Action, AppState, BrowserCursorMove, InputCursorMove, MenuMove, Screen, Theme, ThemePreference,
-    TranscriptScroll, short_identifier,
+    Action, AppState, BrowserCursorMove, Effect, InputCursorMove, MenuMove, Screen, Theme,
+    ThemePreference, TranscriptScroll, short_identifier,
 };
 use intention_tui::tui::RevueView;
 use revue::runtime::render::Modifier;
@@ -171,11 +171,15 @@ fn welcome_state() -> AppState {
 }
 
 /// Applies the opened-subscription action for one run of `status` to `state`.
+///
+/// The reply is the session's own current read, so it carries the committed
+/// rows the session already has: the front end renders that read and nothing
+/// else.
 fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
     let stream = SessionStreamState::from_snapshot(snapshot(
         session_id,
         Some(run_at(session_id, run_id, status, NOW)),
-        Vec::new(),
+        state.transcript().to_vec(),
     ));
     state.update(Action::SessionStreamOpened(stream));
 }
@@ -187,15 +191,18 @@ fn subscribe(state: &mut AppState, session_id: SessionId, run_id: RunId, status:
 /// frame that names a call in flight.
 fn publish_open_calls(state: &mut AppState, session_id: SessionId, run_id: RunId, open_calls: u32) {
     let started_at = TimestampDto::from_unix_seconds(NOW).expect("fixture timestamp is valid");
-    state.update(Action::FrameReceived(SessionFrameDto::Status(run_with(
-        session_id,
-        run_id,
-        RunStatusDto::Running,
-        None,
-        started_at,
-        None,
-        open_calls,
-    ))));
+    receive(
+        state,
+        SessionFrameDto::Status(run_with(
+            session_id,
+            run_id,
+            RunStatusDto::Running,
+            None,
+            started_at,
+            None,
+            open_calls,
+        )),
+    );
 }
 
 /// Returns a connected session streaming one running run, with the session and
@@ -224,10 +231,13 @@ fn delta_frame(
     channel: TextDeltaChannelDto,
     text: &str,
 ) {
-    state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
-        TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
-            .expect("the fixture delta is valid"),
-    )));
+    receive(
+        state,
+        SessionFrameDto::TextDelta(
+            TextDeltaFrameDto::new(session_id, run_id, 0, channel, text)
+                .expect("the fixture delta is valid"),
+        ),
+    );
 }
 
 /// Returns a connected session that streams one running run with one committed
@@ -269,6 +279,36 @@ fn two_session_state() -> AppState {
         ],
         0,
     )
+}
+
+/// Applies one frame the way the live subscription does.
+///
+/// The client applies every frame to the one session state it exposes and hands
+/// the frame, what it changed, and its result to the front end, so a test
+/// derives a frame through the same entry the production pump uses instead of
+/// restating the client's rules.
+fn receive(state: &mut AppState, frame: SessionFrameDto) -> Vec<Effect> {
+    let mut derived = state
+        .session_state()
+        .cloned()
+        .unwrap_or_else(|| SessionStreamState::new(frame_session(&frame)));
+    let update = derived
+        .apply_frame(frame.clone())
+        .expect("the fixture frame belongs to the state's own session");
+    state.update(Action::FrameReceived {
+        frame,
+        update,
+        state: Box::new(derived),
+    })
+}
+
+/// Returns the session one frame belongs to.
+fn frame_session(frame: &SessionFrameDto) -> SessionId {
+    match frame {
+        SessionFrameDto::Content(row) => row.session_id(),
+        SessionFrameDto::Status(run) => run.session_id(),
+        SessionFrameDto::TextDelta(delta) => delta.session_id(),
+    }
 }
 
 #[test]
@@ -802,11 +842,14 @@ fn a_notice_row_streamed_from_the_run_renders_as_its_own_block() {
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
     // The engine commits its interruption notice as a `notice` row and the
     // daemon streams it as a content frame, exactly like every other row.
-    state.update(Action::FrameReceived(SessionFrameDto::Content(notice_row(
-        session_id,
-        run_id,
-        "[The call was stopped before a final result.]",
-    ))));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(notice_row(
+            session_id,
+            run_id,
+            "[The call was stopped before a final result.]",
+        )),
+    );
     assert_eq!(
         state.transcript()[0].kind(),
         MessageKindDto::Notice,
@@ -1832,15 +1875,16 @@ fn a_tool_call_in_flight_past_half_a_second_shows_the_working_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_call_row(
+    receive(
+        &mut state,
+        SessionFrameDto::Content(tool_call_row(
             session_id,
             run_id,
             "read",
             r#"{"path":"src/lib.rs"}"#,
             ToolCallId::new(),
-        ),
-    )));
+        )),
+    );
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_600 });
     let mut app = TestApp::new(RevueView::new(&state));
@@ -1859,15 +1903,16 @@ fn a_tool_call_under_half_a_second_keeps_the_answering_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_call_row(
+    receive(
+        &mut state,
+        SessionFrameDto::Content(tool_call_row(
             session_id,
             run_id,
             "read",
             r#"{"path":"src/lib.rs"}"#,
             ToolCallId::new(),
-        ),
-    )));
+        )),
+    );
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_400 });
     let mut app = TestApp::new(RevueView::new(&state));
@@ -1887,21 +1932,23 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
         "the answer",
     );
     state.update(Action::ElapsedReported { millis: 2_000 });
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_call_row(session_id, run_id, "read", "{}", call_id),
-    )));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(tool_call_row(session_id, run_id, "read", "{}", call_id)),
+    );
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_700 });
-    state.update(Action::FrameReceived(SessionFrameDto::Content(
-        tool_result_row_with(
+    receive(
+        &mut state,
+        SessionFrameDto::Content(tool_result_row_with(
             session_id,
             run_id,
             "read",
             "committed content",
             payload(ToolId::Read, "the file"),
             call_id,
-        ),
-    )));
+        )),
+    );
     publish_open_calls(&mut state, session_id, run_id, 0);
     let mut app = TestApp::new(RevueView::new(&state));
     let pilot = Pilot::new(&mut app);
@@ -2151,12 +2198,15 @@ fn the_welcome_state_never_covers_a_row_the_core_reports() {
         Vec::new(),
     )));
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
-    state.update(Action::FrameReceived(SessionFrameDto::Content(row(
-        session_id,
-        Some(run_id),
-        MessageKindDto::Assistant,
-        "the committed row",
-    ))));
+    receive(
+        &mut state,
+        SessionFrameDto::Content(row(
+            session_id,
+            Some(run_id),
+            MessageKindDto::Assistant,
+            "the committed row",
+        )),
+    );
     assert_eq!(state.session_id(), Some(session_id));
     assert_eq!(state.transcript().len(), 1, "one committed row is present");
 

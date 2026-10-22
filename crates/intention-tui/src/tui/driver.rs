@@ -142,7 +142,10 @@ enum Step {
     /// The next effect a front end asked for, or `None` once it left.
     Effect(Option<Effect>),
     /// The next observation of the live subscription.
-    Frame(DtoResult<StreamStep>),
+    ///
+    /// Boxed because one observation carries a whole frame: the enum merges it
+    /// with an effect a front end asked for, and every effect is far smaller.
+    Frame(Box<DtoResult<StreamStep>>),
 }
 
 /// The client task one revue front end drives through [`Effect`] values.
@@ -217,7 +220,7 @@ async fn drive(
         let step = match live.as_mut() {
             Some(subscription) => tokio::select! {
                 effect = effects.recv() => Step::Effect(effect),
-                received = subscription.receive() => Step::Frame(received),
+                received = subscription.receive() => Step::Frame(Box::new(received)),
             },
             None => Step::Effect(effects.recv().await),
         };
@@ -252,17 +255,28 @@ async fn drive(
                     .await
                     .map(|outcome| outcome.unwrap_or_else(|(action, _failure)| action))
             }
-            Step::Frame(Ok(StreamStep::Frame(frame))) => Some(Action::FrameReceived(frame)),
-            Step::Frame(Ok(StreamStep::Closed(error))) => {
-                // The client classified the closed connection, so the front end
-                // reports that classification instead of composing one.
-                live = None;
-                Some(Action::SessionStreamFailed(error))
-            }
-            Step::Frame(Err(error)) => {
-                live = None;
-                Some(Action::SessionStreamFailed(error))
-            }
+            Step::Frame(received) => match *received {
+                Ok(StreamStep::Frame { frame, update }) => {
+                    // The subscription derived the frame into the one session
+                    // state it exposes, so the front end takes that state
+                    // instead of replaying the frame into a copy of its own.
+                    live.as_ref().map(|subscription| Action::FrameReceived {
+                        frame,
+                        update,
+                        state: Box::new(subscription.state().clone()),
+                    })
+                }
+                Ok(StreamStep::Closed(error)) => {
+                    // The client classified the closed connection, so the front
+                    // end reports that classification instead of composing one.
+                    live = None;
+                    Some(Action::SessionStreamFailed(error))
+                }
+                Err(error) => {
+                    live = None;
+                    Some(Action::SessionStreamFailed(error))
+                }
+            },
         };
         if let Some(action) = action
             && actions.send(action).is_err()

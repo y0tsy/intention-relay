@@ -504,11 +504,7 @@ where
             // a reader that shows the row first never displays an answer before
             // the turn it answers.
             observer.observe_session_commit(&SessionCommitDto::Content(message.clone()));
-            observer.observe_session_commit(&SessionCommitDto::Status {
-                session_id: run.session_id(),
-                run_id: run.run_id(),
-                status: run.status(),
-            });
+            observer.observe_session_commit(&SessionCommitDto::Status(*run));
         }
         Ok(accepted)
     }

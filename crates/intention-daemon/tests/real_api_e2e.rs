@@ -698,7 +698,7 @@ async fn collect_session_frames(endpoint: &LocalEndpoint, session_id: SessionId)
             }));
         }
         match subscription.receive().await {
-            Ok(StreamStep::Frame(_)) => {}
+            Ok(StreamStep::Frame { .. }) => {}
             Ok(StreamStep::Closed(_)) => {
                 return RunObservation::Lost(format!(
                     "the daemon closed the run stream after {} committed rows",

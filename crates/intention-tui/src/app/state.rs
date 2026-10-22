@@ -284,7 +284,11 @@ impl AppState {
             Action::SessionStreamOpened(state) => self.apply_session_stream_opened(state),
             Action::SessionStreamFailed(error) => self.apply_session_stream_failed(&error),
             Action::SessionStreamEnded => self.apply_session_stream_ended(),
-            Action::FrameReceived(frame) => self.apply_frame(frame),
+            Action::FrameReceived {
+                frame,
+                update,
+                state,
+            } => self.apply_frame(frame, update, *state),
             Action::TurnAccepted(outcome) => self.apply_turn_accepted(outcome),
             Action::ElapsedReported { millis } => self.apply_elapsed_reported(millis),
             Action::TurnFailed(error) => self.apply_turn_send_failed(&error),
@@ -498,6 +502,17 @@ impl AppState {
     #[must_use]
     pub const fn elapsed_millis(&self) -> Option<u64> {
         self.elapsed_millis
+    }
+
+    /// Returns the client's committed session state the panes render from.
+    ///
+    /// The state is the client's own derivation: the subscription applies every
+    /// frame to it and hands it over, so a caller reads the rows, the run
+    /// projection, the transient text, and the transcript version from this one
+    /// value instead of replaying frames into a copy of its own.
+    #[must_use]
+    pub const fn session_state(&self) -> Option<&SessionStreamState> {
+        self.session_state.as_ref()
     }
 
     /// Returns the committed transcript rows of the current session.

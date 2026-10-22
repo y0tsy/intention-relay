@@ -41,8 +41,6 @@ use intention_transport::{AsyncLocalListener, AsyncMessageSender, LocalEndpoint}
 
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 const SUBSCRIBER_WRITE_DEADLINE: Duration = Duration::from_secs(10);
-const PUBLICATION_RETRY_ATTEMPTS: usize = 6;
-const PUBLICATION_RETRY_DELAY: Duration = Duration::from_millis(100);
 /// The bounded wait for every registered run to return after a stop request.
 const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -280,15 +278,10 @@ impl HostState {
             // An executor error must never leave a non-terminal durable run
             // without an owner (PR24-012/013): a still-active run is
             // terminalized as `Failed` with the executor's stable error code.
-            if let Err(error) = result {
-                let active = host
-                    .facade
-                    .repository()
-                    .load_run_projection(key.0, key.1)
-                    .map_or(true, |run| !run_status_is_terminal(run.status()));
-                if active && host.fail_active_run(key.0, key.1, error.code()).is_ok() {
-                    host.on_terminal(key.0, key.1);
-                }
+            if let Err(error) = result
+                && let Ok(Some(run)) = host.fail_active_run(key.0, key.1, error.code())
+            {
+                host.on_terminal(run);
             }
             if let Ok(mut data) = host.data.lock() {
                 data.tasks.remove(&key);
@@ -356,18 +349,16 @@ impl HostState {
                 composition::now()?,
             )
         })?;
-        if stopped.is_some() {
-            self.on_terminal(session_id, run_id);
+        if let Some(run) = stopped {
+            self.on_terminal(run);
         }
         Ok(())
     }
 
     fn fail_unadmitted_starting_run(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
-        if self
-            .fail_starting_run(session_id, run_id, "model_scheduling_unavailable")
-            .is_ok()
+        if let Ok(run) = self.fail_starting_run(session_id, run_id, "model_scheduling_unavailable")
         {
-            self.on_terminal(session_id, run_id);
+            self.on_terminal(run);
         }
     }
 
@@ -380,7 +371,7 @@ impl HostState {
         session_id: SessionId,
         run_id: RunId,
         failure_code: &'static str,
-    ) -> DtoResult<()> {
+    ) -> DtoResult<intention_proto::RunProjectionDto> {
         self.facade.command_gate().run(|| {
             fail_starting_run(
                 self.facade.repository(),
@@ -388,8 +379,7 @@ impl HostState {
                 run_id,
                 failure_code,
                 composition::now()?,
-            )?;
-            Ok(())
+            )
         })
     }
 
@@ -399,7 +389,8 @@ impl HostState {
     /// owner: this commits the terminal `Failed` run row with the executor
     /// error's stable code, so deterministic bound and semantic failures (for
     /// example `reasoning_output_limit_exceeded`) become the durable failed
-    /// outcome (PR24-012). Runs already terminal are a no-op.
+    /// outcome (PR24-012). Runs already terminal are a no-op that reports
+    /// `None`.
     ///
     /// # Errors
     ///
@@ -410,7 +401,7 @@ impl HostState {
         session_id: SessionId,
         run_id: RunId,
         failure_code: &str,
-    ) -> DtoResult<()> {
+    ) -> DtoResult<Option<intention_proto::RunProjectionDto>> {
         self.facade.command_gate().run(|| {
             terminalize_active_run(
                 self.facade.repository(),
@@ -419,45 +410,24 @@ impl HostState {
                 RunStatusDto::Failed,
                 Some((failure_code, "the scheduled run execution failed")),
                 composition::now()?,
-            )?;
-            Ok(())
+            )
         })
     }
 
     /// Runs the terminal side effects for one run that just reached a durable
-    /// terminal state: publish its terminal status frame, retrying a transient
-    /// read failure boundedly, and schedule a current `Starting` successor
-    /// exactly once.
+    /// terminal state: publish its terminal status frame and schedule a current
+    /// `Starting` successor exactly once.
     ///
-    /// A status commit carries only the status value, so the terminal frame is
-    /// built from a second durable read. A terminal commit has no guaranteed
-    /// successor, so a transient failure of that read cannot be left to a later
-    /// commit to fix: a live subscriber of the run would wait forever. The
-    /// retry is bounded because a shutdown must never hang, and a reconnecting
-    /// subscriber remains the ultimate fallback.
-    fn on_terminal(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
-        if !self.publish_current(session_id, run_id) {
-            self.spawn_bounded_publication_retry(session_id, run_id);
-        }
+    /// The frame is built from the projection the terminal commit returned, so
+    /// the publication reads nothing and cannot fail; a terminal commit has no
+    /// guaranteed successor, so a live subscriber of the run would otherwise
+    /// wait forever for a frame no later commit can produce.
+    fn on_terminal(self: &Arc<Self>, run: intention_proto::RunProjectionDto) {
+        let session_id = run.session_id();
+        self.publish_status(run);
         if let Ok(Some(promoted)) = self.current_starting_run(session_id) {
             self.schedule_if_starting(session_id, promoted);
         }
-    }
-
-    /// Spawns one bounded publication retry worker for one terminal run.
-    ///
-    /// The worker republishes the exact terminal frame a bounded number of
-    /// times, because no later commit of a terminal run exists to catch up
-    /// from.
-    fn spawn_bounded_publication_retry(self: &Arc<Self>, session_id: SessionId, run_id: RunId) {
-        let host = Arc::clone(self);
-        let task = tokio::spawn(async move {
-            retry_bounded(PUBLICATION_RETRY_ATTEMPTS, PUBLICATION_RETRY_DELAY, || {
-                host.publish_current(session_id, run_id)
-            })
-            .await;
-        });
-        self.track_task(task);
     }
 
     /// Returns the currently active durable run when it is eligible for admission.
@@ -483,27 +453,32 @@ impl HostState {
         self.facade.session_snapshot(session_id)
     }
 
+    /// Publishes one committed run projection to live subscribers.
+    ///
+    /// A repeated publication is a harmless duplicate: the subscriber replaces
+    /// its state with the same committed value.
+    fn publish_status(&self, run: intention_proto::RunProjectionDto) {
+        self.broadcast(
+            run.session_id(),
+            ProtocolDaemonMessageDto::frame(SessionFrameDto::Status(run)),
+        );
+    }
+
     /// Publishes the current committed run projection to live subscribers.
     ///
-    /// A status commit carries only the status value, so the frame is built
-    /// from the committed projection the transition just wrote. A repeated
-    /// publication is a harmless duplicate: the subscriber replaces its state
-    /// with the same committed value. Returns whether the projection was read
-    /// and queued, so the terminal publication path can retry a transient read
-    /// failure.
-    fn publish_current(&self, session_id: SessionId, run_id: RunId) -> bool {
+    /// A committed transcript row carries no run projection, so the tool-row
+    /// refresh reads the current one: its open-call count changes exactly when
+    /// that row lands. A read failure publishes nothing and is repaired by the
+    /// next commit or by the run's terminal frame.
+    fn publish_current(&self, session_id: SessionId, run_id: RunId) {
         let Ok(run) = self
             .facade
             .repository()
             .load_run_projection(session_id, run_id)
         else {
-            return false;
+            return;
         };
-        self.broadcast(
-            session_id,
-            ProtocolDaemonMessageDto::frame(SessionFrameDto::Status(run)),
-        );
-        true
+        self.publish_status(run);
     }
 
     /// Publishes one committed transcript row to live subscribers.
@@ -960,27 +935,6 @@ fn take_registration(
     removed
 }
 
-/// Runs one bounded retry loop, stopping at the first success.
-///
-/// The attempt closure is called at most `attempts` times with `delay` between
-/// the attempts, and the delay is awaited, so a retry never blocks a runtime
-/// worker. Returns whether an attempt succeeded.
-async fn retry_bounded(
-    attempts: usize,
-    delay: Duration,
-    mut attempt: impl FnMut() -> bool,
-) -> bool {
-    for index in 0..attempts {
-        if attempt() {
-            return true;
-        }
-        if index + 1 < attempts {
-            tokio::time::sleep(delay).await;
-        }
-    }
-    false
-}
-
 /// Publishes committed transcript rows and run statuses to live subscribers.
 ///
 /// The one commit sink serves the turn-acceptance path, the model-run executor,
@@ -1022,17 +976,13 @@ impl SessionCommitObserver for HostCommitObserver {
                     self.host.publish_current(message.session_id(), run_id);
                 }
             }
-            SessionCommitDto::Status {
-                session_id,
-                run_id,
-                status,
-            } => {
-                if run_status_is_terminal(*status) {
+            SessionCommitDto::Status(run) => {
+                if run_status_is_terminal(run.status()) {
                     // A terminal commit has no guaranteed successor, so the
-                    // terminal publication owns its own bounded retry.
-                    self.host.on_terminal(*session_id, *run_id);
+                    // terminal publication runs its own side effects.
+                    self.host.on_terminal(*run);
                 } else {
-                    self.host.publish_current(*session_id, *run_id);
+                    self.host.publish_status(*run);
                 }
             }
         }
@@ -1625,20 +1575,18 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
     use intention_proto::{
-        ClientRequestDto, ConfigRevisionId, CreateSessionCommandDto, DaemonHealthDto,
-        GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto,
-        MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
-        RunModeDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
-        SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto, decode_response, encode_request,
-        parse_daemon_message,
+        ClientRequestDto, DaemonHealthDto, GetSessionSnapshotQueryDto, IdempotencyKey, MessageId,
+        MessageKindDto, MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto,
+        ProtocolResultDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
+        SubscribeSessionCommandDto, decode_response, encode_request, parse_daemon_message,
     };
-    use intention_proto::{ProjectId, RunId, TimestampDto};
+    use intention_proto::{RunId, TimestampDto};
     use intention_providers::{
         FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
         ModelEventStream, ModelExecutionDriver,
     };
+    use intention_test_support::{fixture_session_command, fixture_snapshot};
     use intention_transport::{
         AsyncLocalClientConnection, AsyncLocalListener, AsyncMessageReceiver, AsyncMessageSender,
     };
@@ -1655,18 +1603,6 @@ mod tests {
 
     fn fixture_facade() -> (TempDir, DaemonApplicationFacade) {
         fixture_facade_with_driver(Arc::new(EmptyDriver))
-    }
-
-    fn fixture_snapshot() -> ConfigSnapshotDto {
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n",
-        ))
-        .expect("fixture configuration resolves");
-        ConfigSnapshotDto::new(
-            ConfigRevisionId::new(),
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-            resolved,
-        )
     }
 
     fn fixture_facade_with_driver(
@@ -1722,15 +1658,7 @@ mod tests {
         let session_id = SessionId::new();
         let created = facade
             .create_session(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                        .expect("fixture workspace is absolute"),
-                    Some(RunModeDto::Build),
-                    None,
-                ),
+                fixture_session_command(session_id, "daemon-library"),
                 &SilentCommitObserver::new(),
             )
             .expect("fixture session creates");
@@ -1836,15 +1764,7 @@ mod tests {
         let session_id = SessionId::new();
         facade
             .create_session(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
-                        .expect("fixture workspace is absolute"),
-                    Some(RunModeDto::Build),
-                    None,
-                ),
+                fixture_session_command(session_id, "daemon-library"),
                 &SilentCommitObserver::new(),
             )
             .expect("fixture session creates");
@@ -2334,31 +2254,6 @@ mod tests {
         publisher.join().expect("the publisher thread joins");
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn retry_bounded_stops_at_the_first_success_and_gives_up_after_its_budget() {
-        let attempts = std::cell::Cell::new(0usize);
-        assert!(
-            retry_bounded(3, Duration::from_millis(100), || {
-                attempts.set(attempts.get() + 1);
-                attempts.get() >= 3
-            })
-            .await,
-            "the third attempt succeeds"
-        );
-        assert_eq!(attempts.get(), 3);
-
-        let exhausted = std::cell::Cell::new(0usize);
-        assert!(
-            !retry_bounded(3, Duration::from_millis(100), || {
-                exhausted.set(exhausted.get() + 1);
-                false
-            })
-            .await,
-            "an always-failing attempt closure exhausts its budget"
-        );
-        assert_eq!(exhausted.get(), 3);
-    }
-
     #[tokio::test]
     async fn a_content_frame_duplicating_the_snapshot_row_is_suppressed_once() {
         // A durable commit and its publication are not one step, so a
@@ -2434,10 +2329,10 @@ mod tests {
 
     #[tokio::test]
     async fn a_terminal_status_frame_reaches_a_live_subscriber() {
-        // A status commit carries only the status value, so the frame is built
-        // from a second durable read; the terminal path owns that publication,
-        // so a live subscriber of the run receives it without waiting for a
-        // later commit that a terminal run can never produce.
+        // A status commit carries the committed projection, so the frame is
+        // built from that value without a second read; the terminal path owns
+        // the publication, so a live subscriber of the run receives it without
+        // waiting for a later commit that a terminal run can never produce.
         let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
         let (session_id, run_id) = create_and_start(&facade);
         let host = new_host(facade);
@@ -2455,9 +2350,11 @@ mod tests {
             Some(ProtocolDaemonMessageDto::Reply(_))
         ));
 
-        host.fail_active_run(session_id, run_id, "fixture_terminal_failure")
-            .expect("the fixture run terminalizes");
-        host.on_terminal(session_id, run_id);
+        let terminal = host
+            .fail_active_run(session_id, run_id, "fixture_terminal_failure")
+            .expect("the fixture run terminalizes")
+            .expect("the active run terminalizes");
+        host.on_terminal(terminal);
         let delivered = receiver
             .recv()
             .await

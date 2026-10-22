@@ -1,6 +1,6 @@
 //! Typed inputs and client effects of the render-free application state.
 
-use intention_client::SessionStreamState;
+use intention_client::{FrameUpdate, SessionStreamState};
 use intention_proto::{
     DaemonHealthDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
     SessionSnapshotDto, SessionSummariesDto,
@@ -150,8 +150,23 @@ pub enum Action {
     SessionStreamFailed(ErrorDto),
     /// The daemon closed the run stream.
     SessionStreamEnded,
-    /// One committed or transient run-stream frame arrived.
-    FrameReceived(SessionFrameDto),
+    /// One committed or transient run-stream frame arrived, already derived.
+    ///
+    /// The client applies every frame to the one session state it exposes and
+    /// hands the frame, what it changed, and its result here: the front end
+    /// takes that state and never replays the frame into a copy of its own.
+    FrameReceived {
+        /// The frame as the daemon sent it.
+        frame: SessionFrameDto,
+        /// What the frame changed in the state beside it.
+        update: FrameUpdate,
+        /// The client's committed session state after the frame.
+        ///
+        /// Boxed because the state is the widest value an action carries: the
+        /// action crosses a channel once per frame, and every other variant is
+        /// far smaller than this one.
+        state: Box<SessionStreamState>,
+    },
     /// The daemon accepted one user turn.
     TurnAccepted(SendUserTurnOutcomeDto),
     /// The front end measured how long a dispatched turn has been in flight.
@@ -305,7 +320,7 @@ impl Action {
                 | Self::SessionStreamOpened(_)
                 | Self::SessionStreamFailed(_)
                 | Self::SessionStreamEnded
-                | Self::FrameReceived(_)
+                | Self::FrameReceived { .. }
                 | Self::ElapsedReported { .. }
                 | Self::TurnAccepted(_)
                 | Self::TurnFailed(_)

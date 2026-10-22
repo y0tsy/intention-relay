@@ -806,56 +806,56 @@ impl StorageRepositoryDto for FakeRepository {
     }
 }
 
-/// A time port that answers immediately and records every requested delay.
-pub struct ImmediateTime {
-    pub sleeps: Mutex<Vec<Duration>>,
-}
-
-impl ImmediateTime {
-    /// Creates an empty immediate clock.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            sleeps: Mutex::new(Vec::new()),
-        }
-    }
-}
-
-impl ModelTimePort for ImmediateTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        self.sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .push(duration);
-        Box::pin(future::ready(()))
-    }
-}
-
-/// A manual clock whose elapsed time advances only when a scripted provider
-/// stream reports a silence.
+/// The provider attempt window every fixture snapshot resolves.
 ///
-/// The seconds-scale attempt window resolves only against the silences the
-/// fixture drives, so a test can model a slow provider without waiting. A
-/// sub-second delay is the runtime's own retry delay, which no provider
-/// silence drives: it completes immediately and advances the clock by its own
-/// duration, exactly like the m5 fixtures that classify delays by their scale.
-pub struct ManualTime {
+/// The fixture configuration carries no execution policy, so the resolved
+/// default applies: one attempt may fall silent for this long.
+pub const FIXTURE_ATTEMPT_WINDOW: Duration = Duration::from_secs(30);
+
+/// The runtime's own delay between two provider attempts.
+pub const FIXTURE_RETRY_DELAY: Duration = Duration::from_millis(250);
+
+/// The virtual clock every engine fixture drives.
+///
+/// Elapsed time advances only when a test advances it or a delay the clock does
+/// not hold completes, so a test models a slow provider, a retry wait, or a
+/// suspended select without waiting. A delay is held because the test asked for
+/// that exact delay to be held, never because of its magnitude: a test that
+/// needs a delay to stay pending declares it with [`Self::holding`], and one
+/// that needs to observe the arming declares a signal with [`Self::signalling`].
+pub struct VirtualTime {
     elapsed: Mutex<Duration>,
     sleeps: Mutex<Vec<Duration>>,
+    /// The delays that stay pending until the clock reaches their deadline.
+    held: Vec<Duration>,
+    /// Signals every arm of a held delay.
+    entered: Option<std::sync::mpsc::Sender<()>>,
 }
 
-impl ManualTime {
-    /// Creates a manual clock at zero elapsed time.
+impl VirtualTime {
+    /// Creates a clock whose every delay completes and advances elapsed time.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             elapsed: Mutex::new(Duration::ZERO),
             sleeps: Mutex::new(Vec::new()),
+            held: Vec::new(),
+            entered: None,
         }
+    }
+
+    /// Holds the supplied delays pending until the clock reaches their deadline.
+    #[must_use]
+    pub fn holding(mut self, delays: impl IntoIterator<Item = Duration>) -> Self {
+        self.held.extend(delays);
+        self
+    }
+
+    /// Signals `entered` on every arm of a held delay.
+    #[must_use]
+    pub fn signalling(mut self, entered: std::sync::mpsc::Sender<()>) -> Self {
+        self.entered = Some(entered);
+        self
     }
 
     /// Advances the clock by one provider silence.
@@ -886,7 +886,7 @@ impl ManualTime {
     }
 }
 
-impl ModelTimePort for ManualTime {
+impl ModelTimePort for VirtualTime {
     fn now(&self) -> TimestampDto {
         time(2)
     }
@@ -896,9 +896,12 @@ impl ModelTimePort for ManualTime {
             .lock()
             .expect("the fixture mutex is not poisoned")
             .push(duration);
-        if duration < Duration::from_secs(1) {
+        if !self.held.contains(&duration) {
             self.advance(duration);
             return Box::pin(future::ready(()));
+        }
+        if let Some(entered) = &self.entered {
+            let _ = entered.send(());
         }
         let deadline = self.elapsed() + duration;
         Box::pin(future::poll_fn(move |_| {

@@ -3,17 +3,16 @@ mod common;
 use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
 
 use common::{
-    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort,
-    row_id, time,
+    FIXTURE_ATTEMPT_WINDOW, FIXTURE_RETRY_DELAY, FakeRepository, RecordedTransition,
+    RecordingCommitObserver, ScriptedPort, VirtualTime, row_id,
 };
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort, RunCancellation, SessionCommitDto, ToolExecutionPort,
-    ToolResultOutcomeDto,
+    RunCancellation, SessionCommitDto, ToolExecutionPort, ToolResultOutcomeDto,
 };
-use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, ToolCallId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
@@ -100,70 +99,6 @@ impl ModelExecutionDriver for PendingAfterStartedDriver {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ]))
-    }
-}
-
-/// A time port whose retry-delay sleep signals that the delay was entered and
-/// then stays pending, so the test can cancel the run inside the wait.
-///
-/// The attempt timeout is a seconds-scale duration while the runtime's retry
-/// delay is sub-second, so only the retry delay is held pending.
-struct RetryDelayTime {
-    entered: mpsc::Sender<()>,
-}
-
-impl ModelTimePort for RetryDelayTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        if duration < Duration::from_secs(1) {
-            let entered = self.entered.clone();
-            Box::pin(async move {
-                entered.send(()).expect("the test observes the retry delay");
-                future::pending::<()>().await;
-            })
-        } else {
-            Box::pin(future::ready(()))
-        }
-    }
-}
-
-/// A time port that signals when the provider round's timeout sleep is polled
-/// while the provider stream is pending, proving the round's select is
-/// suspended on that stream, and then stays pending until the run is
-/// cancelled.
-///
-/// The attempt timeout is a seconds-scale duration while the runtime's retry
-/// delay is sub-second, so only the round timeout is held pending. The round
-/// re-arms its idle window after every delivered event, so the port signals on
-/// every arm instead of only the first one.
-struct RoundSelectTime {
-    entered: std::sync::Mutex<mpsc::Sender<()>>,
-}
-
-impl ModelTimePort for RoundSelectTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        if duration >= Duration::from_secs(1) {
-            let entered = self
-                .entered
-                .lock()
-                .expect("time channel is available")
-                .clone();
-            Box::pin(async move {
-                entered
-                    .send(())
-                    .expect("the test observes the round select");
-                future::pending::<()>().await;
-            })
-        } else {
-            Box::pin(future::ready(()))
-        }
     }
 }
 
@@ -282,7 +217,7 @@ fn execute(
     config: ConfigSnapshotDto,
     signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     run_ready(
         ModelRunExecutionService::new(
             repository,
@@ -1246,7 +1181,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let (called_tx, called_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let port = GatedPort::new(called_tx, release_rx);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1394,7 +1329,7 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
         .lock()
         .expect("the fixture mutex is not poisoned")
         .replace((1, signal.clone()));
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1458,7 +1393,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
         ToolResultOutcomeDto::completed("hello world").expect("content is valid")
     )]);
     let observer = RecordingCommitObserver::new();
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &observer, &port).execute(
@@ -1481,7 +1416,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     assert_eq!(
         commits
             .iter()
-            .filter(|commit| matches!(commit, SessionCommitDto::Status { .. }))
+            .filter(|commit| matches!(commit, SessionCommitDto::Status(_)))
             .count(),
         2,
         "the running and completed statuses are observed"
@@ -1496,11 +1431,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     );
     assert_eq!(
         commits.last(),
-        Some(&SessionCommitDto::Status {
-            session_id,
-            run_id,
-            status: RunStatusDto::Completed,
-        })
+        Some(&SessionCommitDto::Status(repository.projection()))
     );
 }
 
@@ -1537,7 +1468,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
             Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
         ],
     ));
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let execution_port = std::sync::Arc::clone(&port);
 
     let execution = std::thread::spawn(move || {
@@ -1613,9 +1544,9 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     };
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
-    let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(select_tx),
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_ATTEMPT_WINDOW])
+        .signalling(select_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1689,9 +1620,9 @@ fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
     };
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
-    let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(select_tx),
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_ATTEMPT_WINDOW])
+        .signalling(select_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1805,7 +1736,7 @@ fn a_stop_during_a_tool_batch_ends_the_run_after_the_results_commit() {
         cancellation: signal.clone(),
     };
 
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let outcome = run_ready(
         ModelRunExecutionService::new(
             &repository,
@@ -1883,9 +1814,9 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let port = ScriptedPort::new(Vec::new());
     let signal = RunCancellation::new();
     let (entered_tx, entered_rx) = mpsc::channel();
-    let clock = RetryDelayTime {
-        entered: entered_tx,
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_RETRY_DELAY])
+        .signalling(entered_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1958,7 +1889,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let port = ScriptedPort::new(Vec::new());
     let signal = RunCancellation::new();
     driver.cancel_during_stream(0, signal.model_signal());
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1989,9 +1920,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     );
     assert!(
         clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
+            .sleeps()
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"

@@ -566,6 +566,7 @@ mod tests {
     use std::cell::RefCell;
     use std::ops::Range;
 
+    use intention_client::SessionStreamState;
     use intention_proto::{
         MessageProjectionDto, RunId, RunStatusDto, SessionFrameDto, SessionId, TextDeltaChannelDto,
         TextDeltaFrameDto, ToolCallId,
@@ -576,7 +577,7 @@ mod tests {
     };
     use revue::render::Modifier;
 
-    use crate::app::{Action, AppState, Theme, ThemePreference};
+    use crate::app::{Action, AppState, Effect, Theme, ThemePreference};
     use crate::tui::layout::{
         LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_blocks, append_messages,
     };
@@ -638,18 +639,24 @@ mod tests {
 
     /// Streams one answer chunk of the fixture stream's first model step.
     fn stream_answer(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
-                .expect("the fixture answer delta is valid"),
-        )));
+        receive(
+            state,
+            SessionFrameDto::TextDelta(
+                TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Answer, text)
+                    .expect("the fixture answer delta is valid"),
+            ),
+        );
     }
 
     /// Streams one reasoning chunk of the fixture stream's first model step.
     fn stream_reasoning(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        state.update(Action::FrameReceived(SessionFrameDto::TextDelta(
-            TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Reasoning, text)
-                .expect("the fixture reasoning delta is valid"),
-        )));
+        receive(
+            state,
+            SessionFrameDto::TextDelta(
+                TextDeltaFrameDto::new(session_id, run_id, 0, TextDeltaChannelDto::Reasoning, text)
+                    .expect("the fixture reasoning delta is valid"),
+            ),
+        );
     }
 
     /// Returns a reasoning fixture longer than the collapsed block shows.
@@ -666,9 +673,10 @@ mod tests {
     /// client's one append path: a subscription reply is a read, and a read is
     /// never an append.
     fn append_row(state: &mut AppState, session_id: SessionId, run_id: RunId, text: &str) {
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            assistant_row(session_id, run_id, text),
-        )));
+        receive(
+            state,
+            SessionFrameDto::Content(assistant_row(session_id, run_id, text)),
+        );
     }
 
     /// Returns every row's text and run styles, for row-for-row comparison.
@@ -692,6 +700,36 @@ mod tests {
     /// Returns one plain fixture row carrying `text`.
     fn plain(text: &str) -> LaidOutRow {
         text_row(text, RowStyleId::Body(Modifier::empty()), LIGHT)
+    }
+
+    /// Applies one frame the way the live subscription does.
+    ///
+    /// The client applies every frame to the one session state it exposes and hands
+    /// the frame, what it changed, and its result to the front end, so a test
+    /// derives a frame through the same entry the production pump uses instead of
+    /// restating the client's rules.
+    fn receive(state: &mut AppState, frame: SessionFrameDto) -> Vec<Effect> {
+        let mut derived = state
+            .session_state()
+            .cloned()
+            .unwrap_or_else(|| SessionStreamState::new(frame_session(&frame)));
+        let update = derived
+            .apply_frame(frame.clone())
+            .expect("the fixture frame belongs to the state's own session");
+        state.update(Action::FrameReceived {
+            frame,
+            update,
+            state: Box::new(derived),
+        })
+    }
+
+    /// Returns the session one frame belongs to.
+    fn frame_session(frame: &SessionFrameDto) -> SessionId {
+        match frame {
+            SessionFrameDto::Content(row) => row.session_id(),
+            SessionFrameDto::Status(run) => run.session_id(),
+            SessionFrameDto::TextDelta(delta) => delta.session_id(),
+        }
     }
 
     #[test]
@@ -947,9 +985,10 @@ mod tests {
         });
         ranges.clear();
 
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            assistant_row(session_id, run_id, "the newest row"),
-        )));
+        receive(
+            &mut state,
+            SessionFrameDto::Content(assistant_row(session_id, run_id, "the newest row")),
+        );
         assert_eq!(
             state.transcript().len(),
             retained,
@@ -1015,9 +1054,16 @@ mod tests {
         });
 
         // The call row appends on its own: the cached prefix stays current.
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            tool_call_row(session_id, run_id, "read", r#"{"path":"src"}"#, call_id),
-        )));
+        receive(
+            &mut state,
+            SessionFrameDto::Content(tool_call_row(
+                session_id,
+                run_id,
+                "read",
+                r#"{"path":"src"}"#,
+                call_id,
+            )),
+        );
         cache.rows(&state, WIDTH, LIGHT, |range, width| {
             committed_blocks(&state, range, width, LIGHT)
         });
@@ -1025,9 +1071,16 @@ mod tests {
 
         // Its result re-pairs the block that call row owns, and that block is
         // inside the cached prefix, so the whole transcript is laid out again.
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            tool_result_row(session_id, run_id, "read", "file contents", call_id),
-        )));
+        receive(
+            &mut state,
+            SessionFrameDto::Content(tool_result_row(
+                session_id,
+                run_id,
+                "read",
+                "file contents",
+                call_id,
+            )),
+        );
         let mut ranges: Vec<Range<usize>> = Vec::new();
         cache.rows(&state, WIDTH, LIGHT, |range, width| {
             ranges.push(range.clone());
@@ -1264,9 +1317,10 @@ mod tests {
 
         // The commit lands the assistant row at exactly the row the live
         // segment was anchored at, carrying the same reasoning.
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            reasoning_row(session_id, run_id, answer, &reasoning),
-        )));
+        receive(
+            &mut state,
+            SessionFrameDto::Content(reasoning_row(session_id, run_id, answer, &reasoning)),
+        );
         assert_eq!(state.transcript().len(), live_row + 1);
         assert_eq!(
             state.provisional_reasoning(),

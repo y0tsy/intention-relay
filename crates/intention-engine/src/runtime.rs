@@ -473,22 +473,16 @@ pub enum ModelRunExecutionOutcomeDto {
 /// Safe evidence that one model-execution commit happened.
 ///
 /// The content variant carries the transcript row the repository committed;
-/// the status variant carries the run status the repository committed. The
-/// observer receives neither a repository transaction nor provider/runtime
-/// resources, so it cannot publish an uncommitted mutation.
+/// the status variant carries the run projection the repository committed, so
+/// a publisher builds its frame from the committed value instead of reading it
+/// again. The observer receives neither a repository transaction nor
+/// provider/runtime resources, so it cannot publish an uncommitted mutation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SessionCommitDto {
     /// One committed transcript row.
     Content(MessageProjectionDto),
-    /// One committed run status.
-    Status {
-        /// The owning session identity.
-        session_id: SessionId,
-        /// The committed run identity.
-        run_id: RunId,
-        /// The committed run status.
-        status: RunStatusDto,
-    },
+    /// One committed run projection.
+    Status(RunProjectionDto),
 }
 
 /// Receives only durable commit evidence after a successful write.
@@ -622,7 +616,7 @@ where
                     RunStatusDto::Running,
                     self.time.now(),
                 )?;
-                self.publish_status(input.session_id, input.run_id, running.status());
+                self.publish_status(running);
             }
             let result = self
                 .drive_attempt(
@@ -1298,7 +1292,7 @@ where
             outcome,
             self.time.now(),
         )?;
-        self.publish_status(input.session_id, input.run_id, run.status());
+        self.publish_status(run);
         Ok(run)
     }
 
@@ -1332,14 +1326,10 @@ where
             .observe_session_commit(&SessionCommitDto::Content(message.clone()));
     }
 
-    /// Publishes one committed run status.
-    fn publish_status(&self, session_id: SessionId, run_id: RunId, status: RunStatusDto) {
+    /// Publishes one committed run projection.
+    fn publish_status(&self, run: RunProjectionDto) {
         self.observer
-            .observe_session_commit(&SessionCommitDto::Status {
-                session_id,
-                run_id,
-                status,
-            });
+            .observe_session_commit(&SessionCommitDto::Status(run));
     }
 }
 

@@ -507,8 +507,10 @@ impl FrontEnd {
     fn apply(&mut self, action: Action) {
         let terminal = matches!(
             &action,
-            Action::FrameReceived(SessionFrameDto::Status(run))
-                if run_status_is_terminal(run.status())
+            Action::FrameReceived {
+                frame: SessionFrameDto::Status(run),
+                ..
+            } if run_status_is_terminal(run.status())
         );
         let effects = self.state.update(action);
         if terminal {

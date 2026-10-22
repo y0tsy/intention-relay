@@ -84,13 +84,17 @@ pub fn fixture_workspace_root(label: &str) -> WorkspaceRootDto {
 }
 
 /// Returns a controlled session-creation command for the fixture session.
+///
+/// `label` names the fixture workspace root the command binds, so two suites
+/// that need distinct roots pass distinct labels and one suite that proves a
+/// single root binding passes one label for every session.
 #[must_use]
-fn fixture_session_command(session_id: SessionId) -> CreateSessionCommandDto {
+pub fn fixture_session_command(session_id: SessionId, label: &str) -> CreateSessionCommandDto {
     CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
-        fixture_workspace_root("m3-test-support"),
+        fixture_workspace_root(label),
         Some(RunModeDto::Build),
         None,
     )
@@ -106,7 +110,7 @@ fn create_fixture_session(
     session_id: SessionId,
 ) -> DtoResult<()> {
     match facade.create_session(
-        fixture_session_command(session_id),
+        fixture_session_command(session_id, "m3-test-support"),
         &SilentCommitObserver::new(),
     )? {
         ProtocolResultDto::SessionCreated(_) => Ok(()),

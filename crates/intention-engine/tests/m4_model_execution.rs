@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use common::{
-    FakeRepository, ImmediateTime, ManualTime, RecordedFinish, RecordedTransition,
-    RecordingCommitObserver,
+    FIXTURE_ATTEMPT_WINDOW, FakeRepository, RecordedFinish, RecordedTransition,
+    RecordingCommitObserver, VirtualTime,
 };
 use futures_util::stream;
 use intention_config::ConfigSnapshotDto;
@@ -106,14 +106,14 @@ type SilentStep = (Duration, Result<ModelEventDto, ProviderErrorDto>);
 struct SilentDriver {
     steps: Vec<SilentStep>,
     stall: Duration,
-    clock: Arc<ManualTime>,
+    clock: Arc<VirtualTime>,
     executions: AtomicUsize,
 }
 
 impl SilentDriver {
     /// Creates a driver replaying one scripted round per provider execution.
     #[must_use]
-    fn new(steps: Vec<SilentStep>, stall: Duration, clock: &Arc<ManualTime>) -> Self {
+    fn new(steps: Vec<SilentStep>, stall: Duration, clock: &Arc<VirtualTime>) -> Self {
         Self {
             steps,
             stall,
@@ -184,7 +184,7 @@ fn execute_silent(
     driver: &SilentDriver,
     request: ModelRequestDto,
     config: ConfigSnapshotDto,
-    clock: &ManualTime,
+    clock: &VirtualTime,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
     run_ready(
         ModelRunExecutionService::new(
@@ -211,7 +211,7 @@ fn execute(
     config: ConfigSnapshotDto,
     signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let tool_executor = NeverInvokedToolExecutor;
     let observer = RecordingCommitObserver::new();
     run_ready(
@@ -237,7 +237,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
         Ok(ModelEventDto::text_delta("complete").expect("text is valid")),
         Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
     ]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let observer = RecordingCommitObserver::new();
 
     let outcome = run_ready(
@@ -274,13 +274,15 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
         3,
         "running status, step row, completed status"
     );
-    assert_eq!(
-        commits[0],
-        SessionCommitDto::Status {
-            session_id,
-            run_id,
-            status: RunStatusDto::Running,
-        }
+    assert!(
+        matches!(
+            &commits[0],
+            SessionCommitDto::Status(run)
+                if run.session_id() == session_id
+                    && run.run_id() == run_id
+                    && run.status() == RunStatusDto::Running
+        ),
+        "the running transition is observed with its committed projection"
     );
     let committed = repository.committed_messages();
     assert_eq!(committed.len(), 1);
@@ -290,14 +292,7 @@ fn observer_receives_only_committed_transcript_rows_and_statuses() {
     assert_eq!(committed[0].kind(), MessageKindDto::Assistant);
     assert_eq!(committed[0].text(), "complete");
     assert!(committed[0].id().value() > 0);
-    assert_eq!(
-        commits[2],
-        SessionCommitDto::Status {
-            session_id,
-            run_id,
-            status: RunStatusDto::Completed,
-        }
-    );
+    assert_eq!(commits[2], SessionCommitDto::Status(committed_run));
     assert_eq!(
         repository
             .messages
@@ -326,7 +321,7 @@ fn observer_receives_no_content_when_a_message_commit_fails() {
         Ok(ModelEventDto::text_delta("lost").expect("text is valid")),
         Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
     ]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let observer = RecordingCommitObserver::new();
 
     let error = run_ready(
@@ -696,7 +691,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let outcome = run_ready(
         ModelRunExecutionService::new(
             &repository,
@@ -721,9 +716,7 @@ fn retry_is_ordered_once_and_waits_exactly_250_milliseconds() {
     assert_eq!(driver.executions(), 2);
     assert_eq!(
         clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
+            .sleeps()
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -927,7 +920,7 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
         )],
     ]);
     driver.cancel_during_stream(1, signal.model_signal());
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -955,9 +948,7 @@ fn retryable_failure_after_a_committed_step_does_not_retry() {
     assert_eq!(driver.executions(), 2);
     assert_eq!(
         clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
+            .sleeps()
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -996,7 +987,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
             ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")
         )],
     ]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1024,9 +1015,7 @@ fn exhausted_retryable_failure_stops_after_second_attempt() {
     assert_eq!(driver.executions(), 2);
     assert_eq!(
         clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
+            .sleeps()
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count(),
@@ -1052,7 +1041,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     // The stream yields nothing at all, so the attempt's idle window expires
     // without a single progress event.
     driver.stay_pending();
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1079,11 +1068,7 @@ fn provider_timeout_retries_then_records_a_terminal_timeout_failure() {
     assert_eq!(error.code(), "provider_attempt_timed_out");
     assert_eq!(driver.executions(), 2);
     assert_eq!(
-        clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .as_slice(),
+        clock.sleeps().as_slice(),
         &[
             Duration::from_secs(30),
             Duration::from_millis(250),
@@ -1116,7 +1101,7 @@ fn continuous_provider_progress_outlives_the_attempt_timeout_and_completes() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let clock = Arc::new(ManualTime::new());
+    let clock = Arc::new(VirtualTime::new().holding([FIXTURE_ATTEMPT_WINDOW]));
     // Every chunk follows a 20-second silence, so the stream runs for 100
     // seconds while never falling silent for the 30-second configured window.
     let driver = SilentDriver::new(
@@ -1198,7 +1183,7 @@ fn a_silent_stall_expires_the_idle_window_armed_after_the_last_event() {
     let run_id = RunId::new();
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
-    let clock = Arc::new(ManualTime::new());
+    let clock = Arc::new(VirtualTime::new().holding([FIXTURE_ATTEMPT_WINDOW]));
     // A usage fact arrives after a 10-second silence and the provider then goes
     // silent for good: the window that expires is the fresh one armed after
     // that last event, not one armed when the attempt started.
@@ -1318,7 +1303,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
         Ok(ModelEventDto::text_delta("partial answer").expect("text is valid")),
         Err(ProviderErrorDto::unavailable("provider_down", true).expect("error is valid")),
     ]]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1350,9 +1335,7 @@ fn retryable_failure_with_uncommitted_text_commits_the_text_and_does_not_retry()
     );
     assert!(
         clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
+            .sleeps()
             .iter()
             .filter(|&&duration| duration == Duration::from_millis(250))
             .count()
@@ -1391,7 +1374,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ],
     ]);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1417,11 +1400,7 @@ fn whitespace_only_text_keeps_the_attempt_budget_open() {
     ));
     assert_eq!(driver.executions(), 2);
     assert_eq!(
-        clock
-            .sleeps
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .as_slice(),
+        clock.sleeps().as_slice(),
         &[
             Duration::from_secs(30),
             Duration::from_secs(30),
@@ -1507,7 +1486,7 @@ fn text_delta_port_observes_both_channels_with_their_model_step_index() {
     // The interrupt lands after both chunks of the first round were delivered,
     // so the run continues with a second model step of its own.
     driver.cancel_during_stream(3, signal.model_signal());
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let observer = RecordingCommitObserver::new();
     let deltas = CapturingTextDeltaPort::new();
 
@@ -1573,7 +1552,7 @@ fn text_delta_port_observes_both_channels_with_their_model_step_index() {
 /// Cross-run comparable durable evidence of one fixture execution.
 type RoundEvidence = (
     Vec<(MessageKindDto, String)>,
-    Vec<SessionCommitDto>,
+    Vec<RunStatusDto>,
     Vec<RunStatusDto>,
 );
 
@@ -1598,7 +1577,7 @@ fn interrupted_round_evidence(
         ],
     ]);
     driver.cancel_during_stream(1, signal.model_signal());
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let observer = RecordingCommitObserver::new();
     let service = ModelRunExecutionService::new(
         &repository,
@@ -1633,7 +1612,17 @@ fn interrupted_round_evidence(
         .iter()
         .map(RecordedFinish::status)
         .collect();
-    (messages, observer.commits(), finishes)
+    // The published statuses are the comparable part of a status commit: the
+    // projection also carries the identities this helper generates per run.
+    let statuses = observer
+        .commits()
+        .into_iter()
+        .filter_map(|commit| match commit {
+            SessionCommitDto::Status(run) => Some(run.status()),
+            SessionCommitDto::Content(_) => None,
+        })
+        .collect();
+    (messages, statuses, finishes)
 }
 
 #[test]

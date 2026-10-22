@@ -19,15 +19,14 @@ use intention_config::{
 use intention_engine::ToolInvocationRequestDto;
 use intention_engine::{ApplicationService, SessionCommitDto, SessionCommitObserver};
 use intention_proto::DaemonHealthDto;
+#[cfg(test)]
+use intention_proto::WorkspaceRootDto;
 use intention_proto::{
     CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
     DtoResult, ErrorDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
     RunCancelledAcceptedDto, RunId, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
-    SendUserTurnOutcomeDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SessionSummariesDto, TimestampDto,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto, TimestampDto,
 };
-#[cfg(test)]
-use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
 use intention_providers::GenericChatDriver;
 use intention_providers::ModelExecutionDriver;
 use intention_providers::OpenRouterDriver;
@@ -68,7 +67,7 @@ pub struct DaemonApplicationFacade {
 struct FacadeInner {
     repository: SqliteStorageRepository,
     config_snapshot: ConfigSnapshotDto,
-    selected_provider: SelectedProvider,
+    selected_provider: ConfiguredProvider,
     command_gate: CommandGate,
 }
 
@@ -117,27 +116,18 @@ impl CommandGate {
     }
 }
 
-/// The provider driver the platform configuration selected at open time.
+/// The one provider driver slot this composition root serves.
+///
+/// A production build holds one of the configured providers; a test or
+/// test-support build additionally holds the driver the caller injected, so no
+/// production shape carries a test-only variant.
 enum ConfiguredProvider {
     OpenRouter(OpenRouterDriver),
     GenericChat(GenericChatDriver),
+    /// The driver a test or test-support caller supplied.
+    #[cfg(any(test, feature = "test-support"))]
+    Injected(Arc<dyn ModelExecutionDriver + Send + Sync>),
 }
-
-/// The one provider driver slot this composition root serves.
-///
-/// A production build holds the configured provider; a test or test-support
-/// build holds the driver the caller injected instead. Only the slot
-/// implementation is conditional, so no production shape carries a test-only
-/// provider variant.
-#[cfg(not(any(test, feature = "test-support")))]
-type SelectedProvider = ConfiguredProvider;
-
-#[cfg(any(test, feature = "test-support"))]
-type SelectedProvider = InjectedProvider;
-
-/// The driver slot of a test or test-support build.
-#[cfg(any(test, feature = "test-support"))]
-struct InjectedProvider(Arc<dyn ModelExecutionDriver + Send + Sync>);
 
 #[cfg(any(test, feature = "test-support"))]
 struct TestSupportUnconfiguredDriver;
@@ -180,29 +170,15 @@ impl ConfiguredProvider {
         match self {
             Self::OpenRouter(driver) => driver,
             Self::GenericChat(driver) => driver,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Injected(driver) => driver.as_ref(),
         }
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl InjectedProvider {
-    /// Resolves the configured provider so a test-support build can still open
-    /// from real platform configuration.
-    fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
-        let configured = ConfiguredProvider::from_startup_material(material)?;
-        let driver: Arc<dyn ModelExecutionDriver + Send + Sync> = match configured {
-            ConfiguredProvider::OpenRouter(driver) => Arc::new(driver),
-            ConfiguredProvider::GenericChat(driver) => Arc::new(driver),
-        };
-        Ok(Self(driver))
-    }
-
+    /// Holds the driver a test or test-support caller supplied.
+    #[cfg(any(test, feature = "test-support"))]
     const fn for_test_support(driver: Arc<dyn ModelExecutionDriver + Send + Sync>) -> Self {
-        Self(driver)
-    }
-
-    fn driver(&self) -> &(dyn ModelExecutionDriver + Send + Sync) {
-        self.0.as_ref()
+        Self::Injected(driver)
     }
 }
 
@@ -256,7 +232,7 @@ impl DaemonApplicationFacade {
         Self::open_with_selected_provider(
             database_location,
             config_snapshot,
-            SelectedProvider::for_test_support(driver),
+            ConfiguredProvider::for_test_support(driver),
         )
     }
 
@@ -276,7 +252,7 @@ impl DaemonApplicationFacade {
     fn open_with_selected_provider(
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
-        selected_provider: SelectedProvider,
+        selected_provider: ConfiguredProvider,
     ) -> DtoResult<Self> {
         let location = SqliteDatabaseLocationDto::new(
             database_location.as_ref().to_string_lossy().into_owned(),
@@ -321,7 +297,8 @@ impl DaemonApplicationFacade {
         // two can never disagree about the model.
         let projection = projection
             .with_provider_model(self.inner.config_snapshot.resolved().provider().model())?;
-        let projection_bytes = session_projection_bytes(&projection)?;
+        let projection_bytes =
+            CountingWriter::encoded_bytes(|writer| serde_json::to_writer(writer, &projection))?;
         let messages = bounded_snapshot_messages(
             projection_bytes,
             self.inner
@@ -505,13 +482,13 @@ const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAccept
     }
 }
 
-fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, ConfiguredProvider)> {
     load_provider_configuration(&ConfigPathResolver::resolve(None)?)
 }
 
 fn load_provider_configuration(
     path: &ConfigPathDto,
-) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
+) -> DtoResult<(ConfigSnapshotDto, ConfiguredProvider)> {
     let raw_toml = fs::read_to_string(path.as_str()).map_err(|_| {
         ErrorDto::unavailable(
             "daemon_configuration_read_unavailable",
@@ -524,15 +501,30 @@ fn load_provider_configuration(
         now()?,
         material.safe_resolved().clone(),
     );
-    let selected_provider = SelectedProvider::from_startup_material(material)?;
+    let selected_provider = ConfiguredProvider::from_startup_material(material)?;
     Ok((snapshot, selected_provider))
 }
 
-/// Counts the bytes one typed message encodes to without buffering them.
+/// Counts the bytes one typed value encodes to without buffering them.
 ///
 /// The snapshot budget needs the encoded length only, so encoding writes into
-/// this counter instead of one intermediate `Vec<u8>` per committed row.
+/// this counter instead of one intermediate `Vec<u8>` per charged value.
 struct CountingWriter(usize);
+
+impl CountingWriter {
+    /// Returns the encoded byte count of one value written by `encode`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed local encode failure when the value cannot be encoded.
+    fn encoded_bytes(
+        encode: impl FnOnce(&mut Self) -> Result<(), serde_json::Error>,
+    ) -> DtoResult<usize> {
+        let mut counter = Self(0);
+        encode(&mut counter).map_err(|_| encode_failure())?;
+        Ok(counter.0)
+    }
+}
 
 impl std::io::Write for CountingWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
@@ -548,14 +540,20 @@ impl std::io::Write for CountingWriter {
 /// Trims one snapshot transcript to the representation budget derived from the
 /// single transport envelope cap, keeping the newest committed rows that fit.
 ///
-/// A transcript snapshot is the only legitimate response large enough to
-/// approach the envelope cap, so the read path owns the byte budget and the
-/// transport owns the cap: no legitimate snapshot can be dropped silently at
-/// the connection level. The whole message is charged, so the encoded
-/// projection that travels beside the transcript is subtracted before the rows
-/// are measured, and the newest row is kept unconditionally: a row that alone
-/// exceeds the budget must reach the transport, which answers with its typed
-/// over-size failure instead of serving an empty transcript.
+/// The bound is the snapshot's liveness guarantee: a transcript snapshot is the
+/// only legitimate response large enough to approach the envelope cap, so the
+/// read path trims it here and the transport keeps the cap. Without the bound a
+/// legitimate bounded-row snapshot could exceed the cap and be rejected at the
+/// connection level, so it stays.
+///
+/// Each row is charged its exact encoded size, because the size decides which
+/// rows survive: a cheaper estimate would either cut rows that fit or let the
+/// snapshot cross the cap. The loop walks newest-first and stops at the first
+/// row that does not fit, so only the served rows and the first rejected one
+/// are ever encoded. The encoded projection that travels beside the transcript
+/// is subtracted first, and the newest row is kept unconditionally: a row that
+/// alone exceeds the budget must reach the transport, which answers with its
+/// typed over-size failure instead of serving an empty transcript.
 ///
 /// # Errors
 ///
@@ -569,7 +567,8 @@ pub fn bounded_snapshot_messages(
     let newest = messages.len().saturating_sub(1);
     let mut keep_from = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
-        let size = encoded_message_bytes(message)?.saturating_add(1);
+        let size = CountingWriter::encoded_bytes(|writer| serde_json::to_writer(writer, message))?
+            .saturating_add(1);
         if size > budget && index != newest {
             break;
         }
@@ -578,28 +577,6 @@ pub fn bounded_snapshot_messages(
     }
     messages.drain(..keep_from);
     Ok(messages)
-}
-
-/// Counts the encoded bytes one session projection adds to its snapshot.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the projection cannot be encoded.
-fn session_projection_bytes(projection: &SessionProjectionDto) -> DtoResult<usize> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, projection).map_err(|_| encode_failure())?;
-    Ok(counter.0)
-}
-
-/// Counts the encoded bytes one transcript row adds to its snapshot.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the row cannot be encoded.
-fn encoded_message_bytes(message: &intention_proto::MessageProjectionDto) -> DtoResult<usize> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, message).map_err(|_| encode_failure())?;
-    Ok(counter.0)
 }
 
 /// The one typed failure of a local protocol value that cannot be encoded.
@@ -682,51 +659,23 @@ mod tests {
         MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
         ToolResultStatusDto,
     };
+    use intention_test_support::{fixture_session_command, fixture_snapshot};
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
             directory.path().join("facade.sqlite"),
-            fixture_config_snapshot(),
+            fixture_snapshot(),
         )
         .expect("durable facade opens");
         (directory, facade)
     }
 
-    fn fixture_workspace_root() -> WorkspaceRootDto {
-        WorkspaceRootDto::parse(
-            std::env::temp_dir()
-                .join("intention-composition-workspace")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("native fixture workspace is absolute")
-    }
-
-    fn fixture_config_snapshot() -> ConfigSnapshotDto {
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n",
-        ))
-        .expect("fixture configuration resolves");
-        ConfigSnapshotDto::new(
-            ConfigRevisionId::new(),
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-            resolved,
-        )
-    }
-
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
         let accepted = facade
             .create_session(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    fixture_workspace_root(),
-                    Some(RunModeDto::Build),
-                    None,
-                ),
+                fixture_session_command(session_id, "composition"),
                 &SilentCommitObserver::new(),
             )
             .expect("fixture session creates");
@@ -808,7 +757,7 @@ mod tests {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
             directory.path().join("idempotent-turn.sqlite"),
-            fixture_config_snapshot(),
+            fixture_snapshot(),
         )
         .expect("durable facade opens");
         let session_id = SessionId::new();

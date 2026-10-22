@@ -347,11 +347,7 @@ fn an_accepted_turn_publishes_its_committed_row_and_run_once() {
         observer.commits(),
         vec![
             SessionCommitDto::Content(message),
-            SessionCommitDto::Status {
-                session_id,
-                run_id,
-                status: RunStatusDto::Starting,
-            },
+            SessionCommitDto::Status(run),
         ],
         "the committed prompt row precedes the run it started"
     );
