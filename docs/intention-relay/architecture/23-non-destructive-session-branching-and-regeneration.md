@@ -9,15 +9,14 @@ audit, and branch presentation. It applies to future ordinary Session branching 
 
 ## Ownership and non-authorities
 
-Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility
-left no live path: their canonical framing was removed under [architecture
-02](02-dto-and-contract-policy.md). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
+Architecture 04 owns current Session/Run persistence and recovery. Run-execution meaning and historical compatibility have
+no live path: neither is a record family ([architecture
+02](02-dto-and-contract-policy.md)). Architectures 15, 18, 19, and 20 own tool, MCP, bridge, and
 kernel semantics. Architecture 21 owns Goal, Skill, and context-source semantics. Architecture 22 owns provider configuration and
 reasoning semantics.
 
-This document owns only ordinary Session lineage and frozen fork transfer semantics. A conversation branch is not an RLM
-parent link, activity aggregate, provider continuation, tool permission, kernel epoch, MCP connection, or
-authority.
+A conversation branch is not an RLM parent link, activity aggregate, provider continuation, tool permission, kernel
+epoch, MCP connection, or authority.
 
 ## Branch identity and user workflow
 
@@ -109,8 +108,8 @@ representation constraint where its owning field table requires it.
 
 The typed fork preview, fork, branch-level, rename, archive, and restore DTOs, plus the ordinary regeneration run start
 carrying the parent `RunId` it regenerates (the concrete field lands with the activating specification), are exposed as
-ordinary typed requests over the single local connection; the former `session_fork_v1` negotiated family and its
-capability gate were removed under [architecture 03](03-daemon-transport-and-adapters.md). Tree reads are bounded
+ordinary typed requests over the single local connection; no negotiated family or capability gate precedes them
+([architecture 03](03-daemon-transport-and-adapters.md)). Tree reads are bounded
 immediate-child projections in stable creation order. They are not tree-wide event streams. A peer that does not
 speak the live wire fails closed with the typed `invalid_local_protocol_response` error before any request is
 served.
@@ -172,9 +171,9 @@ title uses only the stable presentation fallback until renamed. Rename changes o
 
 ### Field tables
 
-Fork snapshot, preview, and command records are typed serde JSON shapes; the former `typed-tlv` framing, type tags,
-length encoding, canonicalization-version byte, and SHA-256 digest construction were removed under [architecture
-02](02-dto-and-contract-policy.md). Under the single-version policy ([architecture
+Fork snapshot, preview, and command records are typed serde JSON shapes; no framing, type-tag, length-prefix,
+canonicalization-version, or digest layer wraps them ([architecture
+02](02-dto-and-contract-policy.md)). Under the single-version policy ([architecture
 00](00-principles-and-scope.md)) each record keeps exactly one live shape.
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`, `4 boundary`,

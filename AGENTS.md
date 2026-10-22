@@ -61,7 +61,7 @@
 ## Test-first and architectural boundaries
 
 - Follow TDD/TTD: establish applicable contract, architecture, and outcome tests before implementation.
-- Every new production crate states its responsibility and its test targets in [the crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md); a crate that carries production logic gets a line floor in the root `Makefile`'s `COVERAGE_FLOORS` ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
+- Every new production crate states its responsibility in [the crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md); a crate that carries production logic gets a line floor in the root `Makefile`'s `COVERAGE_FLOORS` ([coverage policy](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)).
 - Never bypass `WorkspaceRoot`, DTO-first, or adapter-isolation rules. DTO-first and the working-directory rule are denied by Clippy through the root `clippy.toml`; adapter isolation and the composition root are enforced by the dependency manifests, by rustc, and by review.
 - Follow existing data, configuration, and dependency patterns. Do not hard-code values that are genuinely configurable, and do not add configuration unless configurability is a requirement.
 - Check the workspace `Cargo.toml` and existing dependency graph before adding a dependency.
@@ -70,7 +70,7 @@
 ## Quality and documentation consistency
 
 - Use the root Makefile as the quality orchestration interface. Run `make quick` while iterating and `make verify` before handing off implementation work.
-- Changes to Makefile, linting, coverage, feature profiles, or supply-chain policy must update the relevant machine-readable policy and architecture documentation in the same change.
+- Changes to Makefile, linting, coverage, feature profiles, or supply-chain policy must update the relevant machine-readable policy and architecture documentation in the same change. `make doc` (rustdoc with `-D warnings`) and Clippy decide the documentation and source rules a mechanism can decide; markdown links, prose counts, and cross-document consistency are a review responsibility.
 - Documentation, code comments, commit messages, and pull-request descriptions state changes, removals, and statuses as facts: what the repository does, not who decided it. Never cite a decision, directive, approval, or rejection by a person as the reason for a change.
 
 ## Security and language

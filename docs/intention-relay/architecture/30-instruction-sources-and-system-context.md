@@ -22,8 +22,6 @@ instruction commands: instruction configuration is filesystem-level.
 Instruction text is not authority: it cannot create, widen, or remove a tool, provider selection, admission
 decision, child, MCP connection, kernel epoch, or reconciliation outcome, and it
 cannot prove that an external effect did or did not happen.
-The channel applies to newly admitted runs only: a run admitted before the channel existed carries no instruction state,
-and no current state reconstructs it.
 
 ## Instruction sources
 
@@ -76,9 +74,8 @@ or digest exists; the frozen text is the text itself.
 
 `AGENTS.md` at the session's `WorkspaceRoot` is the only file-based instruction source.
 
-- The file is addressed by joining its path onto the session's `WorkspaceRoot`;
-the root is an addressing anchor, not a security boundary, and no symlink or containment check exists
-([architecture 05](05-tools-and-workspace.md)); an unreadable or non-regular file fails closed.
+- The file is addressed by joining its path onto the session's `WorkspaceRoot`, whose semantics are [architecture
+  05](05-tools-and-workspace.md)'s; an unreadable or non-regular file fails closed.
 - The file is read as UTF-8 text; its content is never executed, never
 parsed as configuration, and never treated as a tool definition or policy input.
 - An absent file contributes nothing and is not a failure; a project without
@@ -107,18 +104,17 @@ following request window is mutable under [architecture 08](08-model-protocol-an
 The instruction channel is the only trusted instruction surface of a request, and it accepts content from declared
 sources only. Repository content, tool output, fetched material, Skill bodies, provider output, and
 model output remain untrusted or evidence-only material and can never be promoted into it; they enter a request only
-through the context-selection, Skill-selection, and evidence rules of architecture 21. Instruction text is advisory
-and creates no authority; a provider cannot scan, inject, rewrite, or reorder the frozen text, and no driver may add
-framing or templating of its own. The daemon-owned request marks the end of the leading instruction block
+through the context-selection, Skill-selection, and evidence rules of architecture 21. A provider cannot scan, inject,
+rewrite, or reorder the frozen text, and no driver may add framing or templating of its own. The daemon-owned request
+marks the end of the leading instruction block
 with the ephemeral prompt-cache breakpoint of [architecture 08](08-model-protocol-and-providers.md), which adds no text
 and changes no frozen text.
 
 ## Deterministic assembly
 
 Assembly is deterministic: the same base text, fragment list, project instruction content, mode, and resolved
-configuration must produce the same ordered contributions and the same assembled text on every platform. Identity is
-the text itself; no digest, canonical bytes,
-or content addressing exists until a real consumer needs one ([architecture 02](02-dto-and-contract-policy.md)).
+configuration must produce the same ordered contributions and the same assembled text on every platform. The frozen
+text carries no digest or content address ([architecture 02](02-dto-and-contract-policy.md)).
 
 ## Failure behavior
 
@@ -146,13 +142,12 @@ activity, notification,
 audit, or diagnostics surface displays it.
 Classification and redaction rules of [architecture 09](09-configuration-security-and-observability.md) apply unchanged.
 
-## Compatibility and historical preservation
+## Compatibility and preservation
 
 A run admitted before the channel existed carries no instruction state, and no record gains a reconstructed instruction
 text; a missing or unreadable materialized text leaves the
-dependent fork or handoff blocked while unrelated history remains readable. The mechanism adds no second model protocol,
-no second storage schema, and no migration; it is part of the single live first-scope
-instruction contract.
+dependent fork or handoff blocked while unrelated history remains readable. The mechanism is part of the single live
+first-scope instruction contract.
 
 ## Dependencies and non-goals
 
@@ -163,5 +158,3 @@ notification, or adapter behavior; few-shot example selection, memory-derived pr
 date/time/Git/session-derived context injection, provider-native prompt framing, model-specific templates, prompt
 tuning, telemetry, A/B evaluation, automatic instruction generation, cross-project instruction sharing, executable or
 scripted instructions, and sandbox or privilege claims.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

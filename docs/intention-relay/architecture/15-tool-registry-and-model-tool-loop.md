@@ -4,14 +4,14 @@
 
 Owner: architecture 15.
 
-This document owns the unified tool path, immutable tool selection, tool admission on the ordinary run path,
-`WorkspaceRoot` semantics, the model-tool-model loop, and the tool-effect recovery boundary. It applies to future
-ordinary runs and Build Autopilot. Slice 1.5 (core simplification) has landed: the tool layer is a six-variant `ToolId`
-enum with one `spec(id)` match, model steps and tool groups are addressed by plain indices rather than newtypes,
-publication follows the committed values rather than a separate reread, and each model-visible tool's contract is
-code-owned input JSON Schema text. This design activates no registry table: a new tool is a new `ToolId` variant with
-its own contract. Ordinary runs and Build Autopilot admit compatible tools without
-per-action confirmation; Plan denies ordinary `write`/`edit`, while Plan `execute` is advisory-guided and
+This document owns the unified tool path, immutable tool selection, tool admission on the ordinary run path, the
+model-tool-model loop, and the tool-effect recovery boundary. It applies to future ordinary runs and Build Autopilot.
+The tool layer is a six-variant `ToolId` enum with one `spec(id)` match;
+model steps and tool groups are addressed by plain indices rather than newtypes, publication follows the committed
+values rather than a separate reread, and each model-visible tool's contract is the input JSON Schema derived from its
+typed input DTO. This design activates no registry table: a new tool is a new `ToolId` variant with its own contract.
+Ordinary runs and Build Autopilot admit compatible tools without per-action confirmation; Plan denies ordinary
+`write`/`edit`, while Plan `execute` is advisory-guided and
 non-sandboxed. The typed half of the tool layer is the proto's tool contract
 ([architecture 02](02-dto-and-contract-policy.md)): the closed `ToolId`, the typed input and result families, and the
 typed projection each committed tool row carries. That move is adapter-facing only and activates none of this
@@ -19,15 +19,14 @@ document's registry, admission, bridge, or MCP contracts.
 
 ## Ownership and one capability path
 
-`intention-proto` owns the typed tool contract — the closed `ToolId`, the typed input and result families, and each
-committed row's typed projection. `intention-tools` owns the six live tools' model-facing JSON Schema descriptors and
-their model-visible spec match. The composition root alone assembles the model-visible set; the daemon owns active-run
-binding, durable orchestration, and post-commit publication; the proto owns typed JSON record shapes, not
-implementation selection.
+`intention-proto` owns the typed tool contract — the closed `ToolId`, the typed input and result families, each
+committed row's typed projection, and the input JSON Schema documents derived from the typed input DTOs.
+`intention-tools` owns the six live tools' `ToolSpec` match served through `spec(id)` and `ToolId::input_schema()`; the
+composition root alone assembles the model-visible set; the daemon owns active-run binding, durable orchestration, and
+post-commit publication; the proto owns typed JSON record shapes, not implementation selection.
 
-Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners cannot create a
-second tool collection, private model-function collection, direct primitive path, persistence authority, or publication
-authority. Every invocation reaches the one daemon-owned, Rust-owned capability path.
+Providers, models, adapters, bridge/kernel code, child work, MCP sources, Skills, and primitive owners use the one
+daemon-owned, Rust-owned capability path without bypass or duplication.
 
 ## Tool identity and specs
 
@@ -46,10 +45,10 @@ grep
 ToolSpec
   id
   description
-  input_schema   (code-owned input JSON Schema text)
+  input_schema   (JSON Schema derived from the tool's typed input DTO)
 ```
 
-`intention_tools::spec(id)` is the one place where a tool's description and input schema are defined, and
+`intention_tools::spec(id)` is the one place where a tool's description and input schema are served, and
 `intention_tools::model_visible_descriptors()` returns exactly the six specs in advertisement order. There is no
 registry table, no reserved slot, no descriptor revision, and no duplicate-registration outcome to reject: a name that
 is not one of the six `ToolId` values is `unknown_tool` before any effect.
@@ -60,15 +59,15 @@ replanning decision. Until such a decision lands, the owners that are not shippe
 and `plan_submit` is delivered by `intention-plans` at M5+ Slice 3; none has input/result DTOs or model visibility
 yet, and a request for any of those names is the same pre-effect `unknown_tool` rejection.
 
-A spec carries credential-free fields only: the `ToolId`, its description, and its code-owned input JSON Schema.
+A spec carries credential-free fields only: the `ToolId`, its description, and its derived input JSON Schema.
 Identity is the enum variant, never a presentation string. Public boundaries reject raw JSON/maps, unvalidated paths,
 provider/Python values, implementation handles, resources, and implementation errors.
 
-`WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and `expand` (default relative-path
-base and initial `execute` CWD, not an access boundary; absolute and `..` paths are accepted with no path-based
-denial). `fetch_url`, `ask_user`, `todo`, `retrieve`, `plan_submit`, `sub_agent`, and `mcp` get no fictional workspace
-path; their owners may require typed URL, question, todo, retained-content, plan, child-agent, or MCP-method references
-instead. No tool requires confirmation. Plan denies ordinary `write`/`edit`; plan mutation remains plan-policy work.
+`WorkspaceRoot` is required for `read`, `write`, `edit`, `execute`, `glob`, `grep`, and `expand` as each call's
+addressing anchor ([architecture 05](05-tools-and-workspace.md)). `fetch_url`, `ask_user`, `todo`, `retrieve`,
+`plan_submit`, `sub_agent`, and `mcp` get no fictional workspace path; their owners may require typed URL, question,
+todo, retained-content, plan, child-agent, or MCP-method references instead. No tool requires confirmation. Plan denies
+ordinary `write`/`edit`; plan mutation remains plan-policy work.
 
 Selection records are typed serde JSON values ([architecture 02](02-dto-and-contract-policy.md)); no competing codec
 replaces that typed record form. Semantic changes require a new record
@@ -128,7 +127,7 @@ selected it contains:
 
 It excludes unexposed tools, credentials, untyped JSON payloads, provider-native schema forms, executor handles,
 readiness, current advertisement state, provider-native IDs, quotas, and mutable policy state. The model-visible tools'
-code-owned input JSON Schema text stays the contract the model sees and is read through `spec(id)` when the request is
+derived input JSON Schema documents stay the contract the model sees and are read through `spec(id)` when the request is
 built, never copied into the selection. Ordering is the advertisement order of the list: semantic, preserved by the
 typed record, with no positions or cursors, and duplicate `ToolId` values are rejected. Admission, retry, recovery,
 forks, audit, or a later package must not rebuild a missing selection from the current spec match, configuration,
@@ -150,8 +149,8 @@ ceiling are not permitted.
 ## Tool admission and WorkspaceRoot
 
 Tool admission is legal only when the run's frozen selection includes the exact `ToolId`, the typed input is valid, the
-immutable model-capability and mode relations are satisfied, the workspace context is valid, idempotency and intrinsic
-bounds pass, and the required live implementation/runtime resources are available.
+immutable model-capability and mode relations are satisfied, the workspace context is valid, the intrinsic bounds pass,
+and the required live implementation/runtime resources are available.
 
 The only admission outcomes are `Admitted`, typed `Incompatible`, or typed `Unavailable`. `Incompatible` covers
 invalid input, selection or capability mismatch, an unknown tool id, mode mismatch, malformed
@@ -161,30 +160,20 @@ tool is not gated by a risk selector, parent, Goal, Skill, provider, MCP, prompt
 product ceiling. Normalization, observation, redaction, mode enforcement, and lifecycle preparation stay application
 responsibilities and cannot recreate a discretionary authorization layer.
 
-The workspace rule is the same for every run:
-
-| Item | `WorkspaceRoot` meaning |
-| --- | --- |
-| Relative paths | Default base: `workspace_root.join(path)`. |
-| `execute` | Initial CWD; the child process starts in the root unless the call declares a `cwd`. |
-| glob/grep | Default scope root when no path is supplied. |
-| Containment | None. The anchor does not contain: no symlink parser, containment check, or path-based denial remains, and a path inside the root may resolve outside it through a symbolic link. The typed input still rejects absolute and parent (`..`) paths — `WorkspaceRelativePathDto` for tool paths and the search-pattern validator for `glob`/`grep` patterns — as an input-shape rule, not a boundary; `WorkspaceRoot` is not a security boundary ([architecture 05](05-tools-and-workspace.md)). |
-
-For path-bearing calls, typed safe observation may record path form, base reference, effective path/CWD subject to
-redaction, and observation completeness: audit evidence, not authorization, neither tracking descendants nor forming a
-boundary. Non-path tools receive no fictional workspace path; plan artifacts stay outside `WorkspaceRoot` under their
-own typed plan authorization.
+A path-bearing call carries the session's `WorkspaceRoot` as its addressing anchor; [architecture
+05](05-tools-and-workspace.md) owns the addressing semantics. For path-bearing calls, typed safe observation may record
+path form, base reference, effective path/CWD subject to redaction, and observation completeness: audit evidence, not
+authorization, neither tracking descendants nor forming a boundary. Non-path tools receive no fictional workspace path;
+plan artifacts stay outside `WorkspaceRoot` under their own typed plan authorization.
 
 Build admits otherwise compatible selected tools; Plan keeps ordinary project `write`/`edit` incompatible while
 physical-plan mutation stays a plan-owner operation. `execute` is admissible when otherwise compatible but is not a
 sandbox; `ask_user` is asynchronous `user_interaction` tooling, and the run remains `Running` without waiting for its
 answer.
 
-The project script library (`.ir/scripts`, [architecture 20](20-ipython-kernel-lifecycle.md))
-follows these same tool-admission semantics: its logical relative path is a default base for existing frozen tools
-and never an access boundary, `write`/`edit` create or change a module while `execute` or a kernel foreground cell runs
-it, and no new `ToolId`, tool variant, listener, or primitive path is admitted. Per-cell script-import evidence for
-imported library modules publishes as committed tool-result evidence under architecture 20's cell rules.
+The project script library (`.ir/scripts`) follows these same tool-admission semantics and admits no new `ToolId`, tool
+variant, listener, or primitive path; [architecture 20](20-ipython-kernel-lifecycle.md) owns its path and its file
+rules.
 
 ## Model-to-tool-to-model lifecycle
 
@@ -251,7 +240,7 @@ The first-scope bounds are:
 -  a tool renders its output within its own output window and reports a cut through the result's truncation flag and explicit marker before the result commits; there is no output-refusal outcome, and committed output is never truncated or partly committed.
 
 The durable result row stores exactly `ToolResultStatusDto`: `Completed`, `Failed`, or `Partial`. The specific cause is
-a bounded metadata code on the same result row, never a second status dimension; the closed first set is
+a bounded metadata code on the same result row; the closed first set is
 `tool_cancelled`, `tool_timed_out`, `tool_execution_interrupted`, `denied_before_execution`, and
 `execution_unavailable`. A successful call, including the asynchronous `sub_agent` acceptance that returns the child
 session handle as its content, records `Completed`; a known denial or an unavailable implementation records `Failed`
@@ -329,8 +318,8 @@ or the run is completing or cancelling.
 The deadline has exactly one owner. [Architecture 08](08-model-protocol-and-providers.md) arms the provider attempt's
 idle window when the stream opens and re-arms it on every normalized event, expires it as the retryable
 `provider_attempt_timed_out` failure, and owns the attempt count: at most two attempts, with one retry permitted only
-before any durable text, reasoning, usage, or tool fact. This document selects no deadline value, adds no second failure
-code, and adds no retry of its own ([architecture 09](09-configuration-security-and-observability.md) carries the window
+before any durable text, reasoning, usage, or tool fact. This document adds no failure
+code and no retry of its own ([architecture 09](09-configuration-security-and-observability.md) carries the window
 in the limits registry). That window bounds silence, not content, so a later activating specification may add a
 content-only refinement; it must state the deadline it selects and keep the pause rule above.
 

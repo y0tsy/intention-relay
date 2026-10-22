@@ -15,12 +15,8 @@ selection, direct tool admission, `ToolCallId`, generic tool-loop records, the c
 18 owns MCP connection records, discovery, method lists, invocation, and recovery; 19 owns the kernel child's
 typed-client ingress, delivery, and ingress recovery.
 
-This document owns only private session kernel process creation/disposal, run-scoped kernel epochs and namespaces,
-foreground cells, namespace/checkpoint lifecycle, safe output normalization, kernel-local background restrictions,
-kernel readiness/capacity, and kernel-specific attempt evidence. A kernel is not a daemon, registry, tool, provider,
-persistence authority, child executor, MCP client, sandbox, or OS privilege boundary. Namespace, checkpoint, Python
-value, output, kernel epoch, task, process, or resource never grants lifecycle, tool, child, MCP, or reconciliation
-authority.
+Namespace, checkpoint, Python value, output, kernel epoch, task, process, or resource never grants lifecycle, tool,
+child, MCP, or reconciliation authority.
 
 ## Immutable selection and run scope
 
@@ -126,11 +122,10 @@ The library is file material, not kernel state: it is never a namespace, checkpo
 resource, and no selection, cell, or checkpoint carries its source.
 
 An epoch's import surface is exactly that library directory; the parent, the workspace root as a second library, and
-any other path never enter it. The directory is addressed as
-`WorkspaceRoot.join('.ir/scripts')`; `WorkspaceRoot` is an addressing anchor and not a security boundary
-([architecture 05](05-tools-and-workspace.md)), so
-no lexical symlink or containment check gates the surface. A missing library directory yields an empty import surface,
-so a project without saved modules behaves as if the capability were absent. A cell's imports need no separate record:
+any other path never enter it. The directory is addressed as `WorkspaceRoot.join('.ir/scripts')` ([architecture
+05](05-tools-and-workspace.md)), so no lexical symlink or containment check gates the surface. A missing library
+directory yields an empty import surface, so a project without saved modules behaves as if the capability were absent.
+A cell's imports need no separate record:
 an import that fails is the cell's error, surfaced through the cell's output and terminal result. A fresh run reuses a
 module by reading the file inside its own epoch; namespace, cell, task, and checkpoint state are never carried over to
 provide reuse, and the trusted-local
@@ -276,15 +271,13 @@ kernel_state_restore_unavailable
 They disclose no credential, path, Python value, Jupyter frame, raw traceback, process resource, or
 implementation detail.
 
-## Dependencies, non-goals, and evidence
+## Dependencies and non-goals
 
 This document depends on architectures 15, 18, and 19 and owns the constant project script library path. It does not
 define Python/Jupyter dependencies, process supervision, storage/wire
 tags, migrations, retention, encryption, resource-limit values, RLM executor topology, Skills/Goals/context, provider
 evolution, session forks, activity-journal and UI delivery, direct MCP administration, Cargo, Makefile/CI, or production
 activation.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 Architecture 21 owns Goal, Skill, context, and compaction; kernel steps consume only immutable safe context
 projections, and context cannot create a kernel process, epoch, or namespace, disclose private namespace/checkpoint

@@ -72,9 +72,9 @@ the local single-pass alias, while CI invokes the per-job aliases (`ci-lint-arch
 
 ## Minimum test portfolio by crate
 
-Every production crate states its responsibility and its test targets in [01 Workspace and Crate Map](01-workspace-and-crate-map.md), and
+Every production crate states its responsibility in [01 Workspace and Crate Map](01-workspace-and-crate-map.md), and
 the root `Makefile`'s `COVERAGE_FLOORS` declares the per-crate line floors ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
-Every production crate's test targets must exist before implementation and prove the contracts, invariants, failure
+Every production crate's tests prove the contracts, invariants, failure
 modes, and outcomes its owner architecture document states. The smallest portfolio that proves every stated invariant, contract, failure mode, and
 outcome is required; no aggregate coverage number replaces it, and boundary crates prove behavior over fixture daemons
 and current-schema state rather than private implementation steps.
@@ -208,7 +208,6 @@ for the mandatory hermetic gates ([Quality Gates and Makefile](12-quality-gates-
 Evidence obligations for systems that are not activated are owned by their documents; this document keeps only the
 pointers:
 
-- Slice 1.5 core simplification — [Implementation Roadmap](11-implementation-roadmap.md).
 - Tool registry and model-tool loop — [architecture 15](15-tool-registry-and-model-tool-loop.md).
 - MCP connection records and direct invocation — [architecture 18](18-mcp-capability-lifecycle.md).
 - Gateway/RLM bridge — [architecture 19](19-gateway-rlm-bridge.md).

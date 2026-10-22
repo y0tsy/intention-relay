@@ -1,45 +1,38 @@
 # Intention Relay
 
-Intention Relay is a local-first, single-user coding-agent system being built
-as a Rust workspace. A standalone daemon process owns the application runtime
-and all durable state; the terminal application (fullscreen TUI, interactive
-REPL, and headless prompt command) is a delivered adapter over one typed local
-protocol and one shared Rust client, and desktop (Tauri) presentation remains a
+Intention Relay is a local-first, single-user coding-agent system built as a
+Rust workspace. A standalone daemon process owns the application runtime and
+all durable state; the terminal application (fullscreen TUI, interactive REPL,
+and headless prompt command) is a delivered adapter over one typed local
+protocol and one shared Rust client, and desktop (Tauri) presentation is a
 planned adapter over the same client.
-The project is under active development: the daemon-side backend is
-implemented through the closed M0-M5 milestones, the M5+ retrospective stack
-(the no-backward-compatibility removal program, request-side tool
-advertisement, the opt-in live-provider channel, and the same-run reasoning
-round trip) is merged, and the post-M5 foundation (Milestone 5+) is in progress
-with its seven slices defined and three activated. No released product exists
-yet.
 
-Everything here is development-machine software: there are no deployed users,
-no externally persisted data, and no third-party consumers. Backward
-compatibility is neither required nor in demand (see `AGENTS.md`).
+The project is under active development: the daemon-side backend is implemented
+through the closed M0-M5 milestones, the post-M5 foundation is in progress with
+slices 1, 1.5, and 2 merged and slices 3-6 defined, and no released product
+exists yet. Everything here is development-machine software: there are no
+deployed users, no externally persisted data, and no third-party consumers, so
+backward compatibility is neither required nor in demand (see `AGENTS.md`).
 
 ## What it does
 
 - **Daemon-owned sessions and runs.** A user project maps to durable sessions;
   an accepted user turn can start one agent-execution run with a tracked
   lifecycle (`Starting`, `Running`, `Completed`, `Failed`, `Interrupted`). A
-  reconnecting client re-reads current state: there are no cursors, replays,
-  event-log snapshots, model facts, or event envelopes.
+  reconnecting client re-reads current state.
 - **One typed protocol, one shared client.** All adapters reach the daemon
   through `intention-client` over a private, per-user local transport (Unix
-  domain sockets on Unix, named pipes on Windows). DTOs are the only things
-  that cross crate, process, and persistence boundaries.
+  domain sockets on Unix, named pipes on Windows).
 - **Model-driven runs with workspace tools.** Provider-neutral model drivers
-  (OpenRouter and generic OpenAI-compatible Chat Completions) stream into a
-  run loop that can call typed, `WorkspaceRoot`-bounded tools (`read`,
-  `write`, `edit`, `execute`, `glob`, `grep`) with one deterministic typed
-  tool sequence and durable, redacted tool-result evidence.
+  (OpenRouter and generic Chat-Completions-compatible endpoints) stream into a
+  run loop that can call typed workspace tools (`read`, `write`, `edit`,
+  `execute`, `glob`, `grep`) in one deterministic typed tool sequence, with
+  durable, redacted tool-result evidence. Workspace addressing and tool policy
+  are owned by [architecture 05](docs/intention-relay/architecture/05-tools-and-workspace.md).
 - **SQLite-first durable state.** One composition crate selects the SQLite
-  adapter; the durable store is seven current-state tables (`projects`,
-  `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-  `configuration_revisions`) in a single-version schema,
-  `messages` rows are the transcript, and every state change commits in one
-  SQLite transaction before publication, with recovery-before-readiness on
+  adapter; the durable store is seven current-state tables in a single-version
+  schema, `messages` rows are the transcript, and every state change commits in
+  one SQLite transaction before publication, with recovery-before-readiness on
   daemon start.
 - **Security posture.** Single-user, endpoint and state kept under the current
   user's platform directories; fail-closed path, symlink, and configuration
@@ -47,105 +40,40 @@ compatibility is neither required nor in demand (see `AGENTS.md`).
   public DTOs, errors, durable records, or logs. These are logical product
   controls in a trusted-local process, not an OS sandbox.
 
-## Implementation status
+## Repository layout
 
-Milestones M0 through M5 are closed; the table below summarizes the scope
-of each.
-
-| Milestone | Status | Scope |
-| --- | --- | --- |
-| M0 Quality foundation | Closed | Reproducible Makefile-orchestrated quality pipeline (format, lint, nextest, rustdoc, coverage, supply-chain gates) with pinned tools. |
-| M1 Contracts, configuration, workspace skeleton | Closed | Tier-A crate boundaries (`intention-proto`, `intention-config`; M1's `intention-domain` was later folded into `intention-proto`), DTO-first policy, TOML config with redacted projections, compile-only skeletons for every later crate. |
-| M1+ Quality policy hardening | Closed | Policy files carry the pinned toolchain and tools (`quality/tools.toml`, read by `quality/check_tools.py`), the supply-chain policy (`deny.toml`), the two compiler-enforced source rules (`clippy.toml`), and notice generation (`quality/about.toml`). Crate and external dependency edges are enforced by the manifests and rustc, not by a policy file. |
-| M2 Local protocol, client, daemon bootstrap | Closed | Private local IPC, correlated request/response codec, shared bootstrap client with startup lock and readiness polling, in-memory fixture composition, minimal TUI proof adapter (the hello/version handshake was later replaced by one typed wire). |
-| M3 SQLite sessions, transcript, queue | Closed | Durable SQLite-backed sessions, runs, turns, and transcript rows; turn queueing; canonical credential-free config revisions; recovery-before-ready. |
-| M4 Model contract, providers, one streaming run | Closed | Provider-neutral model contracts and validated stream facts; private OpenRouter and generic Chat Completions drivers; durable model evidence in the transcript; one daemon-owned streaming run with reconnect to current state and live session delivery. |
-| M5 Typed tools and workspace | Closed | Production model-tool loop hosted by the real daemon binary: six executable tools, fail-closed `WorkspaceRoot` resolution, one deterministic typed tool sequence, durable and redacted tool-result evidence, daemon-host end-to-end tests on Linux and Windows. |
-| M5+ Post-M5 foundation | **In progress** | Accepted activation home for the post-M5 stack (defined in the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md); the agent-operation slice is owned by [architectures 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md), 07, and 15) delivered as seven slices: 1) contracts and versions, 1.5) core simplification, 2) terminal UX (TUI, REPL, and headless CLI in one `intention-tui` binary), 3) agent operation (the instruction channel, Plan/Build modes, plans, Build Autopilot, and the `sub_agent` tool), 4) provider configuration and session selection, 5) Goal domain, 6) UI foundation. Slice 1 (canonical execution-meaning codec and digest fixtures, negotiated capability families and contract-family DTOs, single live storage schema; the canonical codec and contract-family machinery was later removed by the typed-serde JSON contract policy) is merged into `main`. Slice 1.5 is activated and its current-state core is merged into `main`: it froze a current-state core where the nine production crates stay, DTOs remain only at the IPC wire, SQLite, and provider-SDK boundaries, tool inputs and outputs are schema-validated JSON, identity reduces to nine newtypes including the durable transcript row `MessageId`, the event log, snapshots, cursors, and resync gave way to the seven current-state tables written in one SQLite transaction per state change with publication from the committed values, the typed hook plane was removed, hello/version negotiation gave way to one typed wire, and `intention-client` is fully asynchronous. Slice 2 is closed and merged into `main` as `0fd8ad5` (PR #67): `intention-tui` is the terminal application — one binary with a revue-based fullscreen UI, an interactive REPL, and a headless prompt command, all contract-equivalent over the shared client, with session listing, the answer and reasoning channels of transient text deltas, and a closed typed exit-status set; the fullscreen UI shows a welcome surface (the product lockup and a version/`AGENTS.md`/`MCPs`/`Skills` overview) until a session is asked for and opens no session at launch, draws one window (the chat panel with markdown answers, a multi-line input block, and the registry-driven command hint band above it, and the sessions panel docked to the window's bottom rows over one light/dark palette system, with a `/theme` command, its argument band, and the theme picker panel), caches the committed transcript layout, streams the live tail through the same block functions as the committed rows, and layers `Ctrl+C` and `Esc` into consecutive-press arms for stopping, history-pushing, and quitting: `Esc` stops a live run in one press and `Ctrl+C` arms the same stop. Slices 3-6 are defined and not implemented. |
-| M6-M8, M10-M11 | Planned | M6 Tauri bridge and primary desktop UI; M7 VFR and Headroom; M8 hardening and acceptance verification; M10 tool selection, admission, and the Gateway/RLM bridge; M11 capabilities and context (MCP, kernel, and Skills/context). See the [implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md). |
-
-Everything beyond M5 outside the activated M5+ slices is roadmap direction
-recorded in [architecture](docs/intention-relay/architecture/README.md), not
-delivered behavior. No roadmap document implements or silently supersedes the
-closed M0-M5 behavior.
-
-## Crate map
-
-All workspace crates live under [crates/](crates/) unless noted. Coverage is
-enforced by `COVERAGE_FLOORS` in the root [Makefile](Makefile) under
-[architecture 12](docs/intention-relay/architecture/12-quality-gates-and-makefile.md): per-crate line
-floors of 75%, 60%, and 20%, with `intention-proto` and `intention-test-support`
-outside measurement.
-
-### DTO foundations
-
-| Crate | Responsibility |
-| --- | --- |
-| [intention-proto](crates/intention-proto) | Shared, dependency-light DTOs plus the typed public local-protocol surface: validated identifiers, schema versions, safe errors, time, pagination, model/tool value DTOs, run lifecycle and projection values, the one typed request/result/reply wire over NDJSON, and the typed command/query/frame payloads (protocol owned by [architecture 03](docs/intention-relay/architecture/03-daemon-transport-and-adapters.md) and [architecture 02](docs/intention-relay/architecture/02-dto-and-contract-policy.md)). |
-| [intention-config](crates/intention-config) | Versioned TOML parsing, validation, path selection, and credential-free public configuration projections. |
-
-### Durable storage and application core
-
-| Crate | Responsibility |
-| --- | --- |
-| [intention-storage](crates/intention-storage) | DTO-only repository contract plus the bundled SQLite implementation behind it (single current schema, created directly on open); the SQLite backend is selected only by the composition crate. |
-| [intention-engine](crates/intention-engine) | Commands, queries, and semantic use-case workflows plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. |
-
-### Model drivers
-
-| Crate | Responsibility |
-| --- | --- |
-| [intention-providers](crates/intention-providers) | Provider-neutral model contracts (messages, tool calls/results, validated stream facts) plus the OpenRouter and generic Chat Completions translation adapters; `openrouter-rs` and `async-openai` stay private implementation details. |
-
-### Tools and workspace
-
-| Crate | Responsibility |
-| --- | --- |
-| [intention-tools](crates/intention-tools) | Tool contracts with JSON Schema descriptors, the static six-tool spec match, and the `WorkspaceRoot` addressing anchor (owned by [architecture 05](docs/intention-relay/architecture/05-tools-and-workspace.md)). |
-
-### Transport, client, and daemon (active)
-
-| Crate | Responsibility |
-| --- | --- |
-| [intention-transport](crates/intention-transport) | Private per-user IPC: Unix sockets / Windows named pipes, NDJSON framing of one typed message per line (1 MiB message cap), and the single live wire version carried in the endpoint name. |
-| [intention-client](crates/intention-client) | Shared bootstrap, dispatch, subscription, and reconnect client for adapters, with advisory startup lock and daemon launch. |
-| [intention-daemon](crates/intention-daemon) | Composition root (`DaemonApplicationFacade`, the only selector of SQLite and concrete drivers), daemon host library, and the thin `intention-daemon` binary. |
-
-### Adapter slots and reserved crates
-
-| Crate | Status | Responsibility |
-| --- | --- | --- |
-| [intention-tui](crates/intention-tui) | Active adapter (terminal application) | The terminal application over the shared client: a revue-based fullscreen UI, an interactive REPL, and a headless prompt command in one binary. |
-| `intention-tauri` | Planned (M6) | Reserved Tauri bridge/UI adapter slot; the crate is created at M6. |
-| `intention-plans` | Planned (Slice 3) | Reserved Plan/Build artifact crate; created at M5+ Slice 3. VFR and Headroom arrive at M7 as modules of `intention-tools`, not as separate crates. |
-| [intention-test-support](crates/intention-test-support) | Non-production | Durable integration fixtures and contract scenarios used by tests. |
-
-Architecture rules worth knowing: only `intention-daemon`
-touches SQLite or selects concrete providers; presentation adapters may only
-use `intention-client`, `intention-proto`, and `intention-transport`
-boundaries; provider SDKs and Tokio/transport resources stay private to their
-owner crates.
+The workspace is nine production crates plus the `intention-tui` terminal
+adapter and the non-production `intention-test-support` fixture crate:
+`intention-proto` (identity, shared value types, and the typed protocol),
+`intention-config`, `intention-storage` (repository contract plus the bundled
+SQLite implementation), `intention-engine` (commands, queries, run execution,
+recovery), `intention-providers` (provider-neutral model contract plus the
+OpenRouter and generic Chat Completions adapters), `intention-tools` (tool
+descriptors, dispatch, and workspace addressing), `intention-transport`
+(per-user local IPC), `intention-client` (bootstrap, dispatch, subscriptions,
+reconnect), and `intention-daemon` (the one composition root and the daemon
+binary). Each crate's responsibility, permitted dependency edges, and test
+targets are stated in the
+[crate map](docs/intention-relay/architecture/01-workspace-and-crate-map.md);
+only `intention-daemon` selects concrete implementations, and only the IPC
+wire, SQLite rows, and provider SDK calls carry DTOs.
 
 ## Running the daemon and the terminal client
 
-The workspace has two binaries. `intention-daemon` serves the real, durable
-daemon over a private per-user endpoint, and `intention-tui` is the terminal
-application over the shared `intention-client`. The daemon is also driven
-directly through `intention-client` in the daemon integration tests (for
-example
-[crates/intention-daemon/tests/client_e2e.rs](crates/intention-daemon/tests/client_e2e.rs),
-which spawns the real binary, drives it over real IPC, and executes a real
-`read` tool through the production model-tool loop).
+The workspace has two binaries. `intention-daemon` serves the durable daemon
+over a private per-user endpoint, and `intention-tui` is the terminal
+application over the shared `intention-client`, launching the daemon itself
+when none is running.
 
-Prerequisites for a manual run: a configured provider (see below) and a Rust
-toolchain (see [Prerequisites](#prerequisites)).
+Prerequisites for a manual run: a configured provider (see
+[Configuration](#configuration)) and a Rust toolchain (see
+[Prerequisites](#prerequisites)).
 
 ```text
 # Place a valid config file first (see Configuration), then:
 cargo run -p intention-daemon                 # default endpoint instance
 cargo run -p intention-daemon -- my-instance  # named logical endpoint
 
-# The terminal client launches the daemon itself when none is running:
 cargo run -p intention-tui                                # fullscreen TUI (requires a terminal)
 cargo run -p intention-tui -- repl                        # interactive line REPL
 cargo run -p intention-tui -- run "summarize this repo"   # one headless prompt
@@ -153,64 +81,24 @@ cargo run -p intention-tui -- run "..." --format json --timeout 60
 ```
 
 The daemon resolves its configuration and state from platform-standard
-locations, recovers unfinished runs to `Interrupted` before serving, and
-prints only safe error codes on startup failure (exit status non-zero). The
-endpoint argument is a logical safe instance name; endpoint filesystem paths
-never appear in protocol DTOs or errors. The terminal client resolves both
-surfaces through the declared `intention-client` values: it addresses the
-endpoint instance the `INTENTION_ENDPOINT` identifier names, falling back to
-the platform-default endpoint when the variable is absent, and launches the
-`intention-daemon` program installed beside its own executable, so the binary
-reads no environment and infers no path.
+locations, recovers unfinished runs to `Interrupted` before serving, and prints
+only safe error codes on startup failure (exit status non-zero). The endpoint
+argument is a logical safe instance name; endpoint filesystem paths never appear
+in protocol DTOs or errors. The terminal client addresses the endpoint instance
+the `INTENTION_ENDPOINT` identifier names, falling back to the platform-default
+endpoint when the variable is absent, and launches the `intention-daemon`
+program installed beside its own executable.
 
-The terminal client shares one command grammar across its three modes
-(`tui`, `repl`, `run <PROMPT>`, with `--workspace`, `--session`, `--continue`,
-`--mode`, `--timeout`, `--format`, and the fullscreen UI's `--theme
-auto|light|dark`), talks to the daemon only through
-`intention-client`, renders the step's answer and reasoning as separate
-transient delta channels until the committed row replaces them, and ends with a
-closed typed status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed
-rejection or failed run, 4 timeout with no observed terminal status, 5
-interrupted run. A run ends for good through the daemon's `run.cancel`, never by
-killing a front end:
-`Esc` stops a live run in one press and `Ctrl+C` arms the same stop, the line
-front ends turn SIGINT into that same request — the REPL stops the run and
-returns to its prompt, and `run <PROMPT>` reports the interrupted outcome — and
-a run counts as live only while a live subscription observes it, so a daemon
-that died never traps the exit keys. Live updates follow the session, not one
-run: opening a session opens one session stream that carries every committed row
-of that session, the active run's projection, and the active run's transient
-text, so two terminal windows on the same session both show a turn sent in
-either one and either window can stop the run they both observe; a lost stream
-asks for exactly one reconnect. The
-interactive modes open no session at launch: the fullscreen UI starts on its
-welcome surface, and a session appears only for an explicit
-`--session`/`--continue`, `/new`, a browser row, or the first prompt, which
-creates the session it needs. The fullscreen UI carries the whole command
-surface in one registry — `/new`, `/sessions`, and `/theme` are the registered
-commands — and a leading-slash word opens a hint band above the input block that
-filters, ranks, and completes them, with `Tab` committing the highlighted row,
-`Enter` completing an abbreviated word the same way and running a line whose word
-already spells its command or value, and `Esc` closing the band before it means
-anything else. The
-registry also declares each command's arguments: `/theme` takes an optional
-`auto`, `light`, or `dark` value, and while the caret is in that argument word
-the band lists those values in the same three columns, completing one with a
-trailing space. A theme is the terminal's warm off-white light palette or its
-neutral graphite dark palette whose only hue is the accent pair, resolved once
-per frame so a theme change replays the
-transcript exactly as a resize does. The terminal owns its own theme and the
-daemon never learns it: the launch resolves the preference from the `--theme`
-flag, else from the local `tui.toml`, else to `auto`, and `auto` paints what the
-environment detection answers — `COLORFGBG` when the terminal exports it, else
-the terminal's own answer to a background query, else the dark palette, which is
-the default of a terminal that reports nothing. `/theme` with a value selects
-that preference and rewrites `tui.toml` — a stored `auto` clears a spelled-out
-palette — while `/theme` with no value opens a picker panel in the chat panel's
-band region — so the input block keeps its rows — with one row per preference
-(`Auto`, `Light`, `Dark`), where `Up`/`Down` preview the whole window live
-without persisting anything, `Enter` commits the selection and writes the file,
-and `Esc` reverts the preview.
+All three modes share one command grammar (`tui`, `repl`, `run <PROMPT>`, with
+`--workspace`, `--session`, `--continue`, `--mode`, `--timeout`, `--format`,
+and the fullscreen UI's `--theme auto|light|dark`) and end with a closed typed
+status set: 0 completed, 1 usage, 2 daemon or transport, 3 typed rejection or
+failed run, 4 timeout with no observed terminal status, 5 interrupted run. A run
+stops through the daemon's `run.cancel`: `Esc` stops a live run in one press and
+`Ctrl+C` arms the same stop. The fullscreen UI, its command surface, and its
+locally stored theme are documented in
+[crates/intention-tui/README.md](crates/intention-tui/README.md) and
+[architecture 03](docs/intention-relay/architecture/03-daemon-transport-and-adapters.md).
 
 ## Configuration
 
@@ -239,24 +127,14 @@ Notes:
   `generic-chat-completion-api`; anything else is rejected with a typed safe
   error. `endpoint` is optional for `openrouter` (the driver uses the
   OpenRouter API default).
-- The terminal theme is not configuration this file carries: `intention-tui`
-  resolves it locally and writes it to its own `tui.toml` beside `config.toml`,
-  where `theme = "auto"` (the default), `"light"`, or `"dark"` stores the
-  preference, so a selection records no configuration revision and never
-  rewrites this credential-bearing file.
-- By explicit product decision the credential is open text in this private
-  file. Keep the file readable only by your user (e.g. mode `0600` on Unix);
-  never commit it. The configuration crate keeps raw text opaque: after
-  parsing, credentials are not serialized, displayed, or included in errors,
-  DTOs, durable records, diagnostics, or protocol frames. Public
-  projections expose only `credential_configured`.
-- Configuration is read at daemon startup. The accepted M5+ Slice 4 direction
-  adds named provider entries with a global default and an optional
-  per-session selection, provider/model discovery, and a typed
-  configuration-editing surface that applies at the next daemon start; that
-  slice is not implemented. Nothing else changes configuration after startup.
-- Malformed TOML or a future schema version fails typed validation, and the
-  configuration file content is deliberately omitted from error output.
+- The credential is open text in this private file. Keep the file readable only
+  by your user (e.g. mode `0600` on Unix); never commit it. The configuration
+  crate keeps raw text opaque: after parsing, credentials are not serialized,
+  displayed, or included in errors, DTOs, durable records, diagnostics, or
+  protocol frames. Public projections expose only `credential_configured`.
+- Configuration is read at daemon startup, and nothing changes it after
+  startup. Malformed TOML or a future schema version fails typed validation,
+  and the configuration file content is omitted from error output.
 
 ## Prerequisites
 
@@ -279,8 +157,9 @@ Notes:
 
 ## Build, test, and quality commands
 
-Use the root [Makefile](Makefile) for all quality work. Start with `make
-quick` while iterating and run `make verify` before acceptance.
+Use the root [Makefile](Makefile) for all quality work. Start with `make quick`
+while iterating and run `make verify` before acceptance; the full gate contract
+is [architecture 12](docs/intention-relay/architecture/12-quality-gates-and-makefile.md).
 
 | Command | Purpose |
 | --- | --- |
@@ -289,15 +168,16 @@ quick` while iterating and run `make verify` before acceptance.
 | `make check` | Complete non-mutating source gate: format, lint, tests, doctests/rustdoc. |
 | `make lint-windows` | Lint the Windows target from Linux; needs the pinned `x86_64-pc-windows-gnu` target and a MinGW toolchain. |
 | `make coverage` | One instrumented workspace run; enforces each measured crate's line floor from `COVERAGE_FLOORS` in the [Makefile](Makefile). |
-| `make verify` | Full acceptance gate: `check` plus coverage and dependency gates; removes only generated LLVM coverage artifacts. |
-| `make deps` | Supply-chain gates: lockfile anchor, deny, machete, notices check. |
-| `make notices` / `make notices-check` | Regenerate / verify [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) against the locked graph. |
+| `make verify` | Full acceptance gate: `check` plus the coverage and dependency gates. |
+| `make deps` | Supply-chain gates: lockfile anchor, license and advisory policy, manifest hygiene. |
 | `make ci` | Local alias for the full gate; GitHub Actions runs the per-job aliases (`ci-lint-arch`, `ci-test`, `ci-coverage-default`, `ci-deps`) in parallel. |
 
-`make verify` requires pinned tools, the committed lockfile, and performs no
-hidden dependency or tool installation. See
-[Quality gates and Makefile](docs/intention-relay/architecture/12-quality-gates-and-makefile.md)
-for the detailed contract.
+`make verify` requires pinned tools and the committed lockfile, and performs no
+hidden dependency or tool installation. Machine-readable policy lives in
+[quality/tools.toml](quality/tools.toml) (pinned toolchain and tools, validated
+by `quality/check_tools.py`), [deny.toml](deny.toml) (licenses and advisories),
+and [clippy.toml](clippy.toml) (the two compiler-enforced source rules). Crate
+and external dependency edges are enforced by the crate manifests and rustc.
 
 ## CI
 
@@ -316,8 +196,7 @@ and pull requests to `main`:
   lint, and uploaded quality reports.
 
 The live-provider end-to-end run is a local target, `make e2e-real-api`, and
-never part of the blocking gate. Dependabot is
-enabled for dependency updates
+never part of the blocking gate. Dependabot is enabled for dependency updates
 ([dependabot.yml](.github/dependabot.yml)).
 
 ## Documentation
@@ -326,81 +205,47 @@ enabled for dependency updates
   repository.
 - [docs/README.md](docs/README.md): documentation index.
 - [docs/intention-relay/README.md](docs/intention-relay/README.md):
-    authoritative product reference material and the target architecture.
+  authoritative product reference material and the target architecture.
 - [docs/intention-relay/architecture/README.md](docs/intention-relay/architecture/README.md):
-  target architecture with reading paths (principles, crate map, DTO policy,
-  quality gates, TTD, roadmap, and the instruction channel).
+  target architecture with reading paths.
 - [Implementation roadmap](docs/intention-relay/architecture/11-implementation-roadmap.md):
-  the remaining milestone plan (M6-M8 and M10-M11) and the M5+ slice order.
-
-- [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md): generated license notices
-  for registry dependencies.
+  the milestone plan and the M5+ slice order.
 
 ## Roadmap limitations
 
-What `main` does not yet provide (all of it is documented roadmap work):
+What `main` does not yet provide (all of it is roadmap work):
 
-- No desktop (Tauri/M6) UI yet: the `intention-tauri` bridge is created at M6,
-  while the terminal application (`intention-tui`, the one TUI/REPL/headless
-  binary) is delivered.
+- No desktop (Tauri/M6) UI: the `intention-tauri` bridge is created at M6.
 - No VFR or Headroom behavior (M7).
-- No M5+ work on the Goal domain or session
-  branching (slices 5-6); no agent-operation behavior
-  (slice 3: the instruction channel, Plan/Build modes, plans,
-  Build Autopilot, and the `sub_agent` tool), owned by
-  [architectures 30](docs/intention-relay/architecture/30-instruction-sources-and-system-context.md), 07, and 15.
-- No project script library for kernel cells (`.ir/scripts`), which Milestone 11
-  delivers as agent-authored modules persisted through the frozen tool
-  descriptors ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
-- Slice 1.5 core simplification is activated: the event log, snapshots,
-  cursors, and resync are replaced by the seven current-state tables written in
-  one SQLite transaction per state change, and the nine-production-crate
-  consolidation and the composition-facade removal are merged on `main`.
-- Slice 2 terminal UX is closed and merged into `main` as `0fd8ad5` (PR
-  #67): one `intention-tui` binary carries the
-  fullscreen revue TUI, the interactive REPL, and the headless prompt command
-  over one shared client, with session listing, the answer and reasoning
-  channels of transient text deltas, and a closed typed exit-status set. The
-  fullscreen UI shows a welcome surface (the product lockup and a
-  version/`AGENTS.md`/`MCPs`/`Skills` overview) while no session is open, opens
-  no session at launch, draws one window — the chat panel with markdown answers,
-  a multi-line input block, and the registry-driven command hint band above it,
-  and the sessions panel docked to the window's bottom rows — over one light/dark
-  palette system, with `/theme` (`auto`, `light`, or `dark`, or no argument for
-  the previewing picker panel) and the locally resolved, locally stored
-  preference,
-  caches the committed transcript layout,
-  streams the live tail through the same block functions as the committed rows,
-  and layers `Ctrl+C` and `Esc` into stop, history-pushing, and quitting arms (a
-  single `Esc` stops a live run, and a run counts as live only while a live
-  subscription observes it).
-- Out of scope for v1: Web/remote transport, multi-user access, sandboxed
+- No agent-operation behavior (slice 3), Goal domain or session branching
+  (slices 5-6).
+- No project script library for kernel cells (`.ir/scripts`), which Milestone
+  11 delivers ([architecture 20](docs/intention-relay/architecture/20-ipython-kernel-lifecycle.md)).
+- Out of scope for v1: web/remote transport, multi-user access, sandboxed
   execution, and automatic run resumption.
 
-The v1 boundary and non-goals are stated precisely in
+The v1 boundary and non-goals are stated in
 [architecture 00](docs/intention-relay/architecture/00-principles-and-scope.md).
 
 ## Development and contribution
 
-- Read [AGENTS.md](AGENTS.md) before contributing. The authoritative product,
-  architecture, and roadmap context lives under
+- Read [AGENTS.md](AGENTS.md) first. The authoritative product, architecture,
+  and roadmap context lives under
   [docs/intention-relay/](docs/intention-relay/README.md).
 - Follow test-driven delivery: every milestone starts from failing contract,
   architecture, and outcome tests ([TTD policy](docs/intention-relay/architecture/10-test-driven-delivery-and-verification.md)).
 - Use the quality gates: `make quick` while iterating, `make verify` before
   handoff; CI must stay green on pull requests to `main`.
-- Keep machine-readable policies ([quality/](quality)) and architecture
-  documentation in sync with code changes: a new production crate states its
-  responsibility and test targets in the crate map and gets a line floor in the
-  Makefile's `COVERAGE_FLOORS` before production code is accepted.
-- Single live version, no backward compatibility: when an execution path
-  becomes outdated, remove it; do not add compatibility layers, fallback
-  branches, or migration fixtures for older schema/protocol/format versions.
+- A new production crate states its responsibility in the crate map and gets a
+  line floor in the Makefile's `COVERAGE_FLOORS` before production code is
+  accepted.
+- Keep one live version of every versioned system: when an execution path
+  becomes outdated, remove it rather than adding compatibility layers, fallback
+  branches, or migration fixtures.
 - Use only pinned dependencies and tools; keep the lockfile committed; never
   run hidden installs inside the gates.
 - Never commit or expose secrets (API keys, tokens, passwords) in code,
   configuration, logs, or examples. Use placeholders only.
 - All code, comments, docs, and commits are in English. Use Conventional
   Commit messages (`type(scope): description`) and keep changes surgical.
-- The workspace is Apache-2.0 licensed; registry dependency licenses are
-  tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- The workspace is Apache-2.0 licensed.

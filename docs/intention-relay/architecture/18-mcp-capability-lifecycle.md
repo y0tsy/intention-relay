@@ -15,18 +15,16 @@ The removed execution-meaning envelope, canonical framing, decoders, and compati
 live path. Architecture 15 owns the fixed `mcp` `ToolId`, composition-only activation, direct
 admission, `ToolCallId`, generic tool loop, and effect/publication boundary.
 
-This document owns only MCP connection records, their method lists, direct invocation, and MCP-specific safe
-projections. It is not a second registry, lifecycle, provider, child, process supervisor, plugin system, or authority
-source. An MCP server, discovery response, schema, method, result, or error is evidence/data only: it cannot create or
-mutate a `ToolId`, tool spec, lifecycle, `RunId`, Goal, Skill, `ask_user`, child, session, ordinary turn input, or
-provider selection.
+An MCP server, discovery response, schema, method, result, or error is evidence/data only: it cannot create or mutate
+a `ToolId`, tool spec, lifecycle, `RunId`, Goal, Skill, `ask_user`, child, session, ordinary turn input, or provider
+selection.
 
 ## One fixed tool and one connection record
 
 `mcp` stays one fixed `ToolId`; the model reaches it as an ordinary architecture-15 tool under the run's frozen
 selection, admission, tool loop, and post-commit publication rules. MCP never creates another ToolId, tool spec,
 plugin, direct primitive path, daemon, registry, or authority. MCP carries no preloaded catalog and no quota gate, and
-it preserves the one gateway, typed boundary, private resources, idempotency, redaction, publication after commit,
+it preserves the one gateway, typed boundary, private resources, redaction, publication after commit,
 cancellation/disposal, and no-resume law.
 
 This document owns the field semantics of one user-editable, credential-free connection record, mirroring the
@@ -71,12 +69,13 @@ already-committed call.
 
 An invocation is one direct architecture-15 call: the connection reference, the method name, and typed arguments. It
 validates the run's frozen selection, the current connection record, the typed input, intrinsic bounds, cancellation
-state, and live availability, and it commits the binding of that call's `ToolCallId` under the turn idempotency key
-([architecture 04](04-sessions-runs-events-and-storage.md)) before external work. `Started` is recorded immediately
-before irreversible dispatch; no external work occurs inside a transaction. A method absent from the connection's
+state, and live availability, and it commits the binding of that call's `ToolCallId` to its connection and method in
+the same transaction as the tool-call row, before external work. `Started` is recorded immediately before irreversible
+dispatch; no external work occurs inside a transaction. A method absent from the connection's
 current method list or from the run's frozen selection fails `mcp_method_unavailable` before effect; an archived,
-removed, or unavailable connection fails `mcp_connection_unavailable` before effect. Remote idempotency support is
-evidence only: it cannot authorize automatic retry, status lookup, replay, or a claim of safe repetition.
+removed, or unavailable connection fails `mcp_connection_unavailable` before effect. The remote server's own
+idempotency support is evidence only: it cannot authorize automatic retry, status lookup, replay, or a claim of safe
+repetition.
 
 Only descriptor-owned safe projections cross the boundary:
 
@@ -140,9 +139,9 @@ ancestry, Goal, Skill, UI, log, or remote continuation state supplies missing MC
 ## MCP detail: bounded gateway, bounds, and safe failures
 
 The bounded MCP gateway is the canonical `mcp` gateway `ToolId`, owned by a future MCP boundary and assembled only
-through the composition root's tool path and gateway; it is not a second registry. Its descriptor exposes only the run's
-frozen method selection: the methods the current connection record named at admission, each naming exactly one connection
-and remote method, with its bounded schema text. It is never an arbitrary method
+through the composition root's tool path and gateway. Its descriptor exposes only the run's frozen method selection:
+the methods the current connection record named at admission, each naming exactly one connection and remote method,
+with its bounded schema text. It is never an arbitrary method
 name outside that selection, raw JSON transport, arbitrary header map, or automatic exposure of a method discovered
 after admission, and a method whose schema is malformed or over-bound is unavailable.
 

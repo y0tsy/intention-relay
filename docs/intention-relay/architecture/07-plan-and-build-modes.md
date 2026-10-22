@@ -199,5 +199,3 @@ Depends on [Tools and Workspace](05-tools-and-workspace.md), [Sessions, Runs, Ev
 Storage](04-sessions-runs-events-and-storage.md), and [architecture 30](30-instruction-sources-and-system-context.md).
 Non-goals: an in-memory-only plan, any frontmatter or embedded metadata in the plan file, Plan project writes through
 normal write/edit tools, and any claim that prompt instructions turn `execute` into a technical sandbox.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

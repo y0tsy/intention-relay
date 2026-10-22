@@ -14,25 +14,25 @@ Architecture 09 owns TOML parsing, schema validation, configuration discovery, r
 Architecture 22 owns future provider entries, selection resolution, and reasoning. Architecture 15
 owns the tool loop, and architecture 03 owns the flat activity journal, the notification list, and adapter behavior.
 
-This document owns only the accepted future directions below: no second runtime, registry, persistence authority, or
-sandbox, and no `RunId`, lifecycle transition, tool permission, child, kernel epoch,
-context projection, branch, or reconciliation result from a discovery result or a configuration edit. All directions
-apply to future fresh runs only, and configuration activation remains daemon-startup-only.
+This document owns the accepted future directions below: provider/model discovery and typed configuration editing.
+Discovery results and configuration edits grant no `RunId`, lifecycle transition, tool permission, child, kernel epoch,
+context projection, branch, or reconciliation result, and every direction applies to future fresh runs only.
 
-## Removed directions
+## Scope
 
-Controlled configuration live reload, in-process credential rotation, provider health checks, pricing and budget policy,
-and raw-TOML configuration editing are removed from the accepted directions:
+The accepted directions are provider/model discovery and typed configuration editing. Controlled configuration live
+reload, in-process credential rotation, provider health checks, pricing and budget policy, and raw-TOML configuration
+editing are outside them:
 
-- no command, contract, transaction, DTO, facade, or test obligation survives for any of them, and none of them may be
-reintroduced by an activating specification;
-- configuration activation stays daemon-startup-only: the typed editing direction below produces a document that the
-next daemon start applies, and a running daemon has no second activation path;
+- no command, contract, transaction, DTO, facade, or test obligation exists for any of them, and an activating
+  specification does not reintroduce them;
+- configuration activation is daemon-startup-only: the typed editing direction below produces a document that the next
+  daemon start applies, and a running daemon adopts no edit;
 - credential material reaches the daemon only through the startup loading boundary of [architecture
-09](09-configuration-security-and-observability.md): there is no rotation command and no in-process replacement of
-private material;
-- there is no health-check service, no pricing or budget surface, and no raw-TOML editing surface; typed configuration
-editing replaces the last of them.
+  09](09-configuration-security-and-observability.md), so no rotation command and no in-process replacement of
+  private material exists;
+- no health-check service, no pricing or budget surface, and no raw-TOML editing surface exists; typed configuration
+  editing replaces the last of them.
 
 ## Provider and model discovery
 
@@ -51,14 +51,14 @@ A validated typed configuration-editing surface is an accepted direction awaitin
 a raw-TOML editing surface does not exist, and every configuration edit is expressed through the typed surface;
 - editing is accepted server-side only: the daemon validates the candidate
 against the current single configuration shape, credentials are never echoed through any edit response or projection, and
-a validated edit that fails closed leaves the daemon on its recorded configuration revision;
+a validated edit that fails closed leaves the daemon on its committed configuration;
 - typed configuration edits reconstruct a credential-free candidate document
 server-side and restore the composition's retained private credential into it inside the private loading boundary, so
 the candidate validates and commits without the credential ever crossing a wire, DTO, error, log, or durable surface;
 - the committed document applies at the next daemon start: a running daemon never adopts an edit, a restart is required,
 and the user may restart the daemon at any time; the precise restart experience remains the open decision of
 [architecture 09](09-configuration-security-and-observability.md);
-- edits affect fresh runs only: they never mutate a persisted run or a recorded configuration revision, and they never
+- edits affect fresh runs only: they never mutate a persisted run or its frozen configuration, and they never
 expose credentials, private endpoint material, SDK objects, or raw provider payloads on durable/public surfaces.
 
 ## Presentation and protocol surface
@@ -80,7 +80,4 @@ watcher or transport, keychain or secret store, standalone discovery topology, p
 picker/editor implementation, instruction-fragment editing or preview (instruction configuration is filesystem-level,
 [architecture 30](30-instruction-sources-and-system-context.md)), OS notifications, remote transport, multi-user access,
 sandbox/container isolation, and production activation beyond the accepted directions. The daemon-facade serving
-surface for discovery and typed configuration editing does not exist in the tree; the removed directions have no
-serving surface either and are not a deferred dependency of any milestone.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+surface for discovery and typed configuration editing does not exist in the tree.

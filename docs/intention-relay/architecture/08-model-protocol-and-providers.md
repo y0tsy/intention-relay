@@ -157,18 +157,18 @@ execution path carries no capability check. A truncation limitation of that pinn
 
 Resolved TOML configuration selects a provider entry and model; the named entry list, the global default, and the
 optional per-session selection are owned by [architectures 22](22-provider-evolution-profiles-and-reasoning.md) and
-[29](29-provider-session-and-profiles-protocol.md). The credential-free `ConfigSnapshotDto` carries a `ConfigRevisionId`,
-a capture timestamp, and the redacted resolved selection. The daemon owns applying configuration at startup and the
-recorded-revision workflow, and a run receives the immutable snapshot selected at startup.
+[29](29-provider-session-and-profiles-protocol.md). The credential-free `ConfigSnapshotDto` carries a capture
+timestamp and the redacted resolved selection. The daemon owns applying configuration at startup, and a turn that starts
+a run freezes that startup snapshot on the run row (`config_snapshot_json`), where its content is the run's whole
+configuration record; a run that never started holds no frozen snapshot.
 
 Provider/model selection changes do not mutate an already-started run. They apply to a later run, except if a future
 explicit, tested runtime transition is introduced.
 
 A terminal theme is not provider selection. The theme is the terminal client's own presentation state, resolved from
 the front end's flag, else the local file's saved preference, else environment detection (the `COLORFGBG` variable,
-then a bounded terminal background query, then the dark default): it records no
-configuration revision, carries no wire operation, and never mutates an already-started run's immutable snapshot or its
-validated selection.
+then a bounded terminal background query, then the dark default): it records no configuration, carries no wire
+operation, and never mutates an already-started run's frozen snapshot or its validated selection.
 
 ## Streaming and tool calls
 
@@ -183,9 +183,9 @@ Ordinary production requests advertise the active registered tools: the request 
 (`read`, `write`, `edit`, `execute`, `glob`, `grep`). Provider selection already requires a driver that declares
 streamed text with tool calls, so a driver without tool-call support fails closed there with
 `unsupported_model_capability`. Both current adapters translate the definitions into their private SDK request and omit
-`tool_choice`; an empty advertisement preserves the previous request shape. The definitions and their code-owned input
-JSON Schema text are valid by construction, so no definition-validation failure mode exists. Advertisement is transient
-request state: it creates no durable record, digest, or
+`tool_choice`; an empty advertisement preserves the previous request shape. The definitions and their derived input
+JSON Schema documents are valid by construction, so no definition-validation failure mode exists. Advertisement is
+transient request state: it creates no durable record, digest, or
 storage row, and it never reconstructs a stored selection from the current spec match.
 
 The same-run continuation is the only place provider reasoning returns to a request today: the runtime attaches the

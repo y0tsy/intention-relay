@@ -27,7 +27,7 @@ Every tool has:
 ToolSpec
   id
   description
-  input_schema   (code-owned JSON Schema text)
+  input_schema   (JSON Schema rendered from the typed input)
 
 ToolId
   read | write | edit | execute | glob | grep
@@ -39,10 +39,11 @@ ToolDispatchOutcome
   completed(ToolResult) | interrupted(cause, partial)
 ```
 
-Every model-visible tool declares `input_schema`: the code-owned JSON Schema text for its typed model parameters.
-`intention_tools::model_visible_descriptors()` returns exactly those six tool specs in advertisement order, and
-`intention_tools::spec(id)` is the single place where a tool's description and input schema are defined. Ordinary
-model requests advertise that set as typed tool definitions
+A model-visible tool's arguments are defined once, by the typed input DTO that decodes them, and `input_schema` renders
+the JSON Schema document of that one definition, so the document the model sees and the decode that admits the call
+cannot disagree. `intention_tools::model_visible_descriptors()` returns exactly those six tool specs in advertisement
+order, and `intention_tools::spec(id)` is the single place where a tool's description is defined. Ordinary model
+requests advertise that set as typed tool definitions
 ([architecture 08](08-model-protocol-and-providers.md)).
 
 The concrete Rust API can use traits and generic DTOs, but no tool entry point accepts untyped tool inputs or results.
@@ -56,12 +57,13 @@ local path/process.
 
 - `resolve_path(relative) = workspace_root.join(relative)`: exactly one
 resolution rule, no per-path canonicalization, and no per-tool alias;
-- exactly one `WorkspaceRoot` exists per session; there is no second root and no per-tool root;
+- exactly one `WorkspaceRoot` exists per session, and every tool resolves against it;
 - tools must not use process `pwd` as a fallback;
-- absolute paths and `..` are not contained; they are addressed as given, and
-this is deliberate;
+- absolute and parent (`..`) paths never reach a tool: the typed path shape
+(`WorkspaceRelativePathDto`) rejects them, which is an input-shape rule and not a boundary;
 - symbolic links are ordinary filesystem material: no lexical symlink parser,
-no containment check, and no fail-closed path rejection exists;
+no containment check, and no fail-closed path rejection exists, so a relative path that names a symbolic link may
+resolve outside the root;
 - `glob` and `grep` with no explicit path search from `workspace_root`; the
 default scope decides what a pathless call addresses, not what the process may read;
 - `execute` starts with `cwd = workspace_root` unless the call declares a `cwd`, and inherits the invoking process
@@ -133,8 +135,7 @@ returns its captured output as a partial result when stopped.
 `intention-tools` exposes exactly one current execution surface: the cancellation-aware dispatch
 `ToolService::dispatch_with_cancellation(input, cancellation)` returns a typed `ToolDispatchOutcome`
 (`completed(ToolResult)` or `interrupted(cause, partial)`), and the application renders each completed result into the
-bounded, redacted text its durable rows carry. There are no compatibility wrappers without cancellation and no second
-invocation or result-boundary entry. Every executed program is classified by the proto's typed `ToolProcessStatus`
+bounded, redacted text its durable rows carry. Every executed program is classified by the proto's typed `ToolProcessStatus`
 (`success`, `non_zero` with its numeric code, or `signal` with its recorded signal), which rides the execute result on
 the committed row. The execute result's text rendering is derived from that same typed status, so the text and the
 typed classification can never disagree and no arbitrary sentinel exit code is invented for signal termination.
@@ -189,12 +190,12 @@ Autopilot. Plan's advisory instruction is not a technical boundary.
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
 | Relative resolution | Tool contract test with changed process CWD. | A relative path resolves from the declared root, never from process CWD. |
-| Addressing anchor | Workspace contract test. | A pathless `glob`/`grep` searches from the root; absolute and parent paths are addressed as given, not contained. |
+| Addressing anchor | Tool coverage test. | A pathless `glob`/`grep` searches from the root, so the default scope decides what a pathless call addresses. |
 | Execute CWD | Process fixture test. | Child process observes the workspace root, or the call's declared `cwd`, as its CWD. |
 | Shell semantics | Tool contract test. | Pipelines, redirects, and compound commands run through the platform shell. |
 | Recoverable call failure | Engine lifecycle and daemon end-to-end tests. | An undecodable, denied, or failed call commits one terminal `Failed` result with bounded guidance and the next model step proceeds. |
 | Pre-effect rejection | Application integration test. | An unknown tool id is rejected before any external effect and still leaves the durable call row and one guided `Failed` result. |
-| Adapter independence | Daemon tool-stream contract test from the TUI client. | The adapter sees the same committed tool results the daemon owns; the desktop bridge joins this row when M6 creates it. |
+| Adapter independence | Daemon tool-stream contract test from the TUI client. | The adapter sees the same committed tool results the daemon owns. |
 
 ## Quality-gate integration
 
@@ -215,27 +216,5 @@ trusted-local.
 Build Autopilot intentionally removes per-action confirmation for the configured Build surface. No phase can add
 discretionary confirmation or risk authorization between the identity check and the tool dispatch. The tool contracts, the
 model-visible set, and the loop details are owned by
-[Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md). This does not create a second tool path or
-bypass path. Plan `execute` remains available under advisory focus guidance and is not a sandbox;
+[Tool registry and model-tool loop](15-tool-registry-and-model-tool-loop.md). Plan `execute` remains available under advisory focus guidance and is not a sandbox;
 ordinary Plan `write` and `edit` remain denied.
-
-## Slice 1.5 tool contract
-
-Slice 1.5 makes JSON Schema text the tool contract, the proto's typed tool contract names the six tools and shapes
-their inputs and results, and the merged `intention-tools` crate owns the six tools' descriptors and the workspace
-anchor that enforce it.
-
-- Schema text, not DTO type names. Each model-visible tool declares its argument schema in `input_schema` as code-owned
-  JSON Schema text, and that text is the contract the model sees.
-- Runtime validation before any effect. `ToolInput::from_arguments_json` matches the model-visible tool name and decodes
-  the raw argument object into the typed payload before the call row commits and before any external effect, with
-  `unknown_tool` for any other name and `invalid_tool_input_json` for malformed arguments; the committed call row then
-  carries that typed projection. A rejection follows the
-  same recoverable failure path as any other failed call: one durable guided `Failed` result answers the call and the
-  run continues. Results are built only through the typed payload constructors, so a
-  shape mismatch never reaches the durable result.
-- JSON only here. Tool inputs and outputs are JSON objects. Invocations, results, durable tool evidence, and every other
-  contract above stay typed DTOs, and `serde_json::Value` stays prohibited in production code.
-- One direct sequence. The application decodes the identity and the arguments once, commits the call row with its typed
-  projection, binds the workspace root, dispatches once, commits the terminal row with its typing, and publishes it,
-  with no phase dispatch between those steps.

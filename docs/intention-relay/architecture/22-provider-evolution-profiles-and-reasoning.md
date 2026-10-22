@@ -17,17 +17,15 @@ kinds. Provider/model discovery and typed configuration editing are owned by [ar
 
 ## Ownership and non-authorities
 
-Run-execution meaning and historical compatibility left no live path: the binary codec with canonical records,
-digests, and decode classes was removed under [architecture 02](02-dto-and-contract-policy.md); 15 owns the
+No run-execution meaning or historical-compatibility layer exists: architecture 02 owns the typed serde JSON records,
+and the binary codec with canonical records, digests, and decode classes has no live path; 15 owns the
 registry, tool loop, model-step identities, and local tool exchange; 18 owns MCP; 19 owns bridge ingress; 20 owns kernel
 lifecycle; 21 owns source selection and immutable model-step context; 08 owns the request contract, the driver
 translation, and the same-run reasoning echo.
 
-This document owns only provider entries, selection resolution, private adapter translation, and provider-local
-availability. A provider entry, model ID, endpoint, reasoning value, adapter, output, or availability observation
-cannot create a `RunId`, lifecycle transition, tool selection, MCP connection, kernel
-epoch, context projection, branch, or reconciliation result; it is not a second runtime, tool registry,
-context builder, persistence authority, or sandbox.
+A provider entry, model ID, endpoint, reasoning value, adapter, output, or availability observation cannot create a
+`RunId`, lifecycle transition, tool selection, MCP connection, kernel epoch, context projection, branch, or
+reconciliation result.
 
 ## Provider entries and the configuration shape
 
@@ -102,9 +100,8 @@ secret-bearing URL input is never public or durable identity.
 Provider adapters own their closed request dialect and native stream normalization; they do not source context.
 Architecture 21 alone selects source references and the model-step context window, so an adapter cannot scan
 sessions/ancestors/siblings, construct history from current state, inject prior reasoning, or compact content. A
-provider contract that requires the session's own earlier steps back verbatim (DeepSeek: with `tools` in the request,
-every previous turn's `reasoning_content`, or HTTP 400) is the open `@todo(provider)` of [architecture
-08](08-model-protocol-and-providers.md); it sources nothing and widens nothing.
+provider contract that requires the session's own earlier steps back verbatim is the open `@todo(provider)` of
+[architecture 08](08-model-protocol-and-providers.md); it sources nothing and widens nothing.
 
 The normalized stream carries text, reasoning, tool calls, usage, and terminal events. Reasoning output normalizes as
 `ModelEventDto::ReasoningDelta { content }`, the generic adapter consumes the pinned SDK's typed `reasoning_content`
@@ -128,15 +125,12 @@ Provider selection is explicit configuration. The only configuration kind string
 carries only state it recorded, a generic model ID stays generic, and no legacy selection bridge or synthetic binding
 exists.
 
-## Dependencies, non-goals, and evidence
+## Dependencies and non-goals
 
 This document depends on architectures 15 and 21. It does not define a Responses SDK or adapter, credential
 entry/keychain, telemetry, multimodal or structured output, plugin adapters, or remote continuation. Discovery and
 typed configuration editing belong to the not-activated Slice 4
-([architecture 25](25-configuration-provider-control-plane.md)); controlled live reload, credential rotation,
-health checks, pricing, and raw-TOML editing were removed from it.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+([architecture 25](25-configuration-provider-control-plane.md)) with restart-only application.
 
 Architecture 03 owns the activity journal and notification list; provider and reasoning records may be safely projected
 only through their existing owners and never expose raw native data, select a provider, or create activity authority.

@@ -15,10 +15,9 @@ identity, frozen direct-tool selection, tool admission, model-tool loop, `ToolCa
 MCP connection records; 19 owns kernel-child ingress, safe committed-result delivery, and bridge-local recovery; 20 owns kernel
 epochs, cells, checkpoints, and kernel-local safe projection.
 
-This document owns only future non-authorizing context/evidence selection and safe representation. A Goal, Skill, source
-selection, card, summary, omission, or compaction never creates or mutates a `RunId`, lifecycle
-state, tool selection, `WorkspaceRoot`, MCP connection, kernel epoch, provider route, or reconciliation
-decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or continuation mechanism.
+A Goal, Skill, source selection, card, summary, omission, or compaction never creates or mutates a `RunId`, lifecycle
+state, tool selection, `WorkspaceRoot`, MCP connection, kernel epoch, provider route, or reconciliation decision.
+Context is not a hidden prompt-mutation channel, sandbox, policy engine, or continuation mechanism.
 
 ## Immutable selection and Goal context
 
@@ -163,7 +162,7 @@ uses typed read-only current-state projections over the single typed connection 
 03](03-daemon-transport-and-adapters.md)); reconnect re-reads current state, and there is no event tail, cursor, or
 resynchronization. Partial delivery is never permitted.
 
-## Dependencies, non-goals, and evidence
+## Dependencies and non-goals
 
 This document depends on architectures 15 and 18--20. It does not define actual Goal persistence,
 search/index/vector retrieval, instruction assembly (owned by [architecture
@@ -171,10 +170,6 @@ search/index/vector retrieval, instruction assembly (owned by [architecture
 source-page sizes, resource values, provider evolution, architecture-23 session branching, activity-journal and UI
 delivery, physical Plan artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or
 production activation.
-
-No record carries state it did not record, and no current state reconstructs meaning a record never had.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
 
 Architecture 22 owns provider configuration and reasoning normalization. Provider may declare compatible reasoning
 input requirements, but only this document selects sources and the model-step context window;

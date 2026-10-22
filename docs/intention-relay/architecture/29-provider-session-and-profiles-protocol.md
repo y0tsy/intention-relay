@@ -15,9 +15,8 @@ architecture 25 owns provider/model discovery and typed configuration editing; a
 validation, and credential isolation; architecture 15 owns tool identity and the tool loop, and architecture 23 session
 branching.
 
-This document owns only the session-selection layer. A session selection, provider list, or protocol frame is not a
-second runtime, registry, persistence authority, catalog, or sandbox, and creates no `RunId`, lifecycle transition,
-tool selection, child, MCP connection, kernel epoch, context projection, branch, or reconciliation result.
+A session selection, provider list, or protocol frame creates no `RunId`, lifecycle transition, tool selection, child,
+MCP connection, kernel epoch, context projection, branch, or reconciliation result.
 
 ## Session selection
 
@@ -65,7 +64,5 @@ layer is not activated and activation requires an activating specification.
 
 This document depends on architectures 09, 15, 22, and 23. Non-goals: a `responses` SDK/driver, provider picker/editor
 presentation, credential entry/keychain, discovery, telemetry, multimodal or structured output, plugin adapters, remote
-continuation, and production behavior. Controlled live reload, credential rotation, health checks, pricing, and
-raw-TOML editing were removed from Slice 4 ([architecture 25](25-configuration-provider-control-plane.md)).
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
+continuation, and production behavior. Slice 4 owns discovery and typed configuration editing with restart-only
+application ([architecture 25](25-configuration-provider-control-plane.md)).

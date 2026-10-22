@@ -41,21 +41,22 @@ silently merges into an in-flight request.
 
 ### 6. Local trusted workspace
 
-A session has an obligatory `WorkspaceRoot`. All filesystem tools resolve paths against it, reject absolute and parent
-(`..`) paths at the typed input, and never fall back to process `pwd`. Process execution receives it as CWD. The root is
-an addressing anchor, not a containment boundary: a path may leave it through a symbolic link, and v1 is trusted local
-execution, not a sandbox ([architecture 05](05-tools-and-workspace.md)).
+A session has an obligatory `WorkspaceRoot` addressed as [architecture
+05](05-tools-and-workspace.md) defines: filesystem tools resolve paths against it, reject absolute and parent (`..`)
+paths at the typed input, never fall back to process `pwd`, and receive it as their CWD. The root is an addressing
+anchor, not a containment boundary, and v1 is trusted local execution, not a sandbox.
 
 ### 7. Cross-cutting features attach as ordinary calls
 
 Workspace enforcement, VFR, Headroom/CCR, and plan-mode restrictions attach as ordinary calls in the direct tool
-sequence; VFR and Headroom arrive as modules inside `intention-tools`, and the typed hook plane was removed in Slice
-1.5. Base tools stay focused on their primitive work and do not hard-code extension behavior.
+sequence, and VFR and Headroom arrive as modules inside `intention-tools`. Base tools stay focused on their primitive
+work and do not hard-code extension behavior.
 
 ### 8. Automatic durable state
 
-Sessions, turns, run transitions, artifacts, plans, todos, tool calls, and configuration revisions are automatically
-persisted under the one-transaction state-change law of [architecture 04](04-sessions-runs-events-and-storage.md).
+Sessions, turns, run transitions, artifacts, plans, todos, tool calls, and each started run's frozen configuration
+snapshot are automatically persisted under the one-transaction state-change law of [architecture
+04](04-sessions-runs-events-and-storage.md).
 
 ### 9. Plan and Build are separate policies
 
@@ -87,7 +88,7 @@ MCP, providers, children, bridge, and kernel work proceed without confirmation, 
 and the model continues the work the question does not directly block, instructed that an answer may never arrive
 ([architecture 15](15-tool-registry-and-model-tool-loop.md)).
 
-Security is structural, never a prompt: `WorkspaceRoot` addressing (principle 6), credential isolation at the daemon's
+Security is structural, never a prompt: `WorkspaceRoot` addressing and credential isolation at the daemon's
 private loading boundary ([architecture 09](09-configuration-security-and-observability.md)), typed DTO boundaries, safe
 projections that keep credentials, raw frames, and implementation resources out of DTOs, logs, cards, and model
 context, post-commit publication, and one local user who owns the machine. No phase may add a per-action confirmation
@@ -109,8 +110,8 @@ The implementation must demonstrably provide:
 
 1. Tauri and TUI/REPL can operate the same daemon-owned session without duplicating application logic.
 2. A daemon restart marks an unfinished run as interrupted and exposes that result through the same contract.
-3.  A filesystem tool cannot escape its session `WorkspaceRoot` through relative paths, absolute paths, or process CWD
-fallback.
+3.  A filesystem tool resolves its session `WorkspaceRoot` only as [architecture
+05](05-tools-and-workspace.md) defines: no relative, absolute, or CWD-fallback escape.
 4.  A Plan-mode agent can create and refine a physical plan in the daemon-defined plans directory, while normal
 write/edit tools cannot mutate the project or that directory.
 5.  VFR and Headroom can be enabled independently as ordinary calls, preserve typed observability, and expose their
@@ -118,8 +119,8 @@ supporting tools.
 6.  State visible to an adapter was committed before its corresponding live frame was published; provisional text
 deltas are transient, never authoritative, and are replaced by the committed row.
 7.  Provider secrets cannot appear in transport frames, persisted state, diagnostics, or normal UI output.
-8.  `make verify` proves the applicable formatting, lint, feature, test, documentation, coverage, and supply-chain
-gates before an implementation slice is accepted.
+8.  `make verify` proves the applicable pinned-tooling, formatting, lint, test, documentation, coverage, and
+supply-chain and manifest gates before an implementation slice is accepted.
 
 ## Explicit v1 non-goals
 
@@ -138,7 +139,7 @@ work; the second stays owned by the named slice.
 
 | Topic | Settled decision and source |
 | --- | --- |
-| Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary; removal of a not-yet-seen pending turn stays explicit, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
+| Turn input | A user turn accepted during an active run is recorded as a durable pending turn and joins that run's live context in FIFO order at the next model boundary, and no automatic retry or resume exists ([architecture 04](04-sessions-runs-events-and-storage.md), "Pending turns"). |
 | Risk policy | Build runs without a per-action confirmation barrier for configured active capabilities, while Plan keeps hard-denied project writes and an advisory-guided `execute` ([architecture 07](07-plan-and-build-modes.md)); the exact capability taxonomy and audit policy for `execute`, network, and destructive file actions remains listed as open in [architecture 05](05-tools-and-workspace.md). |
 | AppData location | Production SQLite state lives in the platform AppData/state location with no process-CWD fallback (roadmap M3), and the migration half of the question is closed by the single-live-schema rule. |
 | Schema history | The existence of databases is not an argument for keeping DB migrations or old-schema compatibility; every versioned system keeps exactly one live version and evolves in place. |
@@ -160,7 +161,6 @@ worktrees, or per-run filesystem isolation.
 
 ## Verification
 
-Before implementation starts, the team must create the architectural test matrix described in
-[10-test-driven-delivery-and-verification.md](10-test-driven-delivery-and-verification.md) and the reproducible quality
-foundation described in [12-quality-gates-and-makefile.md](12-quality-gates-and-makefile.md). Every v1 principle above
-requires at least one executable test or a justified documented exception.
+Every v1 principle above is proved by the test portfolio and the reproducible gates that [10 Test-Driven Delivery and
+Verification](10-test-driven-delivery-and-verification.md) and [12 Quality Gates and
+Makefile](12-quality-gates-and-makefile.md) define.

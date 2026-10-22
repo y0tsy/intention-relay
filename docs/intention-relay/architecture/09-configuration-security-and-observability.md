@@ -9,7 +9,7 @@ authentication, cloud secrets management, or multi-user configuration.
 ## TOML-only configuration
 
 `intention-config` owns TOML parsing, schema validation, defaults and resolved configuration, and the M1
-`ConfigRevisionId` and credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
+credential-free `ResolvedConfigDto`/`ConfigSnapshotDto` contract foundation.
 
 M1/M4 accept only `openrouter` and `generic-chat-completion-api` provider kinds; the named provider-entry list and
 session selection are owned by [architecture 22](22-provider-evolution-profiles-and-reasoning.md) and [architecture
@@ -23,8 +23,8 @@ No YAML, JSON, database-only, or UI-only configuration source is authoritative i
 flowchart LR
   TF[TOML file] --> PA[Parse validate]
   PA --> RC[Resolved config]
-  RC --> RV[Config revision]
-  RV --> DS[Daemon state]
+  RC --> SS[Startup snapshot]
+  SS --> DS[Daemon state]
   DS --> RS[Run records]
   RS --> RT[Run actor]
 ```
@@ -33,29 +33,29 @@ flowchart LR
 
 M1 parses, validates, and projects configuration. It defines the immutable, serializable `ConfigSnapshotDto` shape. M3
 makes that DTO the canonical credential-free configuration selection for durable storage and runs: the daemon
-composition receives one validated startup snapshot, records it by `ConfigRevisionId`, and every accepted run persists
-its own immutable selected snapshot/revision.
+composition receives one validated startup snapshot, and a turn that starts a run freezes that snapshot on the run row
+(`config_snapshot_json`).
 
 M3 applies TOML **only at daemon startup**. It neither watches TOML nor applies an edit to an already-running daemon. A
-changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while
-existing persisted runs retain their recorded revision. Configuration application stays daemon-startup-only: controlled
-live reload is not an accepted direction ([architecture
-25](25-configuration-provider-control-plane.md)), so no reload contract, transaction, or outcome test is owed, and a
-running daemon has no second activation path.
+changed TOML file therefore takes effect only after a restart; the new startup snapshot applies to new runs, while an
+existing persisted run keeps the snapshot frozen on its row. Configuration application stays daemon-startup-only:
+controlled live reload is not an accepted direction
+([architecture 25](25-configuration-provider-control-plane.md)), so no reload contract, transaction, or outcome test is
+owed.
 
 ### M3 lifecycle rules
 
 -  `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do
 not enter committed records, frames, or protocol DTOs.
 - The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
-- An accepted run receives an immutable copy of its selected snapshot/revision.
+- A turn that starts a run freezes that startup snapshot on the run row; a turn that stays pending freezes no
+configuration of its own.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
 to a configuration edit.
 -  TOML application is **daemon-restart-only**: the daemon neither watches TOML nor applies an edit to an
 already-running daemon, and a changed TOML file takes effect only after a restart, where the new startup snapshot
-applies to new runs while existing persisted runs retain their recorded revision. The precise user experience for
-detecting or requesting the restart remains open; no behavior implies a second activation path for a
-running daemon.
+applies to new runs while an existing persisted run keeps the snapshot frozen on its row. The precise user experience
+for detecting or requesting the restart remains open.
 -  Configuration discovery remains platform-standard with a validated explicit absolute-path override; it never falls
 back to process CWD.
 
@@ -67,10 +67,9 @@ be in `1..=60`; `max_attempts` defaults to `2` and must be in `1..=2`. Missing p
 to those defaults; `provider_execution` is a required field on the resolved and snapshot wire shapes, so persisted
 snapshots always carry the effective policy explicitly. Runtime owns the fixed 250 ms retry delay, not TOML.
 
-`attempt_timeout_seconds` is the idle window of one provider attempt, not the attempt's total duration: the attempt
-arms one window when its stream opens and re-arms a fresh one after every event the stream delivers, so it bounds the
-silence between two provider facts. A window that expires fails the attempt retryably with
-`provider_attempt_timed_out` ([architecture 08](08-model-protocol-and-providers.md)).
+`attempt_timeout_seconds` is the idle window of one provider attempt, not the attempt's total duration;
+[architecture 08](08-model-protocol-and-providers.md) owns how that window is armed, re-armed, and expired as the
+retryable `provider_attempt_timed_out` failure.
 
 `parse_startup_material` additionally creates opaque `StartupProviderMaterial` for composition. It has no `Debug`,
 `Display`, serde implementation, or credential accessor and may only be consumed by a selected provider constructor.
@@ -98,8 +97,8 @@ them to leak through the system.
 
 - an open-text credential is protected by the platform's own file permissions, for example an owner-only `0600` file
 on Unix; the application performs no permission check and issues no warning;
--  secrets are excluded from transport DTOs, the durable `runs`, `turns`, `messages`, and
-`configuration_revisions` records, plan files, UI DTOs, and normal logs. `execute` is trusted-local and may
+-  secrets are excluded from transport DTOs, the durable `runs`, `turns`, and `messages` records, plan files, UI DTOs,
+and normal logs. `execute` is trusted-local and may
 inherit the invoking process environment; environment variables are not name-filtered or copied into evidence or logs;
 - errors and logs never carry credentials;
 - configuration displays do not log values while rendering or validation fails;
@@ -129,20 +128,19 @@ Every numeric bound in the system is recorded here with the reason it exists:
 | Provider idle attempt window and retry delay | Liveness: a live provider request that delivers no event for the configured window fails typed; the window re-arms after every delivered event, so a request that keeps producing facts is never cut off. |
 | Subscriber queue and write deadline (`SUBSCRIBER_QUEUE_CAPACITY` 64, `SUBSCRIBER_WRITE_DEADLINE` 10 s) | Liveness: isolates a slow local peer from execution, persistence, and healthy delivery. |
 | Goal domain ([28](28-goal-domain-and-verification.md)) | Representation: 256 goals in one project, 64 in one session, tree depth 16, 32 direct children per goal, 64 session links per project goal, 32 selected skills and roles in one run, 512 KiB per skill, role, or summary, 1 MiB per canonical goal target snapshot, 4 MiB of goal context and summaries in one run, and one pending proposal per run. |
-| Conversation tree ([23](23-non-destructive-session-branching-and-regeneration.md)) | Representation: 128 NFC Unicode scalar values per session title. One read returns the immediate children of one requested parent in stable creation order, and the tree carries no depth, descendant-count, or branch-count bound: an over-size response is answered by the transport envelope's own `local_protocol_message_too_large` failure, and a base snapshot carries no canonical size limit. |
+| Conversation tree ([23](23-non-destructive-session-branching-and-regeneration.md)) | Representation: 128 NFC Unicode scalar values per session title; the tree read and its no-bound rules stay with that document. |
 
 ## Credential isolation
 
 Credentials never cross into transport DTOs, durable records, logs, or adapter projections. The rule's required
-evidence is one absence test: a recognizable fake credential must be absent from configuration-revision JSON, the
-committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs.
+evidence is one absence test: a recognizable fake credential must be absent from the persisted
+`config_snapshot_json`, the committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs.
 
 ## Observability
 
 Daemon-owned observability exposes only typed, safe operational data the daemon can emit:
 
 - daemon health and readiness;
-- the live wire version and stale-peer detection;
 - connection/subscription health;
 - session/run states and durations;
 - provider/model identity without credentials;
@@ -155,7 +153,7 @@ Adapters render observations. They do not infer daemon health from presentation 
 
 ## Logging and audit
 
--  The committed current-state records (`runs`, `turns`, `messages`, `configuration_revisions`) are
+-  The committed current-state records (`runs`, `turns`, `messages`) are
 the durable audit of application facts; structured logs are operational diagnostics, not a replacement for them.
 -  Logs have correlation IDs and safe context DTOs, and no sensitive prompt/configuration content is emitted merely for
 diagnostics.
@@ -168,18 +166,18 @@ atomicity.
 | Requirement | Test evidence | Observable outcome |
 | --- | --- | --- |
 | TOML validation | Parser fixture tests. | Invalid config returns typed errors without partial state replacement. |
-| M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and stored by revision. |
+| M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and frozen on a started run's row. |
 | Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
-| Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain their selected immutable config revision. |
+| Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain the immutable snapshot frozen on their row. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
-| Credential isolation | Table-driven secret injection plus raw SQLite persistence fixtures. | A recognizable fake credential is absent from configuration-revision JSON, the committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs. |
+| Credential isolation | Table-driven secret injection plus raw SQLite persistence fixtures. | A recognizable fake credential is absent from the persisted `config_snapshot_json`, the committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs. |
 | Safe observability | Daemon status contract test. | Health/usage/tool state is visible without credentials. |
 
 ## Quality-gate integration
 
-`intention-config` remains subject to its 60% line floor. TOML parsing, M1 revision serialization, credential
-isolation, and safe observability tests are blocking `make verify` inputs; M3 adds canonical revision persistence,
-restart-only application, and per-run configuration-selection coverage. The credential absence test is a mandatory
+`intention-config` remains subject to its 60% line floor. TOML parsing, M1 snapshot serialization, credential
+isolation, and safe observability tests are blocking `make verify` inputs; M3 adds startup-snapshot persistence,
+restart-only application, and per-run frozen-snapshot coverage. The credential absence test is a mandatory
 regression fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 

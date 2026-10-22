@@ -44,10 +44,10 @@ flowchart TD
 | **Daemon** | The single local process that owns runtime actors, persistence connections, active runs, providers, tools, and subscriptions. |
 | **Project** | A logical user project associated with one or more sessions. |
 | **Session** | A durable project-backed conversation and work record. It has one `WorkspaceRoot` and at most one active run. |
-| **Turn** | A causally identified unit of conversation, such as a user request or assistant response. |
-| **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary and is removed only before it is seen. |
+| **Turn** | One durable user request, recorded before it starts work: it starts a run or queues behind the session's active run. |
+| **Pending turn** | A user turn accepted while a session run is active: durable input that joins that run's live context at the next model boundary. |
 | **Run** | One agent execution lifecycle started from an accepted user turn. |
-| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool: relative paths join the root, `execute` starts there, and pathless `glob`/`grep` search from there ([architecture 05](05-tools-and-workspace.md)). |
+| **WorkspaceRoot** | The required addressing anchor and process CWD for every session tool ([architecture 05](05-tools-and-workspace.md)). |
 | **Artifact** | A durable work product associated with a session or run. Plans are artifacts. |
 | **Plan** | A physical, revisioned artifact produced by a planning-focused mode; ordinary project writes remain denied, while `execute` is available as trusted-local, advisory-guided execution. |
 | **Build Autopilot** | The single user-authorized Build policy that executes the configured active tool surface without per-action confirmation. |

@@ -14,11 +14,6 @@ The removed execution-meaning envelope and decoders ([architecture
 fixed tool set, frozen tool selection, direct admission, model-tool loop, `ToolCallId`, generic effect evidence, and
 recovery; 18 owns MCP connection records, discovery, method lists, invocation, and recovery.
 
-This document owns only the spawned kernel child's typed-client ingress, safe delivery of committed results,
-cancellation propagation, and bridge-local recovery classification; it is not a second registry, gateway,
-daemon, lifecycle, tool implementation, child executor, MCP client, provider selector, persistence authority, sandbox,
-or OS privilege boundary.
-
 Python/RLM facade code, direct model ingress, kernels, children, MCP servers, providers, adapters, bridge connections,
 current configuration, readiness, and evidence cannot create or widen
 tool, lifecycle, child, or reconciliation authority; every invocation reaches architecture 15's one daemon-owned,
@@ -37,20 +32,16 @@ model step, and admission already carry everything a call needs.
 
 The client rides the repository's existing typed local wire ([architecture
 03](03-daemon-transport-and-adapters.md)) on its existing private per-user Unix-socket/Windows-named-pipe endpoint, its
-live wire-version byte, bounds, and OS-user access boundary. There is no second local listener, TCP/HTTP endpoint,
-remote attachment, sandbox, or daemon, and no added handshake, method table, or version negotiation: the child sends
-architecture-15's typed tool invocation through the existing typed local request path and receives architecture-15's
-ordinary records and frames. An unsupported request fails with a typed error before a partial result or live
-notification is delivered.
+fixed endpoint name, bounds, and OS-user access boundary. No added handshake, method table, or version negotiation
+exists: the child sends architecture-15's typed tool invocation through the existing typed local request path and
+receives architecture-15's ordinary records and frames. An unsupported request fails with a typed error before a
+partial result or live notification is delivered.
 
 ## Ingress, admission, and dedupe
 
 Every kernel-originated call is an ordinary architecture-15 call. The daemon assigns the canonical `ToolCallId`, which
-remains the one identity for that call's durable records and stream frames; an equal repeat within one turn dedupes
-against the turn idempotency key ([architecture 04](04-sessions-runs-events-and-storage.md)) and returns the existing
-evidence instead of admitting a second action. Admission is architecture 15's three outcomes — `Admitted`, typed
-`Incompatible`, typed `Unavailable`; quota, parent, Goal, Skill, provider, MCP, or bridge-specific authorization cannot
-be introduced.
+remains the one identity for that call's durable records and stream frames; an equal repeat within one turn is answered
+from the existing evidence instead of admitting a second action.
 
 Before the call start boundary, an admitted call that never started records `InterruptedBeforeStart` on daemon
 recovery; once the call has started, a repeat is read-only and returns only durable evidence, never re-executing.

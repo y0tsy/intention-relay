@@ -3,7 +3,7 @@
 **Approved future design. Not implemented; VFR and Headroom arrive at M7 as modules of `intention-tools`, and
 activation requires an activating specification.** Virtual File Representation (VFR) and Headroom/CCR are required v1
 capabilities delivered as ordinary library calls inside the tool pipeline, not as separate extension crates attached to
-it. The typed hook plane was removed in Slice 1.5 and is not part of this design; the stages below describe the call
+it. The design has no typed hook plane; the stages below describe the call
 order, not a hook framework ([architecture 05](05-tools-and-workspace.md)).
 
 ## Design principle
@@ -159,5 +159,3 @@ Deferred with `@todo` markers in the modules when they land:
 - which metadata becomes visible in UI;
 - whether content is encrypted at rest in a later version;
 - exact fallback policy for VFR parser failures.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

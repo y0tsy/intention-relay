@@ -10,17 +10,12 @@ Makefile](12-quality-gates-and-makefile.md); test-first and outcome-verification
 Verification](10-test-driven-delivery-and-verification.md).
 
 The systems of documents 15 and 18-30 and of Slices 3-6 are not activated, and each activation requires an accepted
-activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). Slice 2 is closed: it merged
-into `main` as `0fd8ad5` (PR #67).
+activating specification ([Quality Gates and Makefile](12-quality-gates-and-makefile.md)). Slice 2 is closed.
 
 ## Closed milestones (M0-M5)
 
-M0-M5 are closed. Their per-milestone sections and the `docs/intention-relay/closeout/` acceptance evidence were
-removed as dead historical artifacts by `eeff780`, and both remain recoverable from repository history:
-`git show eeff780^:docs/intention-relay/architecture/11-implementation-roadmap.md` for the sections and
-`git show eeff780^:docs/intention-relay/closeout/` for the evidence. The milestones below therefore record the
-remaining plan (M6-M8 and M10-M11); the delivered behavior of M0-M5 is described by the architecture documents
-themselves.
+M0-M5 are closed, and the architecture documents describe their delivered behavior. The sections below record the
+remaining plan.
 
 ## Dependency graph
 
@@ -87,54 +82,26 @@ contracts activated by earlier slices. Every direction stays bound to its slice,
 M0-M5 code required by those directions activates inside its slice with its own contract, transaction, and outcome
 test.
 
--  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation, whose
-JSON-RPC 2.0 local wire, method/notification table, hello handshake, and per-payload version fields were later
-collapsed into one typed local wire ([architecture 03](03-daemon-transport-and-adapters.md)); explicit DTO schema
-versions with exact-equality comparison; SQLite as one live storage schema created directly on open
-([architecture 00](00-principles-and-scope.md)); and crate ownership and coverage declarations
-under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated family. The
-former contract ledger, `run-execution-meaning-v4` field tables, capability families, `typed-tlv-v1`/SHA-256 tags, and
-digests were deleted ([architecture 02](02-dto-and-contract-policy.md)): no ledger, tag registry, canonical
-digest, or identity record remains, and every future contract family is typed serde JSON with RFC 8785 canonicalization
+-  **Slice 1 — Contracts and versions — activated.** The typed serde JSON contract and version foundation; SQLite as
+one live storage schema created directly on open ([architecture 00](00-principles-and-scope.md)); and crate ownership
+and coverage declarations under [Quality Gates and Makefile](12-quality-gates-and-makefile.md) for every activated
+family. Every contract family is typed serde JSON with RFC 8785 canonicalization
 only when a first real consumer appears.
--  **Slice 1.5 — Core simplification — activated.** It adds no product behavior: it collapsed the workspace to nine
-production crates and simplifies the internal interfaces every later slice builds on. The crate set is
-`intention-proto` (types, protocol, and run lifecycle, absorbing the former `intention-domain`), `intention-config`,
-`intention-engine` (application and runtime), `intention-tools` (tools and workspace), `intention-providers`
-(provider-neutral model contract and both drivers), `intention-storage` (storage contracts and SQLite),
-`intention-transport`, `intention-daemon` (composition, host, and binary), and `intention-client`; `intention-tui`
-remains the proof adapter and `intention-test-support` the non-production fixture crate, while the future adapter and
-feature crates are created at their milestones. The target
-keeps DTOs only at the three physical boundaries — the IPC wire, SQLite persistence, and provider SDKs — with internal
-crates passing domain types, and makes schema-validated JSON tool inputs and outputs the only JSON payloads in the
-system. The current-state core has already landed on this branch: the event log, snapshots, cursors, and resync are
-replaced by the seven current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`,
-`configuration_revisions`); the transcript is `messages` rows, and a completed tool call commits one
-tool-result message row carrying its status and metadata in its projection; identity
-is the nine newtypes (`SessionId`, `RunId`, `TurnId`, `WorkspaceId`, `ProjectId`, `ToolCallId`, `ConfigRevisionId`,
-`IdempotencyKey`, and the durable transcript row `MessageId`), with model steps and tool groups addressed by plain
-indices and mutating operations by `IdempotencyKey`; every state change commits in one SQLite transaction and the
-daemon publishes session frames
-built from the committed values; the single live wire version is a byte in the endpoint name with no
-cursors, and a re-subscribing client receives the current session state and its bounded recent messages, then continues
-live; `intention-client` is an asynchronous client with its blocking API removed that covers connect/health, session
-snapshots, session subscriptions, and the command surface, and whose `intention-tui` proof adapter is migrated
-mechanically; the daemon
-end-to-end suite drives that client (`client_e2e`) instead of the low-level transport; the tool cycle is one direct
-sequence of identity check, durable call row, workspace binding, dispatch, and durable terminal row; the nine-production-crate consolidation and the removal of the composition facade landed, so
-the daemon host calls the engine directly; and the single storage schema is created on open under one integer stamp,
-where a stamp bump discards and recreates the database with no migration or compatibility path.
--  **Slice 2 — Terminal UX — closed.** The terminal application over the existing typed client and daemon
-([architecture 03](03-daemon-transport-and-adapters.md)) landed as one `intention-tui` binary with three
-contract-equivalent modes — the full-screen TUI, the mandatory interactive REPL, and the headless command — over one
-`intention-client` surface, with the closed typed exit-status set (0 completed, 1 usage, 2 daemon or transport,
-3 typed rejection or failed run, 4 timeout with no observed terminal status, 5 interrupted run) and no presentation
-logic in the daemon. The delivered behavior, including the slice's retrospective corrections, is owned by
-[architecture 03](03-daemon-transport-and-adapters.md)'s Slice 2 terminal model (closed); acceptance evidence
-obligations are unchanged ([Test-Driven Delivery and Verification](10-test-driven-delivery-and-verification.md)).
-Slice 2 is closed: it merged into `main` as one squash commit, `0fd8ad5` (PR #67), with the full quality gate green on
-the merged head. Closing a slice changes no crate classification, so the crate map and the coverage floors move together
-only when Slice 3 adds its own crates.
+-  **Slice 1.5 — Core simplification — activated.** The workspace is nine production crates with the current-state
+storage core: the six current-state tables (`projects`, `workspace_roots`, `sessions`, `runs`, `turns`, `messages`),
+each started run's frozen `ConfigSnapshotDto` on its run row (`config_snapshot_json`), the transcript as `messages`
+rows, one durable tool-result message row per completed call, plain-index model steps and tool groups,
+per-transaction state changes with session frames built from the committed values, the fixed-literal endpoint
+(`intention-relay`) with fail-closed typed decode as the only protection against a foreign peer
+(`invalid_local_protocol_response`), re-subscription receiving the current session state and its bounded recent
+messages, one asynchronous client without a blocking API, one direct tool-cycle sequence, the daemon host calling the
+engine directly, and one integer-stamped live schema where a stamp bump discards and recreates the database with no
+migration or compatibility path.
+-  **Slice 2 — Terminal UX — closed.** One `intention-tui` binary with three contract-equivalent modes — the
+full-screen TUI, the mandatory interactive REPL, and the headless command — over one `intention-client` surface, with
+the closed typed exit-status set and no presentation logic in the daemon; owned by
+[architecture 03](03-daemon-transport-and-adapters.md). Closing a slice changes no crate classification, so the crate
+map and the coverage floors move together only when Slice 3 adds its own crates.
 -  **Slice 3 — Agent operation — not activated.** The instruction channel of
 [architecture 30](30-instruction-sources-and-system-context.md): the code-owned base instruction text, one
 user-authored fragment list edited at the filesystem level, workspace `AGENTS.md` project instructions read through the
@@ -167,20 +134,12 @@ named provider-entry list with its global default, the session selection command
 the typed editing surface, discovery as an ordinary non-authorizing read, and the optional named authentication header,
 with the entries built at startup. Controlled live reload, in-process credential rotation, provider health checks,
 pricing and budget policy, raw-TOML editing, per-turn and fork provider overrides, opaque catalog pagination, catalog
-tombstones, user-declared kinds, and the typed cross-run reasoning-transfer surface were removed from the slice
+tombstones, user-declared kinds, and the typed cross-run reasoning-transfer surface are outside the slice
 (architectures 22, 25, 29).
 -  **Slice 5 — Goal domain — not activated.** The Goal domain (architecture 28). The slice also activates the
 tool-descriptor, tool-registry, and model-tool-loop contracts as amended under [architecture
 15](15-tool-registry-and-model-tool-loop.md), the bridge invocation and MCP connection-record contracts (architectures
-19/18), and work/requeue after client disconnection. The 2026 corrective
-pass's adapter-facing tool projection — the typed tool contract in `intention-proto` and the typed projection on each
-committed tool row — is recorded as a Slice 2 retrospective correction, not an activation of this slice's
-tool-descriptor, tool-registry, or model-tool-loop contracts: the six-tool closed set and its typed projection are
-already live, and M10 keeps the selection, admission, and bridge work. The pass records the adapter-local rules it
-deleted instead of deferring them: the composed `session_stream_closed`, `session_not_open`, and `no_sessions_to_continue`
-fallbacks went with the client's own closed-stream classification and its typed continue failure in
-`intention-client`, so no front end composes a session condition; the pre-deletion anchors were
-`crates/intention-tui/src/headless.rs:343-347`, `:163-169`, and `:618-626` at base `99973a8`.
+19/18), and work/requeue after client disconnection.
 -  **Slice 6 — UI foundation — last slice; not activated.** Session branching and regeneration, reasoning/catalog
 delivery, and adapter boundaries (architectures 23/22 plus architecture 03's flat activity journal and notification
 list): the fork, preview, branch-level, rename, archive, and restore DTOs plus the ordinary same-session regeneration
@@ -309,8 +268,8 @@ explicit v1 non-goals below.
 
 ### Deliver
 
--  final architecture checks; observability, health, and safe structured diagnostics; config revision behavior and
-redaction hardening; the restart/reconnect/cancellation smoke suite;
+-  final architecture checks; observability, health, and safe structured diagnostics; frozen config-snapshot behavior
+and redaction hardening; the restart/reconnect/cancellation smoke suite;
 -  documentation reconciliation against implemented public contracts, including ownership of the architecture index and
 its owner paragraphs (`architecture/README.md`);
 - the post-M4 evidence obligations of architecture 10 for the remaining post-M4 packages; and
@@ -409,7 +368,8 @@ typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 ### Deliver
 
 -  MCP connection records with discovery and bounded per-connection method lists, direct invocation under the fixed
-`mcp` ToolId, private resources, idempotency, safe projection, disposal, and no-resume recovery (architecture 18);
+`mcp` ToolId, private resources, single-commit call binding, safe projection, disposal, and no-resume recovery
+(architecture 18);
 -  session-scoped private kernels with run-scoped namespaces, foreground cells, safe output, verified checkpoints,
 background-task restrictions, cancellation, recovery, and no-resume semantics (architecture 20);
 -  the project script library (`.ir/scripts`): agent-authored modules persisted as ordinary project files through the

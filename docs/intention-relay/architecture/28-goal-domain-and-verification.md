@@ -8,15 +8,14 @@ Owner: architecture 28.
 
 ## Ownership and non-authorities
 
-The removed run-execution meaning layer (its canonical codec was removed under [architecture
-02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns tool identity and the tool loop, architecture 18
+Run execution carries no meaning layer of its own ([architecture
+02](02-dto-and-contract-policy.md)). Architecture 15 owns tool identity and the tool loop, architecture 18
 MCP connection records, architecture 21 context selection and projection (Goal context selection, Skills, and compaction),
 and architecture 03 activity-journal and notification projections.
 
-This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, role, proposal, or
-summary creates no `RunId` except through the ordinary admission path, lifecycle transition, tool permission, tool
-selection, child, MCP connection, kernel epoch, branch, or reconciliation result, and is not a second runtime,
-registry, persistence authority, or sandbox.
+A Goal, revision, link, role, proposal, or summary creates no `RunId` except through the ordinary admission path,
+lifecycle transition, tool permission, tool selection, child, MCP connection, kernel epoch, branch, or reconciliation
+result.
 
 ## Goal identity, scope, and links
 
@@ -80,10 +79,9 @@ A run is ordinary (no leading Goal) or goal-directed (exactly one leading Goal),
 admission. Verification evidence attaches to the leading Goal revision it attests, and the run that collects it is an
 ordinary goal-directed run: no run kind exists for verification.
 
-A run's immutable selection is a typed serde JSON record rather than one canonical execution-meaning envelope; the
-former `run-execution-meaning-v4` carrier was removed with the canonical codec under [architecture
-02](02-dto-and-contract-policy.md). The applicable record is `GoalRunSelectionV1`; its absence means the run is ordinary,
-and historical M4 records gain nothing.
+A run's immutable selection is a typed serde JSON record rather than one canonical execution-meaning envelope
+([architecture 02](02-dto-and-contract-policy.md)). The applicable record is `GoalRunSelectionV1`; its absence means
+the run is ordinary, and historical M4 records gain nothing.
 
 `GoalRunSelectionV1` contains the leading `GoalId`, its exact revision, the session-link provenance, the
 target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1` defined by [architecture
@@ -198,5 +196,3 @@ rich-MIME input, dynamic extensions and installation, dynamic tool registration,
 long-lived-worker administration (leases, attach/detach, force-kill, supervisor recovery). Work/continuation/requeue
 after client disconnection is an accepted post-M5 future direction under an explicit durable contract that never
 silently resumes old external work.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

@@ -43,7 +43,7 @@ architecture, failure-path, or outcome tests.
 
 `make help` is the contract for the supported targets, their dependencies, and their mutation status. The principal
 targets are `bootstrap-tools` (mutating and networked), `fmt`/`fmt-check`, `lint`, `lint-windows`, `test`, `doctest`,
-`doc`, `coverage`, `deps`, `notices`/`notices-check`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the
+`doc`, `coverage`, `deps`, `quick`, `check`, `verify`, `ci`, the `ci-*` job aliases, and the
 opt-in `e2e-real-api`.
 
 ## Reproducible tooling
@@ -134,7 +134,7 @@ removes it, and is not part of any gate.
 - The floors are a guardrail over the crates that carry production logic, not a registry every crate must be entered
   into. A crate absent from `COVERAGE_FLOORS` is not measured; adding one to the list is how a new crate becomes
   measured, and the crate map entry ([01 Workspace and Crate Map](01-workspace-and-crate-map.md)) states its
-  responsibility and test targets in the same change.
+  responsibility in the same change.
 - There is no exclusion mechanism. `intention-daemon`'s `main.rs` is a thin process adapter whose lines sit inside the
   daemon's own 60% floor rather than being subtracted from it, so no crate needs a carve-out and none exists.
 - One line-only `cargo llvm-cov` run covers the workspace under its single feature configuration (`--all-features`,
@@ -170,14 +170,12 @@ the compile and test contracts are already covered.
 
 `make deps` and blocking CI run `cargo metadata --locked` as the authoritative lockfile check; `cargo deny check` for
 advisories, licenses, banned crates, allowed sources, and duplicate-version policy, using the policy expression in
-`deny.toml`; `cargo machete` for manifest hygiene; and `make notices-check`, which regenerates `THIRD_PARTY_NOTICES.md`
-from `Cargo.lock`, `quality/about.toml`, and the notice template through pinned `cargo-about` and compares it byte for
-byte, falling back to comparing which license every crate reference is rendered under when the bytes differ only
-because the local registry cache grouped or attributed identical license texts differently, so the check does not
-depend on which machine ran it while a changed graph, version, or license name still fails.
+`deny.toml`; and `cargo machete` for manifest hygiene.
 
-`cargo deny` is the single advisory and license authority: it reads the RustSec database and the `deny.toml` policy,
-which is what a separate `cargo audit` pass would re-read. Stale direct dependencies are not a gate either: a
+`cargo deny` is the single advisory and license authority: it reads the RustSec database and the license policy in
+`deny.toml`, which is what a separate `cargo audit` pass would re-read. Nothing is distributed — every workspace package
+is private (`publish = false`) — so no notices artifact exists, and `deny.toml` is the only license and advisory policy
+in the repository. Stale direct dependencies are not a gate either: a
 dependency releasing a patch would fail the build without any change to this repository, so freshness is dependabot's
 work rather than a blocking check.
 
@@ -194,10 +192,6 @@ That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-un
 responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one
 is a decision to review, and the accompanying `reason` is what makes it reviewable.
 
-`THIRD_PARTY_NOTICES.md` is a checked-in generated disclosure artifact, not a hand-maintained license inventory; private
-`publish = false` workspace packages stay project-owned code and are excluded. A failed or stale notice generation is a
-blocking supply-chain failure, not an inferred pass.
-
 `revue` is an ordinary crates.io dependency of `intention-tui`, pinned at `3.10.0`. Two of its properties are visible
 here. Its event loop quits on Ctrl+C after the handler returns, while Ctrl+C is the shared core's layered action, so
 `handle_event` calls `App::prevent_default` for the press the core consumes. It also depends on `unic-emoji-char`,
@@ -208,8 +202,7 @@ carry the reason the acknowledgement is allowed to stand. Upstream plans to repl
 (hawk90/revue#950); the acknowledgement goes away with that release.
 
 The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
-short-lived small strings; it is an ordinary crates.io dependency under the MIT license, disclosed like every other
-dependency through the generated `THIRD_PARTY_NOTICES.md`.
+short-lived small strings; it is an ordinary crates.io dependency under the MIT license.
 
 The terminal's local theme resolution adds three direct dependencies, and none of them adds a package to the locked
 graph: `toml` parses and writes the local `tui.toml` (whose `theme` key stores `auto`, `light`, or `dark`), and the
@@ -221,8 +214,9 @@ declared set changed without a new package, license, or advisory entering it.
 
 ## Test-first integration
 
-Every production boundary is activated with its crate-map entry, its declared test targets, and its coverage floor
-updated in the same change, together with outcome evidence. A focused test suite is not a substitute for the full gates.
+Adding a production crate is the crate map entry ([01 Workspace and Crate Map](01-workspace-and-crate-map.md)), which
+states its responsibility, plus one `COVERAGE_FLOORS` row in the root `Makefile`, in the same change.
+There is no tier table and no separate policy edit. A focused test suite is not a substitute for the full gates.
 
 ## Opt-in live-provider e2e
 

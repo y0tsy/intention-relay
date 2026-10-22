@@ -210,8 +210,9 @@ of the local file after the frame it produced, so the next launch reads the same
 preference and no daemon round trip gates the repaint. A stored `auto` is what
 clears a spelled-out palette. A failed rewrite reports its
 typed error while the committed selection stands, and a selection that matches
-the committed preference writes nothing. A theme change records no configuration
-revision and never rewrites the credential-bearing configuration file.
+the committed preference writes nothing. The theme lives in the front end's own
+local file: a theme change never touches the credential-bearing daemon
+configuration file.
 
 `/theme` with no argument opens the theme picker as `Screen::Theme`: a small
 panel in the same one-window layout, drawn in the chat panel's band region above
