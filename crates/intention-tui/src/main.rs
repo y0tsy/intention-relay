@@ -1,6 +1,6 @@
 //! The Intention Relay terminal client binary.
 //!
-//! One binary serves the three terminal front ends the slice declares: the
+//! One binary serves the three terminal front ends: the
 //! fullscreen UI, the interactive REPL, and the headless prompt command. The
 //! binary consults the process-level seams every front end shares — the local
 //! endpoint and the daemon launcher the client declares, the workspace root,

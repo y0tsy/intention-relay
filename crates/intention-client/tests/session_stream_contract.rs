@@ -10,11 +10,11 @@ use intention_client::{
     FrameUpdate, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState, StreamStep,
 };
 use intention_proto::{
-    ClientRequestDto, ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId,
-    ProtocolDaemonMessageDto, ProtocolResultDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionFrameDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, WorkspaceId,
-    WorkspaceRootDto, decode_request_line, encode_reply,
+    ClientRequestDto, MessageKindDto, MessageProjectionDto, ProjectId, ProtocolDaemonMessageDto,
+    ProtocolResultDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto,
+    SessionId, SessionProjectionDto, SessionSnapshotDto, SubscribeSessionCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    decode_request_line, encode_reply,
 };
 use intention_transport::{AsyncLocalListener, AsyncMessageReceiver};
 
@@ -39,7 +39,6 @@ fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProject
         run_id,
         TurnId::new(),
         status,
-        ConfigRevisionId::new(),
         None,
         started_at,
         finished_at,
@@ -58,7 +57,6 @@ fn projection(session_id: SessionId, active_run: Option<RunProjectionDto>) -> Se
         WorkspaceRootDto::parse(root.to_string_lossy().into_owned())
             .expect("fixture workspace root is absolute"),
         RunModeDto::Build,
-        None,
         active_run,
     )
     .expect("fixture session projection is valid")

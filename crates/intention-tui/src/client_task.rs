@@ -10,8 +10,8 @@
 
 use intention_client::{IntentionClient, SessionStreamClient, SessionStreamSubscription};
 use intention_proto::{
-    CreateSessionCommandDto, CreateSessionFirstTurnDto, ErrorDto, IdempotencyKey, ProjectId,
-    RunModeDto, SessionId, SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, ErrorDto, ProjectId, RunModeDto, SessionId,
+    SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_transport::LocalEndpoint;
 
@@ -59,8 +59,7 @@ pub async fn perform(
             let carried_first_turn = first_turn.is_some();
             let first_turn = match first_turn {
                 Some(content) => {
-                    let turn = match CreateSessionFirstTurnDto::new(IdempotencyKey::new(), content)
-                    {
+                    let turn = match CreateSessionFirstTurnDto::new(content) {
                         Ok(turn) => turn,
                         Err(error) => {
                             return Some(Err((
@@ -102,7 +101,7 @@ pub async fn perform(
             session_id,
             content,
         } => client
-            .send_user_turn(session_id, IdempotencyKey::new(), content)
+            .send_user_turn(session_id, content)
             .await
             .map(Action::TurnAccepted)
             .map_err(|error| (Action::TurnFailed(error.clone()), error)),

@@ -604,10 +604,13 @@ where
         // model step, and the sequence continues across retried attempts and
         // tool rounds, so every round of the run carries its own step index.
         let mut next_step = 0u32;
-        // Context additions that must survive a retryable attempt boundary:
-        // joined pending user messages and interruption notices. The live
-        // context of the run stays continuous across provider attempts.
-        let mut extra_messages: Vec<ModelMessageDto> = Vec::new();
+        // The run's one live context: the durable request history plus every
+        // addition the run makes to it - joined pending user messages,
+        // interruption notices, and each closed tool round's assistant
+        // tool-call and tool-result messages. It stays continuous across
+        // provider attempts and tool rounds, so a retry asks the model with
+        // exactly the context the run has already reached.
+        let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
         for attempt in 1..=u16::from(policy.max_attempts()) {
             if attempt == 1 {
                 let running = self.repository.transition_run(
@@ -629,7 +632,7 @@ where
                         &mut durable_output,
                         ContextWindowState::new(context_window.window_tokens()),
                     ),
-                    &mut extra_messages,
+                    &mut messages,
                 )
                 .await?;
             match result {
@@ -649,7 +652,7 @@ where
                         && pending_text.trim().is_empty()
                         && attempt < u16::from(policy.max_attempts());
                     if retry {
-                        self.wait_for_retry(&input, &mut extra_messages).await?;
+                        self.wait_for_retry(&input, &mut messages).await?;
                     } else {
                         self.commit_step(&input, &mut pending_text, None)?;
                         let run = self.finish_run(
@@ -675,18 +678,16 @@ where
         input: &ModelRunExecutionInputDto,
         timeout_seconds: u8,
         mut state: RoundState<'_>,
-        extra_messages: &mut Vec<ModelMessageDto>,
+        messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<AttemptResult> {
-        let mut messages: Vec<ModelMessageDto> = input.request.messages().to_vec();
-        messages.extend(extra_messages.iter().cloned());
         // The reasoning attachments of every closed tool round are part of the
         // measured request input, so the window accounting observes them from
         // the first pass onwards.
         let mut reasoning_attachments: Vec<AssistantReasoningDto> = Vec::new();
         // The starting context is windowed once, before its first provider
         // request, exactly like every later tool-result round.
-        state.apply_window(&mut messages, &reasoning_attachments)?;
-        let mut request = input.request.with_messages(messages.clone())?;
+        state.apply_window(messages, &reasoning_attachments)?;
+        let mut request = input.request.with_messages(messages.to_vec())?;
         let mut tool_round = 0u8;
         loop {
             // A stop requested while the run waited here is terminal before any
@@ -716,16 +717,15 @@ where
                         // second row.
                         let notice = interrupt_notice_message()?;
                         if self.settle_interrupt(input)? {
-                            messages.push(notice.clone());
-                            extra_messages.push(notice);
+                            messages.push(notice);
                         }
-                        state.apply_window(&mut messages, &reasoning_attachments)?;
-                        request = continuation_request(input, &messages, &reasoning_attachments)?;
+                        state.apply_window(messages, &reasoning_attachments)?;
+                        request = continuation_request(input, messages, &reasoning_attachments)?;
                         continue;
                     }
-                    if self.consume_pending_user_turns(input, &mut messages, extra_messages)? {
-                        state.apply_window(&mut messages, &reasoning_attachments)?;
-                        request = continuation_request(input, &messages, &reasoning_attachments)?;
+                    if self.consume_pending_user_turns(input, messages)? {
+                        state.apply_window(messages, &reasoning_attachments)?;
+                        request = continuation_request(input, messages, &reasoning_attachments)?;
                         continue;
                     }
                     let run = self.finish_run(
@@ -755,9 +755,8 @@ where
                     let _ = input.cancellation.take_interrupt_notice();
                     self.record_interrupt_notice(input)?;
                     messages.push(interrupt_notice_message()?);
-                    extra_messages.push(interrupt_notice_message()?);
-                    state.apply_window(&mut messages, &reasoning_attachments)?;
-                    request = continuation_request(input, &messages, &reasoning_attachments)?;
+                    state.apply_window(messages, &reasoning_attachments)?;
+                    request = continuation_request(input, messages, &reasoning_attachments)?;
                 }
                 RoundOutcome::Failed { error, retryable } => {
                     // A stop never retries: whatever the failed attempt left
@@ -846,7 +845,7 @@ where
                         // Every added tool result re-runs the window pass, so
                         // the continuation request carries a trimmed context
                         // and recomputed breakpoints.
-                        state.apply_window(&mut messages, &reasoning_attachments)?;
+                        state.apply_window(messages, &reasoning_attachments)?;
                     }
                     // A stop ends the run at this boundary: the batch's results
                     // are committed, so the run records the stop notice and its
@@ -870,14 +869,13 @@ where
                         } else {
                             let notice = interrupt_notice_message()?;
                             if self.settle_interrupt(input)? {
-                                messages.push(notice.clone());
-                                extra_messages.push(notice);
+                                messages.push(notice);
                             }
                         }
                     }
-                    self.consume_pending_user_turns(input, &mut messages, extra_messages)?;
-                    state.apply_window(&mut messages, &reasoning_attachments)?;
-                    request = continuation_request(input, &messages, &reasoning_attachments)?;
+                    self.consume_pending_user_turns(input, messages)?;
+                    state.apply_window(messages, &reasoning_attachments)?;
+                    request = continuation_request(input, messages, &reasoning_attachments)?;
                 }
             }
         }
@@ -978,7 +976,6 @@ where
         &self,
         input: &ModelRunExecutionInputDto,
         messages: &mut Vec<ModelMessageDto>,
-        extra_messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<bool> {
         let joined_messages = self.repository.consume_pending_user_turns(
             input.session_id,
@@ -989,8 +986,7 @@ where
         for message in &joined_messages {
             self.publish_content(message);
             let live = ModelMessageDto::new(ModelRoleDto::User, message.text())?;
-            messages.push(live.clone());
-            extra_messages.push(live);
+            messages.push(live);
             joined = true;
         }
         Ok(joined)
@@ -1176,14 +1172,14 @@ where
     async fn wait_for_retry(
         &self,
         input: &ModelRunExecutionInputDto,
-        extra_messages: &mut Vec<ModelMessageDto>,
+        messages: &mut Vec<ModelMessageDto>,
     ) -> DtoResult<()> {
         use futures_util::{FutureExt, future::Either};
 
         if input.cancellation.is_cancelled() {
             let message = interrupt_notice_message()?;
             if self.settle_interrupt(input)? {
-                extra_messages.push(message);
+                messages.push(message);
             }
             return Ok(());
         }
@@ -1194,7 +1190,7 @@ where
             Either::Left(((), _)) => {
                 let message = interrupt_notice_message()?;
                 if self.settle_interrupt(input)? {
-                    extra_messages.push(message);
+                    messages.push(message);
                 }
                 Ok(())
             }

@@ -13,10 +13,10 @@ use tempfile::TempDir;
 pub use crate::model_fixtures::{ScriptedDriver, run_ready};
 use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_daemon::{DaemonApplicationFacade, SilentCommitObserver, TestHostLifecycle};
-use intention_proto::{
-    ConfigRevisionId, DtoResult, ProjectId, ProtocolResultDto, SessionId, TimestampDto, WorkspaceId,
-};
 use intention_proto::{CreateSessionCommandDto, RunModeDto, WorkspaceRootDto};
+use intention_proto::{
+    DtoResult, ProjectId, ProtocolResultDto, SessionId, TimestampDto, WorkspaceId,
+};
 use intention_transport::{AsyncLocalListener, LocalEndpoint};
 
 /// The provider credential every fixture snapshot carries.
@@ -63,7 +63,6 @@ pub fn fixture_snapshot_with_context_window(
     )))
     .unwrap_or_else(|_| unreachable!("fixture configuration resolves"));
     ConfigSnapshotDto::new(
-        ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1)
             .unwrap_or_else(|_| unreachable!("fixture timestamp is valid")),
         resolved,

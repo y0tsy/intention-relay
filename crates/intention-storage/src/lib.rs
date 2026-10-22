@@ -19,12 +19,11 @@
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, RunStatusDto,
-    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto,
-    WorkspaceRootDto,
+    PendingTurnProjectionDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
+    SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto, WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, TimestampDto, UsageDto,
+    DtoResult, ErrorDto, FinishReasonDto, RunId, SessionId, TimestampDto, UsageDto,
     run_status_is_terminal,
 };
 
@@ -232,42 +231,23 @@ pub trait StorageRepositoryDto {
 
     /// Accepts a turn and atomically records whether it starts a run or becomes a pending message.
     ///
-    /// `proposed_run_id` and `config_snapshot` are committed if this turn starts
-    /// immediately, or retained as the immutable future-run selection if queued.
-    /// Repeating an accepted `idempotency_key` replays the current durable
-    /// outcome instead of recording a second turn.
+    /// `config_snapshot` is the immutable credential-free configuration the
+    /// accepted turn froze: a turn that starts a run commits it on that run's
+    /// row, and a turn that stays pending commits no configuration of its own.
     ///
     /// # Errors
     ///
     /// Returns a validation error when content is blank or exceeds the durable
-    /// turn-content bound (512 KiB), a validation, not-found, or conflict error
-    /// when the turn cannot be accepted for its session, or an unavailable error
-    /// when storage fails.
+    /// turn-content bound (512 KiB), a validation or not-found error when the
+    /// turn cannot be accepted for its session, or an unavailable error when
+    /// storage fails.
     fn accept_user_turn(
         &self,
         session_id: SessionId,
-        idempotency_key: IdempotencyKey,
         content: &str,
-        proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto>;
-
-    /// Removes a not-yet-seen pending turn and returns its committed projection.
-    ///
-    /// `occurred_at` is intentionally unrecorded: a removed pending turn keeps
-    /// no durable removal time, and the caller-supplied value never enters a
-    /// stored column.
-    ///
-    /// # Errors
-    ///
-    /// Returns a not-found or conflict error when the pending turn cannot be
-    /// removed, or an unavailable error when durable storage fails.
-    fn remove_turn(
-        &self,
-        command: RemoveTurnCommandDto,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<PendingTurnProjectionDto>;
 
     /// Appends every pending user turn to one active run context in insertion order.
     ///
@@ -335,15 +315,13 @@ pub trait StorageRepositoryDto {
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto>;
 
-    /// Loads the persisted credential-free configuration selected for a matching run.
+    /// Loads the credential-free configuration frozen on one run's row.
     ///
     /// # Errors
     ///
-    /// Returns `run_configuration_not_found` only when the durable run row is
-    /// genuinely absent for the supplied identity, `storage_unavailable` when the
-    /// durable backend cannot be read at all, `run_configuration_unavailable`
-    /// when the persisted safe selection row is absent, and
-    /// `storage_decode_failed` when the selection is present but cannot be
+    /// Returns `storage_record_not_found` only when the durable run row is
+    /// genuinely absent for the supplied identity, and `storage_unavailable`
+    /// when the durable backend cannot be read or the frozen snapshot cannot be
     /// decoded. Credentials, raw TOML, configuration paths, and backend
     /// resources never cross this boundary.
     fn load_run_config_snapshot(
@@ -360,8 +338,8 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns `run_model_context_unavailable` when the run is unknown,
-    /// cross-session, no longer starting, or durable context cannot be read.
+    /// Returns `storage_unavailable` when the run is unknown, cross-session, no
+    /// longer starting, or durable context cannot be read.
     /// No partial context, credentials, raw TOML, configuration paths, or backend
     /// resources cross this DTO-only boundary on failure.
     fn load_starting_run_model_context(
@@ -474,12 +452,4 @@ pub trait StorageRepositoryDto {
         let messages = self.load_recent_messages(session_id, message_limit)?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
-
-    /// Records an already credential-free configuration revision snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation or conflict error when the revision cannot be
-    /// recorded, or an unavailable error when durable storage fails.
-    fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()>;
 }

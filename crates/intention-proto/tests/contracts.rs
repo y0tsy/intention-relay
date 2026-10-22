@@ -8,11 +8,10 @@
 )]
 
 use intention_proto::{
-    ConfigRevisionId, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
-    GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto, RemoveTurnCommandDto,
-    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SessionId,
-    SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto, WorkspaceId,
-    WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
+    CreateSessionCommandDto, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, ProjectId,
+    ProviderErrorDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto,
+    SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto,
+    WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -172,17 +171,14 @@ fn workspace_root_accepts_only_absolute_non_empty_native_paths() {
 }
 
 #[test]
-fn send_turn_requires_content_and_typed_identity() {
+fn send_turn_requires_content() {
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
-    let command = SendUserTurnCommandDto::new(session_id, idempotency_key, "Explain M1")
+    let command = SendUserTurnCommandDto::new(session_id, "Explain M1")
         .expect("non-empty fixture message is valid");
 
     assert_eq!(command.session_id(), session_id);
-    assert_eq!(command.idempotency_key(), idempotency_key);
     assert_eq!(command.content(), "Explain M1");
-    assert_ne!(idempotency_key, IdempotencyKey::new());
-    assert!(SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "   ").is_err());
+    assert!(SendUserTurnCommandDto::new(SessionId::new(), "   ").is_err());
 
     let decoded: SendUserTurnCommandDto =
         serde_json::from_str(&serde_json::to_string(&command).expect("command serializes"))
@@ -192,7 +188,6 @@ fn send_turn_requires_content_and_typed_identity() {
     assert!(
         serde_json::from_value::<SendUserTurnCommandDto>(serde_json::json!({
             "session_id": session_id,
-            "idempotency_key": idempotency_key,
             "content": " "
         }))
         .is_err()
@@ -202,12 +197,11 @@ fn send_turn_requires_content_and_typed_identity() {
             "session_id": session_id,
             "content": "Explain M1"
         }))
-        .is_err()
+        .is_ok()
     );
     assert!(
         serde_json::from_value::<SendUserTurnCommandDto>(serde_json::json!({
             "session_id": session_id,
-            "idempotency_key": idempotency_key,
             "content": "Explain M1",
             "future_additive_field": true
         }))
@@ -268,16 +262,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         serde_json::json!("plan")
     );
 
-    let turn_id = TurnId::new();
-
-    let removal = RemoveTurnCommandDto::new(session_id, turn_id);
-    assert_eq!(removal.session_id(), session_id);
-    assert_eq!(removal.turn_id(), turn_id);
-    let decoded: RemoveTurnCommandDto =
-        serde_json::from_str(&serde_json::to_string(&removal).expect("removal serializes"))
-            .expect("removal decodes");
-    assert_eq!(decoded, removal);
-
     let query = GetSessionSnapshotQueryDto::new(session_id);
     assert_eq!(query.session_id(), session_id);
     let decoded: GetSessionSnapshotQueryDto =
@@ -290,7 +274,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
 fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let revision = ConfigRevisionId::new();
     let started_at = fixture_time(1_726_000_000);
     let finished_at = fixture_time(1_726_000_013);
     let usage = UsageDto::reported(1_200, 300, 1_500).expect("fixture usage is consistent");
@@ -299,7 +282,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
         run_id,
         TurnId::new(),
         RunStatusDto::Completed,
-        revision,
         Some(usage),
         started_at,
         Some(finished_at),
@@ -310,7 +292,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
     assert_eq!(run.session_id(), session_id);
     assert_eq!(run.run_id(), run_id);
     assert_eq!(run.status(), RunStatusDto::Completed);
-    assert_eq!(run.config_revision_id(), revision);
     assert_eq!(run.usage(), Some(usage));
     assert_eq!(run.started_at(), started_at);
     assert_eq!(run.finished_at(), Some(finished_at));
@@ -328,7 +309,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
         run_id,
         TurnId::new(),
         RunStatusDto::Running,
-        revision,
         None,
         started_at,
         None,
@@ -357,7 +337,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
 fn a_terminal_run_projection_requires_its_finish_time() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let revision = ConfigRevisionId::new();
     let started_at = fixture_time(1_726_000_000);
     for status in [
         RunStatusDto::Completed,
@@ -369,7 +348,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
             run_id,
             TurnId::new(),
             status,
-            revision,
             None,
             started_at,
             None,
@@ -386,7 +364,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
                 run_id,
                 TurnId::new(),
                 status,
-                revision,
                 None,
                 started_at,
                 Some(started_at),
@@ -402,7 +379,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
             run_id,
             TurnId::new(),
             RunStatusDto::Completed,
-            revision,
             None,
             started_at,
             Some(started_at),
@@ -424,7 +400,6 @@ fn a_finish_time_precedes_its_start_time_never() {
         run_id,
         TurnId::new(),
         RunStatusDto::Completed,
-        ConfigRevisionId::new(),
         None,
         started_at,
         Some(earlier),
@@ -444,7 +419,6 @@ fn a_session_projection_carries_an_optional_provider_model() {
         WorkspaceId::new(),
         workspace_root(),
         RunModeDto::Build,
-        None,
         None,
     )
     .expect("the fixture session projection is coherent");

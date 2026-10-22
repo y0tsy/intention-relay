@@ -22,9 +22,8 @@ use intention_proto::DaemonHealthDto;
 #[cfg(test)]
 use intention_proto::WorkspaceRootDto;
 use intention_proto::{
-    CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DtoResult, ErrorDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunId, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
+    CancelRunCommandDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
+    ProtocolResultDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
     SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto, TimestampDto,
 };
 use intention_providers::GenericChatDriver;
@@ -258,7 +257,6 @@ impl DaemonApplicationFacade {
             database_location.as_ref().to_string_lossy().into_owned(),
         )?;
         let repository = SqliteStorageRepository::open(location)?;
-        repository.accept_configuration_revision(config_snapshot.clone())?;
         let facade = Self {
             inner: Arc::new(FacadeInner {
                 repository,
@@ -358,11 +356,9 @@ impl DaemonApplicationFacade {
 
     /// Accepts one user turn and assembles its typed reply evidence.
     ///
-    /// The proposed run identity is derived from the caller's idempotency key,
-    /// so a repeated command proposes the identity the durable turn already
-    /// recorded and the repository replays its outcome instead of reporting a
-    /// conflict. Both identities are canonical UUIDs, so one caller identity
-    /// selects exactly one run.
+    /// A turn that starts a run freezes the daemon's startup configuration on
+    /// that run's row; a turn that queues behind an active run carries no
+    /// configuration of its own.
     ///
     /// `observer` receives the committed acceptance the way every other durable
     /// commit reaches the host's one sink, so a session's subscribers learn of
@@ -377,31 +373,13 @@ impl DaemonApplicationFacade {
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
-            let proposed_run_id = RunId::parse(&command.idempotency_key().to_string())?;
             let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
                 command,
-                proposed_run_id,
                 self.inner.config_snapshot.clone(),
                 now()?,
                 observer,
             )?;
             Ok(turn_accepted(&outcome))
-        })
-    }
-
-    /// Removes one not-yet-seen pending user turn and assembles its typed reply evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed durable failure when no pending turn can be removed.
-    pub fn remove_turn(&self, command: RemoveTurnCommandDto) -> DtoResult<ProtocolResultDto> {
-        self.inner.command_gate.run(|| {
-            let turn =
-                ApplicationService::new(&self.inner.repository).remove_turn(command, now()?)?;
-            Ok(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                turn.session_id(),
-                turn.turn_id(),
-            )))
         })
     }
 
@@ -471,7 +449,6 @@ const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAccept
             run.turn_id(),
             SendUserTurnOutcomeDto::Started {
                 run_id: run.run_id(),
-                config_revision_id: run.config_revision_id(),
             },
         ),
         AcceptedTurnOutcomeDto::Pending(turn) => SendUserTurnAcceptedDto::new(
@@ -496,11 +473,7 @@ fn load_provider_configuration(
         )
     })?;
     let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml))?;
-    let snapshot = ConfigSnapshotDto::new(
-        ConfigRevisionId::new(),
-        now()?,
-        material.safe_resolved().clone(),
-    );
+    let snapshot = ConfigSnapshotDto::new(now()?, material.safe_resolved().clone());
     let selected_provider = ConfiguredProvider::from_startup_material(material)?;
     Ok((snapshot, selected_provider))
 }
@@ -656,8 +629,8 @@ mod tests {
 
     use intention_engine::{RunCancellation, SessionCommitDto};
     use intention_proto::{
-        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
-        ToolResultStatusDto,
+        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, RunId,
+        SendUserTurnCommandDto, ToolResultStatusDto,
     };
     use intention_test_support::{fixture_session_command, fixture_snapshot};
     use tempfile::TempDir;
@@ -712,12 +685,7 @@ mod tests {
         content: &str,
     ) -> DtoResult<ProtocolResultDto> {
         facade.send_user_turn(
-            SendUserTurnCommandDto::new(
-                session_id,
-                intention_proto::IdempotencyKey::new(),
-                content,
-            )
-            .expect("fixture user turn is valid"),
+            SendUserTurnCommandDto::new(session_id, content).expect("fixture user turn is valid"),
             &RecordingPublisher::new(),
         )
     }
@@ -753,17 +721,16 @@ mod tests {
     }
 
     #[test]
-    fn facade_replay_of_the_same_user_turn_returns_the_recorded_outcome() {
+    fn a_repeated_turn_command_is_an_ordinary_second_turn() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
-            directory.path().join("idempotent-turn.sqlite"),
+            directory.path().join("repeated-turn.sqlite"),
             fixture_snapshot(),
         )
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let key = intention_proto::IdempotencyKey::new();
-        let command = SendUserTurnCommandDto::new(session_id, key, "idempotent turn")
+        let command = SendUserTurnCommandDto::new(session_id, "repeated turn")
             .expect("fixture user turn is valid");
 
         let initial = facade
@@ -775,19 +742,27 @@ mod tests {
         let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
             unreachable!("the first user turn starts a run")
         };
-        let committed = run_messages(&facade, session_id, run_id);
 
-        // The proposed run identity is derived from the caller's idempotency
-        // key, so a repeated command proposes an identity the durable turn
-        // already recorded and fails as a typed conflict.
-        let error = facade
+        // A turn carries no caller identity, so the same content accepted again
+        // is an ordinary second turn: it queues behind the active run instead of
+        // replaying or conflicting.
+        let repeated = facade
             .send_user_turn(command, &RecordingPublisher::new())
-            .expect_err("a repeated command proposes a bound run identity");
-        assert_eq!(error.code(), "turn_identity_conflict");
+            .expect("the repeated turn is accepted");
+        let ProtocolResultDto::TurnAccepted(repeated_turn) = repeated else {
+            unreachable!("the repeated turn returns user-turn evidence")
+        };
+        assert_eq!(repeated_turn.outcome(), SendUserTurnOutcomeDto::Pending);
         assert_eq!(
-            run_messages(&facade, session_id, run_id),
-            committed,
-            "the repeated command duplicates no transcript row"
+            facade
+                .session_snapshot(session_id)
+                .expect("the session snapshot reads")
+                .projection()
+                .active_run()
+                .expect("the first run is still active")
+                .run_id(),
+            run_id,
+            "a queued turn starts no second run"
         );
     }
 

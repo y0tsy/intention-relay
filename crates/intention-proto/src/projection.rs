@@ -4,8 +4,8 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, MessageId, ProjectId, RunId,
-    SessionId, ToolCallId, ToolIdentityDto, ToolRowDto, TurnId, WorkspaceId,
+    DtoResult, ErrorCategoryDto, ErrorDto, MessageId, ProjectId, RunId, SessionId, ToolCallId,
+    ToolIdentityDto, ToolRowDto, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -88,8 +88,6 @@ pub struct SessionProjectionDto {
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    config_revision_id: Option<ConfigRevisionId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_model: Option<String>,
@@ -108,8 +106,6 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             workspace_root: WorkspaceRootDto,
             mode: RunModeDto,
             #[serde(default)]
-            config_revision_id: Option<ConfigRevisionId>,
-            #[serde(default)]
             active_run: Option<RunProjectionDto>,
             #[serde(default)]
             provider_model: Option<String>,
@@ -122,7 +118,6 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             raw.workspace_id,
             raw.workspace_root,
             raw.mode,
-            raw.config_revision_id,
             raw.active_run,
         )
         .map_err(de::Error::custom)?;
@@ -148,7 +143,6 @@ impl SessionProjectionDto {
         workspace_id: WorkspaceId,
         workspace_root: WorkspaceRootDto,
         mode: RunModeDto,
-        config_revision_id: Option<ConfigRevisionId>,
         active_run: Option<RunProjectionDto>,
     ) -> DtoResult<Self> {
         if active_run.is_some_and(|run| run.session_id() != session_id) {
@@ -163,7 +157,6 @@ impl SessionProjectionDto {
             workspace_id,
             workspace_root,
             mode,
-            config_revision_id,
             active_run,
             provider_model: None,
         })
@@ -215,11 +208,6 @@ impl SessionProjectionDto {
     #[must_use]
     pub const fn mode(&self) -> RunModeDto {
         self.mode
-    }
-    /// Returns the latest accepted configuration revision, if one exists.
-    #[must_use]
-    pub const fn config_revision_id(&self) -> Option<ConfigRevisionId> {
-        self.config_revision_id
     }
     /// Returns the sole active run, if one exists.
     #[must_use]

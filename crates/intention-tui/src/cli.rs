@@ -146,7 +146,7 @@ pub enum Invocation {
 
 /// The closed set of process statuses the terminal client returns.
 ///
-/// The codes are the slice contract: `0` completed, `1` usage, `2` daemon or
+/// The codes are the process contract: `0` completed, `1` usage, `2` daemon or
 /// transport, `3` typed rejection or failed run, `4` the wait deadline expired
 /// with no terminal status observed, and `5` interrupted run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

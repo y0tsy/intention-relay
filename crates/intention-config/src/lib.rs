@@ -8,7 +8,7 @@
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use intention_proto::{ConfigRevisionId, DtoResult, ErrorDto, TimestampDto};
+use intention_proto::{DtoResult, ErrorDto, TimestampDto};
 use serde::{Deserialize, Serialize};
 
 /// The one live configuration schema version the TOML parser accepts.
@@ -372,7 +372,6 @@ impl ResolvedConfigDto {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSnapshotDto {
-    revision_id: ConfigRevisionId,
     captured_at: TimestampDto,
     resolved: ResolvedConfigDto,
 }
@@ -380,22 +379,11 @@ pub struct ConfigSnapshotDto {
 impl ConfigSnapshotDto {
     /// Creates an immutable credential-free configuration snapshot.
     #[must_use]
-    pub fn new(
-        revision_id: ConfigRevisionId,
-        captured_at: TimestampDto,
-        resolved: ResolvedConfigDto,
-    ) -> Self {
+    pub const fn new(captured_at: TimestampDto, resolved: ResolvedConfigDto) -> Self {
         Self {
-            revision_id,
             captured_at,
             resolved,
         }
-    }
-
-    /// Returns the future durable configuration revision identity.
-    #[must_use]
-    pub const fn revision_id(&self) -> ConfigRevisionId {
-        self.revision_id
     }
 
     /// Returns the snapshot capture time.

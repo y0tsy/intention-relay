@@ -32,8 +32,8 @@ use intention_proto::{
     SessionSnapshotDto, SubscribeSessionCommandDto, TextDeltaChannelDto, decode_response,
     encode_request, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, RunId, SessionId};
 use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
+use intention_proto::{RunId, SessionId};
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelRequestDto, ModelRoleDto,
@@ -333,8 +333,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
         endpoint,
         1,
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "host turn")
-                .expect("turn is valid"),
+            SendUserTurnCommandDto::new(session_id, "host turn").expect("turn is valid"),
         ),
     )
     .await;
@@ -353,7 +352,7 @@ async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: Se
         endpoint,
         1,
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "pending host turn")
+            SendUserTurnCommandDto::new(session_id, "pending host turn")
                 .expect("pending turn is valid"),
         ),
     )

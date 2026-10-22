@@ -11,10 +11,9 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    CancelRunCommandDto, ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorDto,
-    GetSessionSnapshotQueryDto, MessageProjectionDto, ProjectId, RemoveTurnCommandDto, RunId,
-    RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId, SessionProjectionDto,
-    TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    CancelRunCommandDto, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
+    MessageProjectionDto, ProjectId, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto,
+    SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -448,8 +447,6 @@ pub enum ClientRequestDto {
     CreateSession(CreateSessionCommandDto),
     /// Sends an accepted user turn to the daemon authority.
     SendUserTurn(SendUserTurnCommandDto),
-    /// Requests removal of a not-yet-seen pending user turn.
-    RemoveTurn(RemoveTurnCommandDto),
     /// Requests that an active daemon-owned run stop for good.
     CancelRun(CancelRunCommandDto),
     /// Obtains the latest durable session projection.
@@ -503,8 +500,6 @@ pub enum ProtocolResultDto {
     SessionCreated(CreateSessionAcceptedDto),
     /// A user turn was accepted and either started a run or became a pending message.
     TurnAccepted(SendUserTurnAcceptedDto),
-    /// A pending user turn was removed.
-    TurnRemoved(RemoveTurnAcceptedDto),
     /// A stop request was accepted for a run.
     RunCancelled(RunCancelledAcceptedDto),
     /// A current durable session projection.
@@ -576,11 +571,8 @@ impl CreateSessionAcceptedDto {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SendUserTurnOutcomeDto {
-    /// The accepted turn started a run with its immutable configuration revision.
-    Started {
-        run_id: RunId,
-        config_revision_id: ConfigRevisionId,
-    },
+    /// The accepted turn started a run.
+    Started { run_id: RunId },
     /// The accepted turn is a pending message that joins the active run context.
     Pending,
 }
@@ -624,36 +616,6 @@ impl SendUserTurnAcceptedDto {
     #[must_use]
     pub const fn outcome(self) -> SendUserTurnOutcomeDto {
         self.outcome
-    }
-}
-
-/// Typed acceptance evidence for a removed pending turn.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveTurnAcceptedDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-}
-
-impl RemoveTurnAcceptedDto {
-    /// Creates complete pending-turn removal acceptance evidence.
-    #[must_use]
-    pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
-        Self {
-            session_id,
-            turn_id,
-        }
-    }
-
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the removed turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
     }
 }
 
@@ -895,7 +857,6 @@ mod tests {
             fixture_workspace_root(),
             crate::RunModeDto::Build,
             None,
-            None,
         )
         .expect("fixture projection is valid")
     }
@@ -919,7 +880,6 @@ mod tests {
             run_id,
             TurnId::new(),
             crate::RunStatusDto::Running,
-            ConfigRevisionId::new(),
             None,
             crate::TimestampDto::from_unix_seconds(1_726_000_000)
                 .expect("fixture timestamp is valid"),

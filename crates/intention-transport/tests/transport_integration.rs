@@ -53,7 +53,6 @@ fn status_frame(
             run_id,
             intention_proto::TurnId::new(),
             intention_proto::RunStatusDto::Running,
-            intention_proto::ConfigRevisionId::new(),
             None,
             intention_proto::TimestampDto::from_unix_seconds(1_726_000_000)
                 .expect("fixture timestamp is valid"),

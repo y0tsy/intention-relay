@@ -835,7 +835,7 @@ fn the_advertised_specs_are_the_declared_tool_set_in_order() {
         assert!(!spec.description().is_empty());
         let schema = spec.input_schema();
         let schema_json: serde_json::Value =
-            serde_json::from_str(schema).expect("input schema json");
+            serde_json::from_str(&schema).expect("input schema json");
         assert!(schema_json.is_object());
         assert_eq!(schema_json["type"], "object");
         if let Err(error) = ToolInput::from_arguments_json(id.as_str(), "{}") {
@@ -878,61 +878,23 @@ fn former_reserved_tool_names_stay_unknown() {
     }
 }
 
-/// Asserts one tool schema document is a JSON object whose properties match
-/// the keys of the serialized typed payload, and that every required property
-/// is present and non-null in that payload.
-fn assert_schema_agrees_with_payload(
-    id: ToolId,
-    schema_json: &str,
-    expected_properties: &[&str],
-    expected_required: &[&str],
-    payload: &serde_json::Value,
-) {
-    let schema: serde_json::Value = serde_json::from_str(schema_json).expect("schema json");
-    assert_eq!(schema["type"], "object");
-    let properties = schema["properties"].as_object().expect("schema properties");
-    let mut schema_properties = properties.keys().map(String::as_str).collect::<Vec<_>>();
-    schema_properties.sort_unstable();
-    let object = payload.as_object().expect("serialized payload object");
-    let mut serialized_keys = object.keys().map(String::as_str).collect::<Vec<_>>();
-    serialized_keys.sort_unstable();
-    let mut expected = expected_properties.to_vec();
-    expected.sort_unstable();
-    assert_eq!(schema_properties, expected);
-    assert_eq!(serialized_keys, expected);
-    let required = schema["required"]
-        .as_array()
-        .expect("schema required list")
-        .iter()
-        .map(|name| name.as_str().expect("required name"))
-        .collect::<Vec<_>>();
-    assert_eq!(required, expected_required.to_vec());
-    for name in required {
-        assert!(
-            object.get(name).is_some_and(|value| !value.is_null()),
-            "required property {name} is absent or null in the serialized {} payload",
-            id.as_str()
-        );
-    }
-}
-
-/// Asserts each advertised tool's input schema (the former model parameter
-/// schema) against the serialized typed inputs.
+/// Asserts each advertised tool's input schema is the JSON Schema object
+/// document of exactly the typed arguments its fixture serializes, and that
+/// every property the schema requires is present and non-null in that fixture.
+///
+/// The document is rendered from the typed input definition, so this checks
+/// that no argument silently drops out of the model-facing contract.
 #[test]
-fn model_parameter_schemas_agree_with_serialized_inputs() {
+fn advertised_schemas_cover_the_typed_arguments() {
     let path = WorkspaceRelativePathDto::parse("src/main.rs").expect("path");
     let text = |value: &str| BoundedText::new(value).expect("text");
     let input_fixtures = [
         (
             ToolId::Read,
-            &["path"][..],
-            &["path"][..],
             serde_json::to_value(ReadInput { path: path.clone() }).expect("read fixture"),
         ),
         (
             ToolId::Write,
-            &["path", "content", "expected_content"][..],
-            &["path", "content"][..],
             serde_json::to_value(WriteInput {
                 path: path.clone(),
                 content: text("content"),
@@ -942,8 +904,6 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
         ),
         (
             ToolId::Edit,
-            &["path", "old", "new", "expected_content"][..],
-            &["path", "old", "new"][..],
             serde_json::to_value(EditInput {
                 path: path.clone(),
                 old: text("old"),
@@ -954,8 +914,6 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
         ),
         (
             ToolId::Execute,
-            &["command", "cwd", "env", "timeout_seconds"][..],
-            &["command"][..],
             serde_json::to_value(ExecuteInput {
                 command: ShellCommandTextDto::new("cargo test").expect("command"),
                 cwd: None,
@@ -966,8 +924,6 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
         ),
         (
             ToolId::Glob,
-            &["pattern"][..],
-            &["pattern"][..],
             serde_json::to_value(GlobInput {
                 pattern: text("**/*.rs"),
             })
@@ -975,8 +931,6 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
         ),
         (
             ToolId::Grep,
-            &["pattern", "scope", "path"][..],
-            &["pattern"][..],
             serde_json::to_value(GrepInput {
                 pattern: text("needle"),
                 scope: Some(GrepScope::Directory { path: path.clone() }),
@@ -988,17 +942,36 @@ fn model_parameter_schemas_agree_with_serialized_inputs() {
     let visible = model_visible_descriptors();
     assert_eq!(visible.len(), input_fixtures.len());
     for spec in visible {
-        let input_fixture = input_fixtures
+        let payload = input_fixtures
             .iter()
             .find(|entry| entry.0 == spec.id())
-            .expect("input fixture for every model-visible tool");
-        assert_schema_agrees_with_payload(
-            spec.id(),
-            spec.input_schema(),
-            input_fixture.1,
-            input_fixture.2,
-            &input_fixture.3,
+            .expect("input fixture for every model-visible tool")
+            .1
+            .clone();
+        let schema: serde_json::Value =
+            serde_json::from_str(&spec.input_schema()).expect("input schema json");
+        assert_eq!(schema["type"], "object", "{}", spec.id().as_str());
+        let properties = schema["properties"].as_object().expect("schema properties");
+        let mut schema_properties = properties.keys().cloned().collect::<Vec<_>>();
+        schema_properties.sort_unstable();
+        let object = payload.as_object().expect("serialized payload object");
+        let mut serialized_keys = object.keys().cloned().collect::<Vec<_>>();
+        serialized_keys.sort_unstable();
+        assert_eq!(
+            schema_properties,
+            serialized_keys,
+            "the advertised {} schema covers its typed arguments",
+            spec.id().as_str()
         );
+        let required = schema["required"].as_array().map_or(&[][..], Vec::as_slice);
+        for name in required {
+            let name = name.as_str().expect("required name");
+            assert!(
+                object.get(name).is_some_and(|value| !value.is_null()),
+                "required property {name} is absent or null in the serialized {} payload",
+                spec.id().as_str()
+            );
+        }
     }
 }
 

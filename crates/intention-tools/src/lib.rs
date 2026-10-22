@@ -949,15 +949,16 @@ fn read_bounded(
 
 /// Static specification of one tool.
 ///
-/// The specification carries the three strings the model boundary consumes:
-/// the tool identity, its description, and the JSON Schema document text for
-/// its typed model arguments. The typed input DTO is the decode authority and
-/// the typed result DTO is the result contract, so no result schema is kept.
+/// The specification carries the two code-owned strings the model boundary
+/// consumes: the tool identity and its description. The tool's model arguments
+/// are defined once, by the typed input DTO that decodes them in
+/// `intention-proto`, and [`ToolSpec::input_schema`] renders their JSON Schema
+/// document from that definition. The typed result DTO is the result contract,
+/// so no result schema is kept.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ToolSpec {
     id: ToolId,
     description: &'static str,
-    input_schema: &'static str,
 }
 impl ToolSpec {
     /// Returns the tool this specification describes.
@@ -969,151 +970,13 @@ impl ToolSpec {
     pub const fn description(self) -> &'static str {
         self.description
     }
-    /// Returns the JSON Schema document text for this tool's typed model
-    /// arguments.
+    /// Returns the JSON Schema document of this tool's typed model arguments,
+    /// rendered from the typed input DTO that defines them.
     #[must_use]
-    pub const fn input_schema(self) -> &'static str {
-        self.input_schema
+    pub fn input_schema(self) -> String {
+        self.id.input_schema()
     }
 }
-
-/// JSON Schema for the `read` tool's typed model arguments.
-pub const READ_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to read."
-    }
-  },
-  "required": ["path"]
-}"#;
-
-/// JSON Schema for the `write` tool's typed model arguments.
-pub const WRITE_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to write."
-    },
-    "content": {
-      "type": "string",
-      "description": "Bounded text to write to the file."
-    },
-    "expected_content": {
-      "type": "string",
-      "description": "Optional guard: the write applies only while the file holds exactly this text."
-    }
-  },
-  "required": ["path", "content"]
-}"#;
-
-/// JSON Schema for the `edit` tool's typed model arguments.
-pub const EDIT_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to edit."
-    },
-    "old": {
-      "type": "string",
-      "description": "Existing text to replace."
-    },
-    "new": {
-      "type": "string",
-      "description": "Replacement text."
-    },
-    "expected_content": {
-      "type": "string",
-      "description": "Optional guard: the edit applies only while the file holds exactly this text."
-    }
-  },
-  "required": ["path", "old", "new"]
-}"#;
-
-/// JSON Schema for the `execute` tool's typed model arguments.
-pub const EXECUTE_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "command": {
-      "type": "string",
-      "description": "Shell command text with shell semantics: pipelines, redirects, and compound commands."
-    },
-    "cwd": {
-      "type": "string",
-      "description": "Optional workspace-relative working directory; the workspace root by default."
-    },
-    "env": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Environment variable name."
-          },
-          "value": {
-            "type": "string",
-            "description": "Environment variable value."
-          }
-        },
-        "required": ["name", "value"]
-      },
-      "description": "Optional environment variables overlaid on the inherited environment."
-    },
-    "timeout_seconds": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Optional per-call deadline in whole seconds. Without it the command runs until it finishes or the run is cancelled; when it elapses the command is terminated and the call returns the captured output as a partial result whose notice names the timeout."
-    }
-  },
-  "required": ["command"]
-}"#;
-
-/// JSON Schema for the `glob` tool's typed model arguments.
-pub const GLOB_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "Glob pattern matched against workspace-relative paths."
-    }
-  },
-  "required": ["pattern"]
-}"#;
-
-/// JSON Schema for the `grep` tool's typed model arguments.
-pub const GREP_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "Text pattern to search for inside workspace files."
-    },
-    "scope": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "enum": ["file", "directory", "workspace"],
-          "description": "Search scope kind."
-        },
-        "path": {
-          "type": "string",
-          "description": "Workspace-relative path required by the file and directory scope kinds."
-        }
-      },
-      "required": ["kind"]
-    },
-    "path": {
-      "type": "string",
-      "description": "Optional workspace-relative path narrowing the search."
-    }
-  },
-  "required": ["pattern"]
-}"#;
 
 /// Returns the static specification of one tool.
 #[must_use]
@@ -1122,32 +985,26 @@ pub const fn spec(id: ToolId) -> ToolSpec {
         ToolId::Read => ToolSpec {
             id,
             description: "Read bounded text from a workspace file.",
-            input_schema: READ_INPUT_SCHEMA,
         },
         ToolId::Write => ToolSpec {
             id,
             description: "Write bounded text to a workspace file.",
-            input_schema: WRITE_INPUT_SCHEMA,
         },
         ToolId::Edit => ToolSpec {
             id,
             description: "Apply a bounded text replacement.",
-            input_schema: EDIT_INPUT_SCHEMA,
         },
         ToolId::Execute => ToolSpec {
             id,
             description: "Run a shell command in the workspace.",
-            input_schema: EXECUTE_INPUT_SCHEMA,
         },
         ToolId::Glob => ToolSpec {
             id,
             description: "List workspace paths matching a pattern.",
-            input_schema: GLOB_INPUT_SCHEMA,
         },
         ToolId::Grep => ToolSpec {
             id,
             description: "Search bounded workspace text.",
-            input_schema: GREP_INPUT_SCHEMA,
         },
     }
 }

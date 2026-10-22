@@ -59,7 +59,7 @@ use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeSessionCommandDto};
 use intention_test_support::daemon_process::{
     config_path, spawn_daemon, unique_endpoint, write_config_document,
@@ -538,7 +538,7 @@ async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) 
 /// Sends one user turn and returns the run it started.
 async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
     let outcome = live_client(endpoint)
-        .send_user_turn(session_id, IdempotencyKey::new(), content.to_owned())
+        .send_user_turn(session_id, content.to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {

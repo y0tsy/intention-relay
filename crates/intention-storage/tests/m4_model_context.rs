@@ -8,9 +8,8 @@ use common::{create_session, repository, time};
 
 use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
-    BoundedText, ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SessionId, TextResult,
-    ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
-    UsageDto,
+    BoundedText, FinishReasonDto, RunId, SessionId, TextResult, ToolCallId, ToolIdentityDto,
+    ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto, UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
 use intention_storage::{
@@ -226,7 +225,7 @@ fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
             .expect_err("non-starting run is unavailable"),
     ];
     for error in errors {
-        assert_eq!(error.code(), "run_model_context_unavailable");
+        assert_eq!(error.code(), "storage_unavailable");
         let rendered = error.to_string();
         assert!(!rendered.contains("recognizable-fixture-credential"));
         assert!(!rendered.contains("model-context.toml"));
@@ -241,22 +240,13 @@ fn start_run(
     model: &str,
     event_time: i64,
 ) -> RunId {
-    let run_id = RunId::new();
     let outcome = repository
-        .accept_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            content,
-            run_id,
-            snapshot(model),
-            time(event_time),
-        )
+        .accept_user_turn(session_id, content, snapshot(model), time(event_time))
         .expect("turn starts");
     match outcome {
         AcceptedTurnOutcomeDto::Started { run, message } => {
-            assert_eq!(run.run_id(), run_id);
             assert_eq!(message.text(), content);
-            run_id
+            run.run_id()
         }
         AcceptedTurnOutcomeDto::Pending(_) => unreachable!("a fresh session starts the run"),
     }
@@ -335,5 +325,5 @@ fn snapshot(model: &str) -> ConfigSnapshotDto {
         "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
     )))
     .expect("safe configuration resolves");
-    ConfigSnapshotDto::new(ConfigRevisionId::new(), time(1), resolved)
+    ConfigSnapshotDto::new(time(1), resolved)
 }

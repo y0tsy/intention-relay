@@ -16,15 +16,14 @@ use common::{fixture_message, fixture_projection, fixture_workspace_root};
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
     CreateSessionFirstTurnDto, DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto,
-    ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, decode_request_line, decode_response, encode_reply, encode_request,
-    parse_daemon_message, parse_session_frame, run_status_is_terminal,
-    validate_run_status_transition,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunCancelledAcceptedDto, RunProjectionDto,
+    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, decode_request_line,
+    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
+    run_status_is_terminal, validate_run_status_transition,
 };
-use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
+use intention_proto::{MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
 
 /// Returns one valid fixture timestamp in whole Unix seconds.
@@ -38,7 +37,6 @@ fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
         run_id,
         TurnId::new(),
         RunStatusDto::Running,
-        ConfigRevisionId::new(),
         None,
         timestamp(1_726_000_000),
         None,
@@ -83,7 +81,6 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
     match request {
         ClientRequestDto::CreateSession(_) => "session_created",
         ClientRequestDto::SendUserTurn(_) => "turn_accepted",
-        ClientRequestDto::RemoveTurn(_) => "turn_removed",
         ClientRequestDto::CancelRun(_) => "run_cancelled",
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
@@ -103,10 +100,8 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
             None,
         )),
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
-                .expect("fixture turn is valid"),
+            SendUserTurnCommandDto::new(session_id, "hello").expect("fixture turn is valid"),
         ),
-        ClientRequestDto::RemoveTurn(RemoveTurnCommandDto::new(session_id, TurnId::new())),
         ClientRequestDto::CancelRun(CancelRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
@@ -128,7 +123,6 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
             TurnId::new(),
             SendUserTurnOutcomeDto::Pending,
         )),
-        ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(session_id, TurnId::new())),
         ProtocolResultDto::RunCancelled(RunCancelledAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
@@ -179,7 +173,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        8,
+        7,
         "the wire implements exactly one request kind per operation"
     );
 }
@@ -296,9 +290,8 @@ fn a_create_command_may_omit_its_mode() {
 #[test]
 fn a_create_command_carries_an_optional_first_turn() {
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
-    let turn = CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
-        .expect("a non-blank first turn is valid");
+    let turn =
+        CreateSessionFirstTurnDto::new("first prompt").expect("a non-blank first turn is valid");
     let declared = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
@@ -309,14 +302,9 @@ fn a_create_command_carries_an_optional_first_turn() {
     );
     let value = serde_json::to_value(&declared).expect("the command serializes");
     assert_eq!(value["first_turn"]["content"], "first prompt");
-    assert_eq!(
-        value["first_turn"]["idempotency_key"],
-        serde_json::to_value(idempotency_key).expect("the key serializes")
-    );
     let decoded: CreateSessionCommandDto =
         serde_json::from_value(value).expect("the command decodes");
     let first_turn = decoded.first_turn().expect("the turn round-trips");
-    assert_eq!(first_turn.idempotency_key(), idempotency_key);
     assert_eq!(first_turn.content(), "first prompt");
 
     // A command with no first turn omits the field entirely and decodes again.
@@ -339,11 +327,10 @@ fn a_create_command_carries_an_optional_first_turn() {
 
     // A blank first turn is never a turn: the DTO rejects it on construction.
     assert!(
-        CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "   ").is_err(),
+        CreateSessionFirstTurnDto::new("   ").is_err(),
         "blank first-turn content is rejected"
     );
     let blank = serde_json::json!({
-        "idempotency_key": IdempotencyKey::new(),
         "content": " \n ",
     });
     assert!(
@@ -360,7 +347,6 @@ fn a_create_acceptance_carries_the_first_turn_evidence() {
         TurnId::new(),
         SendUserTurnOutcomeDto::Started {
             run_id: RunId::new(),
-            config_revision_id: ConfigRevisionId::new(),
         },
     );
     let accepted =
@@ -543,7 +529,7 @@ fn malformed_wire_lines_fail_closed() {
     );
     assert!(
         serde_json::from_str::<ClientRequestDto>(
-            r#"{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","idempotency_key":"11111111-1111-4111-8111-111111111111","content":" "}}"#
+            r#"{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","content":" "}}"#
         )
         .is_err(),
         "a blank turn command fails closed"

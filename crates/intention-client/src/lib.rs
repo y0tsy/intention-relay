@@ -15,13 +15,12 @@ use std::time::{Duration, Instant};
 
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto,
-    IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId, RunProjectionDto,
-    RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionSnapshotDto, SessionSummariesDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, TurnId, decode_response, encode_request, parse_session_frame,
-    run_status_is_terminal,
+    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, MessageId,
+    MessageKindDto, MessageProjectionDto, ProtocolResultDto, RunCancelledAcceptedDto, RunId,
+    RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, decode_response,
+    encode_request, parse_session_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -262,38 +261,14 @@ impl IntentionClient {
     pub async fn send_user_turn(
         &self,
         session_id: SessionId,
-        idempotency_key: IdempotencyKey,
         content: String,
     ) -> DtoResult<SendUserTurnOutcomeDto> {
-        let command = SendUserTurnCommandDto::new(session_id, idempotency_key, content)?;
+        let command = SendUserTurnCommandDto::new(session_id, content)?;
         match self
             .request(ClientRequestDto::SendUserTurn(command))
             .await?
         {
             ProtocolResultDto::TurnAccepted(turn) => Ok(turn.outcome()),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    /// Removes one not-yet-seen pending user turn.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not the removal of this
-    /// session's turn.
-    pub async fn remove_turn(
-        &self,
-        session_id: SessionId,
-        turn_id: TurnId,
-    ) -> DtoResult<RemoveTurnAcceptedDto> {
-        match self
-            .request(ClientRequestDto::RemoveTurn(RemoveTurnCommandDto::new(
-                session_id, turn_id,
-            )))
-            .await?
-        {
-            ProtocolResultDto::TurnRemoved(removed) => Ok(removed),
             _ => Err(invalid_response()),
         }
     }

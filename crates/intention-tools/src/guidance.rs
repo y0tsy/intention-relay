@@ -150,7 +150,7 @@ mod tests {
             ),
         );
         assert!(guidance.contains("JSON Schema"));
-        assert!(guidance.contains(crate::EXECUTE_INPUT_SCHEMA));
+        assert!(guidance.contains(&crate::spec(ToolId::Execute).input_schema()));
     }
 
     #[test]

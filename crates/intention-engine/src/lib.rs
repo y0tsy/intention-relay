@@ -1,7 +1,7 @@
 //! Application command/query orchestration over DTO-only current-state storage.
 //!
-//! This crate maps committed repository outcomes into protocol-ready DTOs. It
-//! neither owns database resources nor reimplements repository idempotency.
+//! This crate maps committed repository outcomes into protocol-ready DTOs and
+//! owns no database resources.
 //! Every tool call commits its `tool_call` row before dispatch and exactly one
 //! terminal result row with its answering `tool_result` message afterwards.
 
@@ -15,9 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
-    NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
-    SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    NewMessageDto, RunProjectionDto, SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto,
+    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
@@ -359,9 +359,8 @@ where
     /// The session commits before the turn, so a rejected first turn leaves the
     /// durable session the client proposed and returns the typed rejection; no
     /// rollback exists and the next command may target that same session.
-    /// Repeating an exactly-replayed command is this creation's replay: the
-    /// durable `session_already_exists` conflict reads the session back and the
-    /// turn path replays its own recorded outcome.
+    /// Repeating a creation whose session already exists reads that session
+    /// back, and its carried turn is accepted as a new turn of it.
     ///
     /// # Errors
     ///
@@ -402,14 +401,9 @@ where
 
     /// Accepts one carried first turn against the session this creation made.
     ///
-    /// The proposed run identity is the turn path's own derivation: the same
-    /// session and `IdempotencyKey` always name the same run, so a replayed
-    /// command replays the recorded acceptance instead of conflicting.
-    ///
     /// # Errors
     ///
-    /// Returns the typed validation error when the run identity is not
-    /// canonical, or the typed admission error when the turn is rejected.
+    /// Returns the typed admission error when the turn is rejected.
     fn accept_first_turn(
         &self,
         first_turn: &CreateSessionFirstTurnDto,
@@ -418,19 +412,8 @@ where
         occurred_at: TimestampDto,
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
-        let proposed_run_id = RunId::parse(&first_turn.idempotency_key().to_string())?;
-        let command = SendUserTurnCommandDto::new(
-            session_id,
-            first_turn.idempotency_key(),
-            first_turn.content(),
-        )?;
-        self.send_user_turn(
-            command,
-            proposed_run_id,
-            config_snapshot,
-            occurred_at,
-            observer,
-        )
+        let command = SendUserTurnCommandDto::new(session_id, first_turn.content())?;
+        self.send_user_turn(command, config_snapshot, occurred_at, observer)
     }
 
     /// Returns `command` carrying the durable identity binding of its root.
@@ -473,12 +456,9 @@ where
     /// queued turn has no transcript row yet - its row commits when it joins
     /// the run context.
     ///
-    /// `proposed_run_id` must be a deterministic function of the command's own
-    /// identity: the same session and `IdempotencyKey` must always propose the
-    /// same [`RunId`], because the repository rejects a proposed identity that
-    /// is already bound. A retry that proposes a fresh identity would write a
-    /// second turn for one command, so the key is the turn's identity and a
-    /// repeat fails with `turn_identity_conflict`.
+    /// `config_snapshot` is the credential-free selection this acceptance
+    /// froze: a turn that starts a run commits it on that run's row, and a turn
+    /// that queues commits no configuration of its own.
     ///
     /// # Errors
     ///
@@ -486,16 +466,13 @@ where
     pub fn send_user_turn(
         &self,
         command: SendUserTurnCommandDto,
-        proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
         let accepted = self.repository.accept_user_turn(
             command.session_id(),
-            command.idempotency_key(),
             command.content(),
-            proposed_run_id,
             config_snapshot,
             occurred_at,
         )?;
@@ -507,19 +484,6 @@ where
             observer.observe_session_commit(&SessionCommitDto::Status(*run));
         }
         Ok(accepted)
-    }
-
-    /// Removes one not-yet-seen pending turn and returns its committed projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when no pending turn can be removed.
-    pub fn remove_turn(
-        &self,
-        command: RemoveTurnCommandDto,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<PendingTurnProjectionDto> {
-        self.repository.remove_turn(command, occurred_at)
     }
 
     /// Returns the exact active run one request addresses.

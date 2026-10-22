@@ -21,12 +21,11 @@ use intention_client::{
 };
 use intention_proto::TimestampDto;
 use intention_proto::{
-    ClientRequestDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    CreateSessionFirstTurnDto, DaemonHealthDto, IdempotencyKey, ProtocolDaemonMessageDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunProjectionDto, RunStatusDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
+    ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
+    DaemonHealthDto, ProtocolDaemonMessageDto, ProtocolResultDto, RunCancelledAcceptedDto, RunId,
+    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
 };
 use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{
@@ -58,7 +57,6 @@ fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         fixture_workspace_root(),
         RunModeDto::Build,
         None,
-        None,
     )
     .expect("fixture projection is valid")
 }
@@ -75,7 +73,6 @@ fn fixture_projection_with_run(
         WorkspaceId::new(),
         fixture_workspace_root(),
         RunModeDto::Build,
-        None,
         Some(fixture_run(session_id, run_id, status)),
     )
     .expect("fixture projection with a run is valid")
@@ -276,7 +273,6 @@ fn fixture_run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> Ru
         run_id,
         TurnId::new(),
         status,
-        ConfigRevisionId::new(),
         None,
         started_at,
         finished_at,
@@ -445,10 +441,9 @@ async fn connection_rejection_and_invalid_response_are_typed() {
             "fixture_rejected",
         ),
         (
-            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                SessionId::new(),
-                TurnId::new(),
-            ))),
+            FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+                RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
+            )),
             "invalid_local_protocol_response",
         ),
     ];
@@ -568,17 +563,13 @@ async fn command_rejection_is_typed() {
 async fn a_create_command_carries_its_first_turn() {
     let _guard = fixture_guard();
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
     let command = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
         fixture_workspace_root(),
         Some(RunModeDto::Build),
-        Some(
-            CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
-                .expect("fixture first turn is valid"),
-        ),
+        Some(CreateSessionFirstTurnDto::new("first prompt").expect("fixture first turn is valid")),
     );
 
     let first_turn_endpoint = endpoint();
@@ -673,8 +664,8 @@ async fn invalid_response_does_not_launch_a_daemon() {
     let _guard = fixture_guard();
     let endpoint = endpoint();
     let launches = Arc::new(AtomicUsize::new(0));
-    let response = FixtureResponse::Result(ProtocolResultDto::TurnRemoved(
-        RemoveTurnAcceptedDto::new(SessionId::new(), TurnId::new()),
+    let response = FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+        RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
     ));
     let server = start_fixture_server(endpoint.clone(), response.clone());
     let error = client(endpoint, response, Arc::clone(&launches))
@@ -760,18 +751,16 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
     let invalid_endpoint = endpoint();
     let server = start_fixture_server(
         invalid_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-            SessionId::new(),
-            TurnId::new(),
-        ))),
+        FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+            RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
+        )),
     );
     assert_eq!(
         client(
             invalid_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                SessionId::new(),
-                TurnId::new(),
-            ))),
+            FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+                RunCancelledAcceptedDto::new(SessionId::new(), RunId::new())
+            )),
             Arc::new(AtomicUsize::new(0)),
         )
         .list_sessions()

@@ -23,7 +23,6 @@ pub fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         fixture_workspace_root(),
         RunModeDto::Build,
         None,
-        None,
     )
     .expect("fixture projection is valid")
 }

@@ -1,9 +1,8 @@
 use intention_client::SessionStreamState;
 use intention_proto::{
-    ConfigRevisionId, DaemonHealthDto, ErrorDto, MessageProjectionDto, RunId, RunModeDto,
-    RunProjectionDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ToolCallId,
-    WorkspaceRootDto,
+    DaemonHealthDto, ErrorDto, MessageProjectionDto, RunId, RunModeDto, RunProjectionDto,
+    RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId, SessionSummariesDto,
+    SessionSummaryDto, TextDeltaChannelDto, TextDeltaFrameDto, ToolCallId, WorkspaceRootDto,
 };
 use intention_test_support::fixtures::{
     FIRST_SESSION, SECOND_SESSION, assistant_row, fixture_session, full_transcript, reasoning_row,
@@ -2036,7 +2035,6 @@ fn an_accepted_turn_opens_the_session_stream_when_none_is_live() {
     let mut state = opened_session(session_id, Vec::new());
     let effects = state.update(Action::TurnAccepted(SendUserTurnOutcomeDto::Started {
         run_id,
-        config_revision_id: ConfigRevisionId::new(),
     }));
     assert_eq!(
         effects,
@@ -2053,7 +2051,6 @@ fn an_accepted_turn_on_a_live_session_stream_asks_for_nothing() {
     let mut state = running_session(session_id, RunId::new(), RunStatusDto::Running);
     let effects = state.update(Action::TurnAccepted(SendUserTurnOutcomeDto::Started {
         run_id: RunId::new(),
-        config_revision_id: ConfigRevisionId::new(),
     }));
     assert!(
         effects.is_empty(),

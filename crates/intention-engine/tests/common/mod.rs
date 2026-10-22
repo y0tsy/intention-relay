@@ -21,12 +21,11 @@ use intention_engine::{
     ToolExecutionPort, ToolResultOutcomeDto,
 };
 use intention_proto::{
-    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, MessageId,
-    MessageProjectionDto, NewMessageDto, PendingTurnProjectionDto, ProjectId, RemoveTurnCommandDto,
-    RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId, SessionProjectionDto,
-    SessionSummariesDto, TimestampDto, ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto,
-    ToolRowDto, TurnId, UsageDto, WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto,
-    run_status_is_terminal,
+    CreateSessionCommandDto, DtoResult, ErrorDto, FinishReasonDto, MessageId, MessageProjectionDto,
+    NewMessageDto, ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId,
+    SessionProjectionDto, SessionSummariesDto, TimestampDto, ToolCallId,
+    ToolResultMetadataEntryDto, ToolResultStatusDto, ToolRowDto, TurnId, UsageDto,
+    WorkspaceBindingDto, WorkspaceId, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_providers::ToolCallDto;
 use intention_storage::{
@@ -184,17 +183,11 @@ impl RecordedTransition {
 /// One recorded call to [`FakeRepository::accept_user_turn`].
 #[derive(Clone)]
 pub struct RecordedTurn {
-    proposed_run_id: RunId,
     config_snapshot: ConfigSnapshotDto,
     occurred_at: TimestampDto,
 }
 
 impl RecordedTurn {
-    /// Returns the run identity selected for a possible start.
-    #[must_use]
-    pub const fn proposed_run_id(&self) -> RunId {
-        self.proposed_run_id
-    }
     /// Returns the credential-free immutable configuration selection.
     #[must_use]
     pub const fn config_snapshot(&self) -> &ConfigSnapshotDto {
@@ -234,7 +227,6 @@ pub struct FakeRepository {
     pub calls: Mutex<Vec<&'static str>>,
     pub accepted: Mutex<DtoResult<AcceptedTurnOutcomeDto>>,
     pub accepted_inputs: Mutex<Vec<RecordedTurn>>,
-    pub removed: Mutex<Option<PendingTurnProjectionDto>>,
     pub loaded_projection: Mutex<Option<SessionProjectionDto>>,
     pub starting_context: Mutex<Option<StartingRunModelContextDto>>,
     pub run: Mutex<Option<RunProjectionDto>>,
@@ -274,7 +266,6 @@ impl FakeRepository {
             calls: Mutex::new(Vec::new()),
             accepted: Mutex::new(Err(ErrorDto::unavailable("fixture_unused", "unused"))),
             accepted_inputs: Mutex::new(Vec::new()),
-            removed: Mutex::new(None),
             loaded_projection: Mutex::new(None),
             starting_context: Mutex::new(None),
             run: Mutex::new(None),
@@ -351,7 +342,6 @@ impl FakeRepository {
             self.run_id,
             self.turn_id,
             status,
-            self.config.revision_id(),
             None,
             self.config.captured_at(),
             finished_at,
@@ -473,7 +463,6 @@ impl FakeRepository {
                     run.run_id(),
                     run.turn_id(),
                     status,
-                    run.config_revision_id(),
                     run.usage(),
                     run.started_at(),
                     run_status_is_terminal(status).then_some(occurred_at),
@@ -520,9 +509,7 @@ impl StorageRepositoryDto for FakeRepository {
     fn accept_user_turn(
         &self,
         _session_id: SessionId,
-        _idempotency_key: IdempotencyKey,
         _content: &str,
-        proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
@@ -534,7 +521,6 @@ impl StorageRepositoryDto for FakeRepository {
             .lock()
             .expect("the fixture mutex is not poisoned")
             .push(RecordedTurn {
-                proposed_run_id,
                 config_snapshot,
                 occurred_at,
             });
@@ -542,20 +528,6 @@ impl StorageRepositoryDto for FakeRepository {
             .lock()
             .expect("the fixture mutex is not poisoned")
             .clone()
-    }
-
-    fn remove_turn(
-        &self,
-        _command: RemoveTurnCommandDto,
-        _occurred_at: TimestampDto,
-    ) -> DtoResult<PendingTurnProjectionDto> {
-        self.removed
-            .lock()
-            .expect("the fixture mutex is not poisoned")
-            .clone()
-            .ok_or_else(|| {
-                ErrorDto::unavailable("fixture_missing_result", "fixture result missing")
-            })
     }
 
     fn consume_pending_user_turns(
@@ -755,7 +727,6 @@ impl StorageRepositoryDto for FakeRepository {
             WorkspaceId::new(),
             workspace_root(),
             RunModeDto::Build,
-            Some(self.config.revision_id()),
             Some(self.projection()),
         )
     }
@@ -795,13 +766,6 @@ impl StorageRepositoryDto for FakeRepository {
         Err(ErrorDto::unavailable(
             "fixture_unused",
             "recovery is not used by this fixture",
-        ))
-    }
-
-    fn accept_configuration_revision(&self, _snapshot: ConfigSnapshotDto) -> DtoResult<()> {
-        Err(ErrorDto::unavailable(
-            "fixture_unused",
-            "configuration acceptance is not used by this fixture",
         ))
     }
 }

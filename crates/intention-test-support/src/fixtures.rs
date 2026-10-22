@@ -17,12 +17,12 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 use intention_client::SessionStreamState;
 use intention_proto::{
-    BoundedText, ConfigRevisionId, ExecuteResult, GrepResult, MessageId, MessageKindDto,
-    MessageProjectionDto, PathsResult, ProjectId, RunId, RunModeDto, RunProjectionDto,
-    RunStatusDto, SessionId, SessionProjectionDto, SessionSnapshotDto, SessionSummaryDto,
-    TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
-    ToolProcessStatus, ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId,
-    UsageDto, WorkspaceId, WorkspaceRootDto, WriteResult,
+    BoundedText, ExecuteResult, GrepResult, MessageId, MessageKindDto, MessageProjectionDto,
+    PathsResult, ProjectId, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionId,
+    SessionProjectionDto, SessionSnapshotDto, SessionSummaryDto, TextResult, TimestampDto,
+    ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto, TurnId, UsageDto, WorkspaceId,
+    WorkspaceRootDto, WriteResult,
 };
 
 /// The canonical id of the first fixture session.
@@ -159,7 +159,6 @@ pub fn run_with(
         run_id,
         TurnId::new(),
         status,
-        ConfigRevisionId::new(),
         usage,
         started_at,
         finished_at,
@@ -198,7 +197,6 @@ pub fn session_projection_in_mode(
         WorkspaceId::new(),
         workspace_root(),
         mode,
-        None,
         active_run,
     )
     .expect("the fixture session projection is coherent")

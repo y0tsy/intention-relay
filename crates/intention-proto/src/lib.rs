@@ -8,6 +8,7 @@
 
 use std::fmt::{Display, Formatter};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use uuid::Uuid;
 
@@ -27,11 +28,10 @@ pub use projection::{
 pub use protocol::{
     ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, ProtocolDaemonMessageDto,
     ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto,
-    SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto,
-    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
-    parse_session_frame,
+    RunCancelledAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SubscribeSessionCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, decode_request_line, decode_response, encode_reply,
+    encode_request, parse_daemon_message, parse_session_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
@@ -46,7 +46,7 @@ pub use tool::{
 };
 pub use turn::{
     CancelRunCommandDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
-    GetSessionSnapshotQueryDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
+    GetSessionSnapshotQueryDto, SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 
@@ -124,14 +124,6 @@ define_id!(TurnId, "A stable identity for one conversational turn.");
 define_id!(ProjectId, "A stable identity for one logical user project.");
 define_id!(WorkspaceId, "A stable identity for one declared workspace.");
 define_id!(ToolCallId, "A stable identity for one tool invocation.");
-define_id!(
-    ConfigRevisionId,
-    "A stable identity for one accepted configuration revision."
-);
-define_id!(
-    IdempotencyKey,
-    "A caller-supplied identity that makes one mutating operation repeatable."
-);
 
 /// A stable identity for one durable transcript row.
 ///
@@ -392,7 +384,7 @@ impl ErrorDto {
 }
 
 /// A normalized logical path relative to an already-authorized workspace root.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct WorkspaceRelativePathDto(String);
 

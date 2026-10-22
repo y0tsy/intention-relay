@@ -17,7 +17,7 @@ use intention_proto::{
     RunModeDto, RunStatusDto, SendUserTurnOutcomeDto, SessionFrameDto, SubscribeSessionCommandDto,
     ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, ProjectId, SessionId, WorkspaceId};
+use intention_proto::{ProjectId, SessionId, WorkspaceId};
 use intention_test_support::daemon_process::{
     self, spawn_daemon, unique_endpoint, wait_until_ready, write_config_document,
 };
@@ -222,11 +222,7 @@ async fn real_daemon_tool_loop_executes_read_and_replays_after_restart() {
         .expect("the daemon accepts session creation");
 
     let outcome = client
-        .send_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            "Read hello.txt".to_owned(),
-        )
+        .send_user_turn(session_id, "Read hello.txt".to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
@@ -452,7 +448,7 @@ async fn a_create_with_turn_command_commits_session_then_turn() {
                 .expect("workspace root is absolute"),
             Some(RunModeDto::Build),
             Some(
-                CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "Read hello.txt")
+                CreateSessionFirstTurnDto::new("Read hello.txt")
                     .expect("fixture first turn is valid"),
             ),
         ))
@@ -506,11 +502,7 @@ async fn real_daemon_tool_loop_answers_a_failed_call_without_stopping() {
         .expect("the daemon accepts session creation");
 
     let outcome = client
-        .send_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            "Read missing.txt".to_owned(),
-        )
+        .send_user_turn(session_id, "Read missing.txt".to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { .. } = outcome else {
@@ -613,11 +605,7 @@ async fn real_daemon_reports_a_declared_execute_timeout_as_a_named_partial() {
         .expect("the daemon accepts session creation");
 
     let outcome = client
-        .send_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            "Run a long command".to_owned(),
-        )
+        .send_user_turn(session_id, "Run a long command".to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { .. } = outcome else {
@@ -701,11 +689,7 @@ async fn real_daemon_stops_a_running_tool_and_ends_the_run_interrupted() {
         .expect("the daemon accepts session creation");
 
     let outcome = client
-        .send_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            "Run a long command".to_owned(),
-        )
+        .send_user_turn(session_id, "Run a long command".to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
@@ -809,11 +793,7 @@ async fn real_daemon_commits_step_reasoning_above_its_tool_exchange() {
         .expect("the daemon accepts session creation");
 
     let outcome = client
-        .send_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            "Read hello.txt".to_owned(),
-        )
+        .send_user_turn(session_id, "Read hello.txt".to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { .. } = outcome else {

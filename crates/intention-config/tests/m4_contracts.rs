@@ -9,16 +9,14 @@ mod common;
 use common::FAKE_CREDENTIAL;
 
 use intention_config::{ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
-use intention_proto::{ConfigRevisionId, TimestampDto};
+use intention_proto::TimestampDto;
 
 const VALID_RESOLVED: &str = r#"{"provider":{"kind":"openrouter","model":"fixture","endpoint":null,"credential_configured":true},"provider_execution":{"attempt_timeout_seconds":30,"max_attempts":2},"context_window":{"window_tokens":250000}}"#;
 
-const VALID_REVISION_ID: &str = "44444444-4444-4444-8444-444444444444";
-
-/// Builds one snapshot wire from its revision identity and resolved projection,
-/// so each case changes exactly one fragment.
-fn snapshot_wire(revision_id: &str, resolved: &str) -> String {
-    format!(r#"{{"revision_id":"{revision_id}","captured_at":1700000000,"resolved":{resolved}}}"#)
+/// Builds one snapshot wire from its resolved projection, so each case changes
+/// exactly one fragment.
+fn snapshot_wire(resolved: &str) -> String {
+    format!(r#"{{"captured_at":1700000000,"resolved":{resolved}}}"#)
 }
 
 /// Builds one resolved projection from its three policy fragments.
@@ -180,7 +178,6 @@ fn config_snapshot_fixture_decodes_and_constructs_the_same_projection() {
     assert_eq!(snapshot.resolved().provider().model(), "example-chat-model");
 
     let constructed = ConfigSnapshotDto::new(
-        ConfigRevisionId::new(),
         TimestampDto::from_unix_seconds(1_700_000_001).expect("fixture timestamp is valid"),
         snapshot.resolved().clone(),
     );
@@ -190,37 +187,21 @@ fn config_snapshot_fixture_decodes_and_constructs_the_same_projection() {
 #[test]
 fn malformed_config_snapshot_wire_shapes_are_rejected() {
     // The baseline must decode, otherwise every case below passes vacuously.
-    assert!(
-        serde_json::from_str::<ConfigSnapshotDto>(&snapshot_wire(
-            VALID_REVISION_ID,
-            VALID_RESOLVED
-        ))
-        .is_ok()
-    );
+    assert!(serde_json::from_str::<ConfigSnapshotDto>(&snapshot_wire(VALID_RESOLVED)).is_ok());
 
     let value_case = |provider: &str, execution: &str, window: &str| {
-        snapshot_wire(
-            VALID_REVISION_ID,
-            &resolved_wire(provider, execution, window),
-        )
+        snapshot_wire(&resolved_wire(provider, execution, window))
     };
     let openrouter = provider_wire("openrouter", "fixture", "null");
 
     for (label, wire) in [
         (
-            "non-canonical revision identity",
-            snapshot_wire("not-an-id", VALID_RESOLVED),
-        ),
-        (
             "unknown snapshot field",
             format!(
-                r#"{{"revision_id":"{VALID_REVISION_ID}","captured_at":1700000000,"resolved":{VALID_RESOLVED},"unexpected":true}}"#
+                r#"{{"captured_at":1700000000,"resolved":{VALID_RESOLVED},"unexpected":true}}"#
             ),
         ),
-        (
-            "empty resolved projection",
-            snapshot_wire(VALID_REVISION_ID, "{}"),
-        ),
+        ("empty resolved projection", snapshot_wire("{}")),
         (
             "unsupported provider kind",
             value_case(

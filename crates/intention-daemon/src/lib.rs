@@ -298,10 +298,15 @@ impl HostState {
     /// The stop is accepted only for an exact active run. Its registered signal
     /// carries the terminal intent - `request_stop` signals the in-flight
     /// provider stream or tool call too - so the run ends `interrupted` at the
-    /// execution's next boundary instead of continuing. A run no registered
-    /// execution owns (its task returned while the run stayed active) is
-    /// terminalized here as durably `interrupted`, the same outcome recovery
-    /// writes, so a stop never silently does nothing.
+    /// execution's next boundary instead of continuing.
+    ///
+    /// A run no registered execution owns yet is terminalized here as durably
+    /// `interrupted`, the same outcome recovery writes. Admission commits the
+    /// durable `Starting` run and only then inserts its registry entry, while a
+    /// stop is a pure read that enters no command gate, so a stop dispatched on
+    /// another connection in between finds an active run no execution owns: the
+    /// run is still the stop the user asked for, so it ends here instead of
+    /// being refused.
     fn cancel_run(
         self: &Arc<Self>,
         session_id: SessionId,
@@ -1394,7 +1399,6 @@ fn dispatch_request(
             }
             Ok(result)
         }
-        ClientRequestDto::RemoveTurn(command) => host.facade.remove_turn(command),
         ClientRequestDto::CancelRun(command) => {
             host.cancel_run(command.session_id(), command.run_id())
         }
@@ -1576,10 +1580,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use intention_proto::{
-        ClientRequestDto, DaemonHealthDto, GetSessionSnapshotQueryDto, IdempotencyKey, MessageId,
-        MessageKindDto, MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto,
-        ProtocolResultDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId,
-        SubscribeSessionCommandDto, decode_response, encode_request, parse_daemon_message,
+        ClientRequestDto, DaemonHealthDto, GetSessionSnapshotQueryDto, MessageId, MessageKindDto,
+        MessageProjectionDto, NewMessageDto, ProtocolDaemonMessageDto, ProtocolResultDto,
+        SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SubscribeSessionCommandDto,
+        decode_response, encode_request, parse_daemon_message,
     };
     use intention_proto::{RunId, TimestampDto};
     use intention_providers::{
@@ -1665,7 +1669,7 @@ mod tests {
         assert!(matches!(created, ProtocolResultDto::SessionCreated(_)));
         let accepted = facade
             .send_user_turn(
-                SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "fixture turn")
+                SendUserTurnCommandDto::new(session_id, "fixture turn")
                     .expect("fixture turn is valid"),
                 &SilentCommitObserver::new(),
             )
@@ -1792,7 +1796,7 @@ mod tests {
             .send_message(&encode_request(
                 2,
                 ClientRequestDto::SendUserTurn(
-                    SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
+                    SendUserTurnCommandDto::new(session_id, "hello")
                         .expect("fixture turn is valid"),
                 ),
             ))
@@ -2035,6 +2039,35 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn a_stop_reaching_a_run_before_its_admission_terminalizes_it() {
+        // Admission commits the durable `Starting` run and only then inserts
+        // its registry entry, so a stop dispatched in between finds an active
+        // run no execution owns yet. The run is still the stop the user asked
+        // for, so it ends `Interrupted` instead of being refused.
+        let (_directory, facade) = fixture_facade_with_driver(Arc::new(EmptyDriver));
+        let (session_id, run_id) = create_and_start(&facade);
+        let host = new_host(facade);
+        assert_eq!(
+            host.data
+                .lock()
+                .expect("host registry remains available")
+                .tasks
+                .len(),
+            0
+        );
+
+        host.cancel_run(session_id, run_id)
+            .expect("the stop is accepted for the exact active run");
+
+        let run = host
+            .facade
+            .repository()
+            .load_run_projection(session_id, run_id)
+            .expect("the fixture run reads");
+        assert_eq!(run.status(), RunStatusDto::Interrupted);
     }
 
     #[tokio::test]

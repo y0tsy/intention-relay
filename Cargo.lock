@@ -944,6 +944,7 @@ dependencies = [
 name = "intention-proto"
 version = "0.0.0"
 dependencies = [
+ "schemars",
  "serde",
  "serde_json",
  "uuid",

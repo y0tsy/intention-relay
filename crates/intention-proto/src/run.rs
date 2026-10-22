@@ -3,8 +3,7 @@
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId, TimestampDto,
-    TurnId, UsageDto,
+    DtoResult, ErrorCategoryDto, ErrorDto, RunId, SessionId, TimestampDto, TurnId, UsageDto,
 };
 
 /// The agent policy active for a run.
@@ -161,19 +160,17 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
 
 /// A safe current projection of one durable run.
 ///
-/// The projection carries whole committed facts: the immutable admission
-/// reference, the durable lifecycle status, the run's committed token usage
-/// (absent until a terminal outcome records it), the committed start and
-/// finish times in whole Unix seconds, and how many committed tool calls the
-/// run has not answered yet. `finished_at` is present exactly when the status
-/// is terminal.
+/// The projection carries whole committed facts: the durable lifecycle status,
+/// the run's committed token usage (absent until a terminal outcome records
+/// it), the committed start and finish times in whole Unix seconds, and how
+/// many committed tool calls the run has not answered yet. `finished_at` is
+/// present exactly when the status is terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct RunProjectionDto {
     session_id: SessionId,
     run_id: RunId,
     turn_id: TurnId,
     status: RunStatusDto,
-    config_revision_id: ConfigRevisionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<UsageDto>,
     started_at: TimestampDto,
@@ -193,7 +190,6 @@ impl<'de> Deserialize<'de> for RunProjectionDto {
             run_id: RunId,
             turn_id: TurnId,
             status: RunStatusDto,
-            config_revision_id: ConfigRevisionId,
             #[serde(default)]
             usage: Option<UsageDto>,
             started_at: TimestampDto,
@@ -208,7 +204,6 @@ impl<'de> Deserialize<'de> for RunProjectionDto {
             raw.run_id,
             raw.turn_id,
             raw.status,
-            raw.config_revision_id,
             raw.usage,
             raw.started_at,
             raw.finished_at,
@@ -227,14 +222,13 @@ impl RunProjectionDto {
     /// disagree, or when the finish time precedes the start time.
     #[expect(
         clippy::too_many_arguments,
-        reason = "This public wire constructor preserves the established nine-field run projection contract."
+        reason = "This public wire constructor preserves the established eight-field run projection contract."
     )]
     pub fn new(
         session_id: SessionId,
         run_id: RunId,
         turn_id: TurnId,
         status: RunStatusDto,
-        config_revision_id: ConfigRevisionId,
         usage: Option<UsageDto>,
         started_at: TimestampDto,
         finished_at: Option<TimestampDto>,
@@ -257,7 +251,6 @@ impl RunProjectionDto {
             run_id,
             turn_id,
             status,
-            config_revision_id,
             usage,
             started_at,
             finished_at,
@@ -287,12 +280,6 @@ impl RunProjectionDto {
     #[must_use]
     pub const fn status(self) -> RunStatusDto {
         self.status
-    }
-
-    /// Returns the immutable configuration revision selected by this run.
-    #[must_use]
-    pub const fn config_revision_id(self) -> ConfigRevisionId {
-        self.config_revision_id
     }
 
     /// Returns the committed token usage, absent until a terminal outcome

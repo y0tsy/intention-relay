@@ -12,13 +12,12 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, ExecuteResult, MessageId,
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto,
-    TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
-    TurnId, WorkspaceRootDto, validate_run_status_transition,
+    BoundedText, CreateSessionAcceptedDto, ExecuteResult, MessageId, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto, RunId, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionProjectionDto, SessionSnapshotDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
+    ToolId, ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
 
@@ -47,18 +46,15 @@ fn typed_results_carry_required_durable_evidence() {
         TurnId::new(),
         SendUserTurnOutcomeDto::Started {
             run_id: RunId::new(),
-            config_revision_id: ConfigRevisionId::new(),
         },
     );
     let pending =
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending);
-    let removed = RemoveTurnAcceptedDto::new(session_id, TurnId::new());
 
     for result in [
         ProtocolResultDto::SessionCreated(created),
         ProtocolResultDto::TurnAccepted(started),
         ProtocolResultDto::TurnAccepted(pending),
-        ProtocolResultDto::TurnRemoved(removed),
     ] {
         let encoded = serde_json::to_string(&result).expect("result serializes");
         assert!(
@@ -148,7 +144,6 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         RunId::new(),
         TurnId::new(),
         RunStatusDto::Running,
-        ConfigRevisionId::new(),
         None,
         fixture_started_at(),
         None,
@@ -162,19 +157,16 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
             workspace_id,
             workspace_root(),
             RunModeDto::Build,
-            None,
             Some(foreign_run),
         )
         .is_err()
     );
 
-    let revision = ConfigRevisionId::new();
     let run = RunProjectionDto::new(
         session_id,
         RunId::new(),
         TurnId::new(),
         RunStatusDto::Running,
-        revision,
         None,
         fixture_started_at(),
         None,
@@ -183,7 +175,6 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     .expect("fixture run projection is valid");
     assert_eq!(run.session_id(), session_id);
     assert_eq!(run.status(), RunStatusDto::Running);
-    assert_eq!(run.config_revision_id(), revision);
     let decoded_run: RunProjectionDto =
         serde_json::from_str(&serde_json::to_string(&run).expect("run serializes"))
             .expect("run decodes");
@@ -195,7 +186,6 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         workspace_id,
         workspace_root(),
         RunModeDto::Plan,
-        Some(revision),
         Some(run),
     )
     .expect("projection is valid");
@@ -204,7 +194,6 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     assert_eq!(projection.workspace_id(), workspace_id);
     assert_eq!(projection.workspace_root(), &workspace_root());
     assert_eq!(projection.mode(), RunModeDto::Plan);
-    assert_eq!(projection.config_revision_id(), Some(revision));
     assert_eq!(projection.active_run(), Some(run));
     let decoded: SessionProjectionDto =
         serde_json::from_str(&serde_json::to_string(&projection).expect("projection serializes"))
@@ -220,7 +209,6 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     });
     let decoded: SessionProjectionDto =
         serde_json::from_value(minimal).expect("optional state defaults to absent");
-    assert_eq!(decoded.config_revision_id(), None);
     assert_eq!(decoded.active_run(), None);
 }
 
