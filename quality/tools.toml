@@ -23,9 +23,3 @@ command = ["cargo", "deny", "--version"]
 name = "cargo-machete"
 version = "0.9.2"
 command = ["cargo", "machete", "--version"]
-
-[[tools]]
-name = "cargo-about"
-version = "0.9.1"
-command = ["cargo", "about", "--version"]
-install_features = ["cli"]

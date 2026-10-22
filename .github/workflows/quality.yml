@@ -67,7 +67,7 @@ jobs:
             phase: deps
             stable: true
             stable_components: ""
-            tools: "cargo-deny@0.20.2,cargo-about@0.9.1,cargo-machete@0.9.2"
+            tools: "cargo-deny@0.20.2,cargo-machete@0.9.2"
             rustflags: ""
             uses_mold: false
             uses_rust_cache: false

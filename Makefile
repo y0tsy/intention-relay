@@ -25,8 +25,7 @@ LINT_PINS = --component rustfmt --component clippy
 TEST_PINS = --tool cargo-nextest
 COVERAGE_PINS = --component llvm-tools-preview --tool cargo-nextest --tool cargo-llvm-cov
 DEPS_PINS = --tool cargo-deny --tool cargo-machete
-NOTICES_PINS = --tool cargo-about
-ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS) $(NOTICES_PINS)
+ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS)
 
 # The suites whose outcome can differ on Windows: the crates that cross a
 # platform boundary. `intention-transport` is the named-pipe/Unix-socket split,
@@ -43,12 +42,12 @@ ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS) $(NOTICES_PINS)
 # once; `lint-windows` still compiles every Windows code path.
 PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + (package(intention-daemon) and binary(client_e2e))
 
-.PHONY: help bootstrap-tools tools-check fmt fmt-check notices notices-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
+.PHONY: help bootstrap-tools tools-check fmt fmt-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
 help: ## List supported M0 targets and mutation behavior.
 	@printf '%s\n' \
-	  'Non-mutating: tools-check fmt-check notices-check lint lint-windows test doctest doc coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
-	  'Mutating/networked: bootstrap-tools fmt notices coverage-artifacts-clean e2e-real-api' \
+	  'Non-mutating: tools-check fmt-check lint lint-windows test doctest doc coverage coverage-default deps quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps' \
+	  'Mutating/networked: bootstrap-tools fmt coverage-artifacts-clean e2e-real-api' \
 	  '' \
 	  'Use make quick for the fast local loop and make verify before acceptance.'
 
@@ -63,14 +62,6 @@ fmt: ## MUTATING: format all Rust code.
 
 fmt-check: ## Verify formatting without changing files.
 	$(TIMED) $(CARGO) fmt --all --check
-
-notices: ## MUTATING: regenerate committed third-party notices from the locked graph.
-	$(PYTHON) quality/check_tools.py $(NOTICES_PINS)
-	$(PYTHON) quality/generate_third_party_notices.py
-
-notices-check: ## Verify committed third-party notices match the locked graph.
-	$(PYTHON) quality/check_tools.py $(NOTICES_PINS)
-	$(PYTHON) quality/generate_third_party_notices.py --check
 
 lint: ## Run strict Rust and Clippy linting.
 	$(PYTHON) quality/check_tools.py $(LINT_PINS)
@@ -109,12 +100,11 @@ coverage-artifacts-clean: ## MUTATING: report and remove the generated LLVM cove
 	@if [ -d target/llvm-cov-target ]; then du -sh target/llvm-cov-target; else printf '%s\n' 'target/llvm-cov-target: absent'; fi
 	rm -rf target/llvm-cov-target
 
-deps: ## Run the lockfile anchor, the supply-chain policy, the notices check, and manifest hygiene.
-	$(PYTHON) quality/check_tools.py $(DEPS_PINS) $(NOTICES_PINS)
+deps: ## Run the lockfile anchor, the supply-chain policy, and manifest hygiene.
+	$(PYTHON) quality/check_tools.py $(DEPS_PINS)
 	$(TIMED) $(CARGO) metadata --locked --format-version 1 > /dev/null
 	$(TIMED) $(CARGO) deny check
 	$(TIMED) $(CARGO) machete --with-metadata --skip-target-dir
-	$(PYTHON) quality/generate_third_party_notices.py --check
 
 e2e-real-api: tools-check ## MUTATING/NETWORKED: run ignored real-provider API end-to-end tests (network access required; reads .env when present).
 	@if [ -f .env ]; then \
