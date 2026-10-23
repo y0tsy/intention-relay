@@ -10,7 +10,7 @@ function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {
 }
 
 /** The chat surface with no run live. */
-const CHAT: KeyContext = { surface: "chat", live: false, height: 24 };
+const CHAT: KeyContext = { menu: false, surface: "chat", live: false, height: 24 };
 
 /** Returns the intent one key has on the chat surface. */
 function chat(event: KeyEvent, context: Partial<KeyContext> = {}) {
@@ -44,6 +44,13 @@ test("the caret keys edit the draft and never a live surface", () => {
   ] as const) {
     assert.deepEqual(chat(key(name)), { kind: "edit", edit });
   }
+});
+
+test("the arrows walk the band while it is open and the history otherwise", () => {
+  assert.deepEqual(chat(key("up")), { kind: "recall", delta: -1 });
+  const band = { ...CHAT, menu: true };
+  assert.deepEqual(keyIntent(key("up"), band), { kind: "move_menu", delta: -1 });
+  assert.deepEqual(keyIntent(key("down"), band), { kind: "move_menu", delta: 1 });
 });
 
 test("the arrow keys walk the history", () => {
@@ -81,23 +88,32 @@ test("an open surface owns the arrows, the return, and the escape", () => {
   for (const surface of ["sessions", "theme"] as const) {
     const context = { ...CHAT, surface };
     assert.deepEqual(keyIntent(key("up"), context), { kind: "move_selection", delta: -1 });
-    assert.deepEqual(keyIntent(key("k"), context), { kind: "move_selection", delta: -1 });
     assert.deepEqual(keyIntent(key("down"), context), { kind: "move_selection", delta: 1 });
-    assert.deepEqual(keyIntent(key("j"), context), { kind: "move_selection", delta: 1 });
     assert.deepEqual(keyIntent(key("return"), context), { kind: "commit_selection" });
     assert.deepEqual(keyIntent(key("escape"), context), { kind: "close_surface" });
   }
 });
 
-test("an open surface swallows what it does not use", () => {
-  // Typing into a browser would move a caret the reader cannot see, so a
+test("the browser narrows its own list while the chat keeps its letters", () => {
+  const browser = { ...CHAT, surface: "sessions" as const };
+  assert.deepEqual(keyIntent(key("k"), browser), { kind: "filter_typed", text: "k" });
+  assert.deepEqual(keyIntent(key("space"), browser), { kind: "filter_typed", text: " " });
+  assert.deepEqual(keyIntent(key("backspace"), browser), { kind: "filter_backspace" });
+  assert.deepEqual(keyIntent(key("tab"), browser), { kind: "switch_tab", delta: 1 });
+  assert.deepEqual(keyIntent(key("tab", { shift: true }), browser), {
+    kind: "switch_tab",
+    delta: -1,
+  });
+  // The chat surface types the same letters into the draft instead.
+  assert.deepEqual(chat(key("k")), { kind: "insert", text: "k" });
+});
+
+test("a surface that does not read text swallows it", () => {
+  // Typing into the picker would move a caret the reader cannot see, so a
   // surface that does not read text ignores text.
-  for (const surface of ["sessions", "theme"] as const) {
-    const context = { ...CHAT, surface };
-    assert.deepEqual(keyIntent(key("a"), context), { kind: "ignore" });
-    assert.deepEqual(keyIntent(key("space"), context), { kind: "ignore" });
-    assert.deepEqual(keyIntent(key("backspace"), context), { kind: "ignore" });
-    assert.deepEqual(keyIntent(key("pagedown"), context), { kind: "ignore" });
+  const picker = { ...CHAT, surface: "theme" as const };
+  for (const name of ["a", "space", "backspace", "pagedown", "tab"]) {
+    assert.deepEqual(keyIntent(key(name), picker), { kind: "ignore" }, name);
   }
 });
 

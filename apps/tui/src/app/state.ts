@@ -17,9 +17,12 @@ import type {
   SessionId,
   SessionSnapshotDto,
   SessionSummariesDto,
+  SessionSummaryDto,
+  WorkspaceRootDto,
 } from "../bindings";
 import { runStatusIsTerminal, SessionStreamState } from "../client/stream";
 import { type Action, THEME_PREFERENCES, type ThemePreference } from "./action";
+import { BROWSER_TABS, type BrowserTab, browserRows } from "./browser";
 import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
 import {
   type Draft,
@@ -31,6 +34,7 @@ import {
 } from "./editor";
 import type { Effect } from "./effect";
 import { PromptHistory } from "./history";
+import { commandMenu } from "./menu";
 import { type RunPhase, TOOL_WORKING_AFTER_MILLIS } from "./run";
 
 /** Which surface owns the keyboard. */
@@ -89,6 +93,18 @@ export class AppState {
   sessionsError: string | null = null;
   /** The index the surface that owns the keyboard has highlighted. */
   selection = 0;
+  /**
+   * The browser's tab.
+   *
+   * `all` is the deliberate default: the browser opens on the whole list, so a
+   * front end with no declared workspace root still shows sessions instead of an
+   * empty current folder.
+   */
+  browserTab: BrowserTab = "all";
+  /** The word the browser filters its rows by. */
+  browserFilter = "";
+  /** The row of the command band the reader is on. */
+  menuSelection = 0;
   /** The palette preference the configuration file declares. */
   theme: ThemePreference;
   /**
@@ -180,6 +196,7 @@ export class AppState {
         return this.#applyFailure(action.error);
       case "draft_typed":
         this.draft = insertText(this.draft, action.text);
+        this.menuSelection = 0;
         return [];
       case "draft_edited":
         this.draft = editDraft(this.draft, action.edit);
@@ -190,6 +207,7 @@ export class AppState {
       case "draft_cleared":
         this.draft = EMPTY_DRAFT;
         this.notice = null;
+        this.menuSelection = 0;
         return [];
       case "history_recalled":
         return this.#applyHistoryRecalled(action.delta);
@@ -221,6 +239,20 @@ export class AppState {
         return this.#applySelectionMoved(action.delta);
       case "selection_committed":
         return this.#applySelectionCommitted();
+      case "browser_filter_typed":
+        this.browserFilter += action.text;
+        this.selection = 0;
+        return [];
+      case "browser_filter_backspace":
+        this.browserFilter = [...this.browserFilter].slice(0, -1).join("");
+        this.selection = 0;
+        return [];
+      case "browser_tab_moved":
+        this.#applyBrowserTabMoved(action.delta);
+        return [];
+      case "menu_moved":
+        this.menuSelection += action.delta;
+        return [];
       case "surface_closed":
         return this.#applySurfaceClosed();
       case "theme_requested":
@@ -233,7 +265,7 @@ export class AppState {
   /** Returns the number of entries the surface that owns the keyboard offers. */
   get optionCount(): number {
     if (this.surface === "sessions") {
-      return this.sessions?.sessions.length ?? 0;
+      return this.browserRows.length;
     }
     if (this.surface === "theme") {
       return THEME_PREFERENCES.length;
@@ -241,9 +273,46 @@ export class AppState {
     return 0;
   }
 
+  /**
+   * Returns the row of the command band the reader is on.
+   *
+   * The cursor is the state's, and it is clamped to the rows the current word
+   * ranks: a keystroke that narrows the list leaves the cursor on a row that
+   * exists, and a band with no rows cursors nothing.
+   */
+  get menuHighlight(): number {
+    const menu = commandMenu(this.draft);
+    const rows = menu?.rows.length ?? 0;
+    if (rows === 0) {
+      return 0;
+    }
+    return ((this.menuSelection % rows) + rows) % rows;
+  }
+
+  /** Returns the rows the browser's tab and filter show. */
+  get browserRows(): readonly SessionSummaryDto[] {
+    return browserRows(
+      this.sessions?.sessions ?? [],
+      this.browserTab,
+      this.browserFilter,
+      this.workspaceRoot ?? "",
+    );
+  }
+
+  /** Returns the workspace root the folder tab filters by, when one is known. */
+  workspaceRoot: WorkspaceRootDto | null = null;
+
   /** Returns the session the browser has highlighted. */
   get selectedSession(): SessionId | null {
-    return this.sessions?.sessions[this.selection]?.session_id ?? null;
+    return this.browserRows[this.selection]?.session_id ?? null;
+  }
+
+  /** Switches the browser's tab and keeps the cursor on a row that exists. */
+  #applyBrowserTabMoved(delta: number): void {
+    const index = BROWSER_TABS.indexOf(this.browserTab);
+    const count = BROWSER_TABS.length;
+    this.browserTab = BROWSER_TABS[(((index + delta) % count) + count) % count] ?? "all";
+    this.selection = 0;
   }
 
   /** Returns the theme preference the picker has highlighted. */

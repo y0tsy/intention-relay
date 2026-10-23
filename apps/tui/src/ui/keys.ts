@@ -48,7 +48,15 @@ export type KeyIntent =
   /** Dismiss the open surface. */
   | { readonly kind: "close_surface" }
   /** Reveals one more chunk of the newest reasoning block. */
-  | { readonly kind: "expand_reasoning" };
+  | { readonly kind: "expand_reasoning" }
+  /** Types one character into the session browser's filter. */
+  | { readonly kind: "filter_typed"; readonly text: string }
+  /** Deletes the last character of the session browser's filter. */
+  | { readonly kind: "filter_backspace" }
+  /** Moves the session browser to its other tab. */
+  | { readonly kind: "switch_tab"; readonly delta: number }
+  /** Walks the command band's rows. */
+  | { readonly kind: "move_menu"; readonly delta: number };
 
 /** What the intent depends on beyond the event itself. */
 export interface KeyContext {
@@ -56,6 +64,8 @@ export interface KeyContext {
   readonly surface: Surface;
   /** Whether a run is live, which decides what escape means. */
   readonly live: boolean;
+  /** Whether the command band is open, which decides what the arrows walk. */
+  readonly menu: boolean;
   /** The panel's height, which decides how far one page scrolls. */
   readonly height: number;
 }
@@ -107,6 +117,22 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
   if (event.ctrl && event.name === "e" && context.surface === "chat") {
     return { kind: "expand_reasoning" };
   }
+  if (context.surface === "sessions") {
+    // The browser's own keys: arrows and enter walk the table, tab switches the
+    // list it ranks, and every printable key narrows the filter it shows.
+    switch (event.name) {
+      case "tab":
+        return { kind: "switch_tab", delta: event.shift ? -1 : 1 };
+      case "backspace":
+        return { kind: "filter_backspace" };
+      default: {
+        const text = typed(event);
+        if (text !== null) {
+          return { kind: "filter_typed", text };
+        }
+      }
+    }
+  }
   if (context.surface !== "chat") {
     switch (event.name) {
       case "up":
@@ -144,9 +170,9 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
     case "right":
       return { kind: "edit", edit: "right" };
     case "up":
-      return { kind: "recall", delta: -1 };
+      return context.menu ? { kind: "move_menu", delta: -1 } : { kind: "recall", delta: -1 };
     case "down":
-      return { kind: "recall", delta: 1 };
+      return context.menu ? { kind: "move_menu", delta: 1 } : { kind: "recall", delta: 1 };
     case "pageup":
       return { kind: "scroll", delta: -Math.max(1, Math.floor(context.height / 2)) };
     case "pagedown":

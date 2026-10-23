@@ -14,7 +14,7 @@
 import { TextAttributes } from "@opentui/core";
 import { COMMANDS } from "../app/commands";
 import type { CommandMenu, MenuRow } from "../app/menu";
-import { MAX_COMMAND_ROWS } from "../app/menu";
+import { MAX_COMMAND_ROWS, menuWindow } from "../app/menu";
 import type { Palette } from "../theme/palette";
 import { displayWidth } from "./measure";
 
@@ -126,15 +126,21 @@ function OverflowRow({
 /** Renders the band the word the caret sits in opens. */
 export function HintBand({
   menu,
+  highlight,
   palette,
   width,
 }: {
   menu: CommandMenu;
+  /** The row the reader is on; the band shows the window around it. */
+  highlight: number;
   palette: Palette;
   width: number;
 }) {
   const columns = bandColumns(menu, width - 4);
-  const shown = menu.rows.slice(0, MAX_COMMAND_ROWS);
+  // The window follows the cursor, so the row the reader is on is always one of
+  // the rows they can see; the rest are counted by the overflow row below.
+  const start = menuWindow(menu.rows.length, highlight);
+  const shown = menu.rows.slice(start, start + MAX_COMMAND_ROWS);
   const hidden = menu.rows.length - shown.length;
   const title = menu.kind === "command" ? "commands" : "arguments";
   const noun = menu.kind === "command" ? "commands" : "values";
@@ -155,7 +161,7 @@ export function HintBand({
         <BandRow
           key={row.label}
           row={row}
-          highlighted={index === menu.highlight}
+          highlighted={start + index === highlight}
           columns={columns}
           palette={palette}
         />

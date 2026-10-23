@@ -93,6 +93,14 @@ export type Action =
   | { readonly kind: "selection_moved"; readonly delta: number }
   /** The user committed the selection of the surface that owns the keyboard. */
   | { readonly kind: "selection_committed" }
+  /** The reader filtered the session list by typing a word. */
+  | { readonly kind: "browser_filter_typed"; readonly text: string }
+  /** The reader deleted the last character of the browser's filter. */
+  | { readonly kind: "browser_filter_backspace" }
+  /** The reader asked for the other tab of the session browser. */
+  | { readonly kind: "browser_tab_moved"; readonly delta: number }
+  /** The reader walked the command band's rows. */
+  | { readonly kind: "menu_moved"; readonly delta: number }
   /** The user dismissed the surface that owns the keyboard. */
   | { readonly kind: "surface_closed" }
   /** The user asked for the theme picker. */

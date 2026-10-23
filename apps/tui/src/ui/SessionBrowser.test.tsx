@@ -1,94 +1,97 @@
-//! The session browser: a table that drops a column before it squeezes one.
+//! The docked session browser: its geometry, its table, and its legend.
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { browserColumns } from "../app/browser";
 import { summary } from "../testing/fixtures";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { fitColumns, renderHints, sessionCells } from "./format";
-import { BROWSER_HINTS, SessionBrowser } from "./SessionBrowser";
+import { browserLayout } from "./panel";
+import { SessionBrowser } from "./SessionBrowser";
 
 /** Renders the browser at one panel size and returns its lines. */
 async function lines(
-  summaries: ReturnType<typeof summary>[] | null,
+  rows: ReturnType<typeof summary>[],
   width: number,
   height: number,
-  options: { selection?: number; error?: string | null; now?: number; omitted?: number } = {},
+  options: { selection?: number; error?: string | null; now?: number; filter?: string } = {},
 ): Promise<string[]> {
+  const layout = browserLayout(width, height, rows.length);
+  assert.ok(layout !== null, "the window holds the docked panel");
   const frame = await painted(
-    <SessionBrowser
-      summaries={summaries === null ? null : { sessions: summaries, omitted: options.omitted ?? 0 }}
-      error={options.error ?? null}
-      selection={options.selection ?? 0}
-      palette={DARK}
-      width={width}
-      height={height}
-      now={options.now ?? 1_700_000_060}
-    />,
+    <box flexDirection="row">
+      <box width={1} />
+      <box width={width - 1}>
+        <SessionBrowser
+          rows={rows}
+          error={options.error ?? null}
+          selection={options.selection ?? 0}
+          filter={options.filter ?? ""}
+          tab="all"
+          palette={DARK}
+          rows_={layout.rows}
+          dataRows={layout.dataRows}
+          contentColumns={layout.contentColumns}
+          now={options.now ?? 1_700_000_060}
+        />
+      </box>
+    </box>,
     width,
     height,
   );
   return frameLines(frame);
 }
 
-test("a browser with no sessions says so instead of painting an empty table", async () => {
-  const painted_ = await lines([], 40, 10);
-  assert.equal(painted_[0]?.trim(), "sessions · 0");
-  assert.match(painted_[1] ?? "", /no sessions yet/);
-  assert.equal(painted_.at(-1)?.trim(), renderHints(38, BROWSER_HINTS));
+test("the docked panel is titled, tabbed, and carries its own legend", async () => {
+  const painted_ = await lines([summary()], 80, 30);
+  const text = painted_.join("\n");
+  assert.match(painted_[0] ?? "", /^╭─Sessions─+╮$/);
+  assert.match(text, /⦿ All/);
+  assert.match(text, /Type to filter sessions\.\.\./);
+  assert.match(text, /Modified/);
+  assert.match(text, /Enter select {2}Tab switch tab {2}Esc close/);
 });
 
-test("a browser that is still reading says so", async () => {
-  const painted_ = await lines(null, 40, 10);
-  assert.equal(painted_[0]?.trim(), "sessions · reading");
+test("the panel grows with its rows up to half the window", async () => {
+  const few = browserLayout(80, 40, 2);
+  const many = browserLayout(80, 40, 60);
+  assert.ok(few !== null && many !== null);
+  assert.equal(few.rows, 12, "the frame, the chrome, and the two rows it has");
+  assert.equal(many.rows, 20, "half the window, never more");
+  assert.equal(browserLayout(80, 12, 3), null, "a window that cannot hold the chat keeps no panel");
 });
 
-test("a bounded list reports the sessions it left out", async () => {
-  const rows = [summary()];
-  assert.equal((await lines(rows, 60, 10))[0], "sessions · 1");
-  assert.equal((await lines(rows, 60, 10, { omitted: 7 }))[0], "sessions · 1 +7 more");
-});
-
-test("a failure replaces the table with its own line", async () => {
-  const painted_ = await lines(null, 40, 10, { error: "local_daemon_unavailable: no daemon" });
-  assert.match(painted_.join("\n"), /local_daemon_unavailable: no daemon/);
-});
-
-test("a narrow browser drops a column instead of cutting one", async () => {
-  const rows = [summary({ session_id: "0b1a2c3d-0000-4000-8000-0000000000ff" })];
-  const now = 1_700_000_060;
-  const wide = await lines(rows, 100, 10, { now });
-  const narrow = await lines(rows, 34, 10, { now });
-  const wideCells = sessionCells(rows[0] as never, fitColumns(94), now);
-  const narrowCells = sessionCells(rows[0] as never, fitColumns(28), now);
-  assert.ok(narrowCells.length < wideCells.length, "the narrow panel keeps fewer columns");
-  for (const cell of narrowCells) {
-    assert.ok((narrow[1] ?? "").includes(cell), `column "${cell}" is painted whole`);
+test("the table's columns are shares of the content width", async () => {
+  const wide = browserColumns(74);
+  const narrow = browserColumns(24);
+  assert.ok(wide.title > narrow.title, "the title column takes what the shares leave");
+  for (const column of Object.values(narrow)) {
+    assert.ok(column >= 0, "no column goes negative");
   }
-  assert.equal(narrow[1]?.includes("tokens"), false, "a dropped column is not squeezed in");
-  assert.match(wide[1] ?? "", /000000ff/);
-  assert.match(narrow[1] ?? "", /000000ff/);
 });
 
 test("the browser marks the row the keyboard is on", async () => {
-  const rows = [
-    summary({ session_id: "0b1a2c3d-0000-4000-8000-000000000001" }),
-    summary({ session_id: "0b1a2c3d-0000-4000-8000-000000000002" }),
-  ];
-  const painted_ = await lines(rows, 60, 10, { selection: 1 });
-  assert.equal(painted_[1]?.startsWith("00000001"), true, "the first row carries no marker");
-  assert.match(painted_[2] ?? "", /^›\s+00000002/);
+  const rows = [summary({ session_id: "a" }), summary({ session_id: "b" })];
+  const painted_ = await lines(rows, 80, 30, { selection: 1 });
+  const first = painted_.find((line) => line.includes(" a "));
+  const second = painted_.find((line) => line.includes(" b "));
+  assert.equal(first?.includes(">"), false, "the first row carries no marker");
+  assert.equal(second?.includes(">"), true, "the selected row carries the cursor");
 });
 
-test("a selection below the window scrolls the table instead of leaving the panel", async () => {
-  const rows = Array.from({ length: 12 }, (_unused, index) =>
-    summary({
-      session_id: `0b1a2c3d-0000-4000-8000-0000000000${index.toString(16).padStart(2, "0")}`,
-    }),
-  );
-  const painted_ = await lines(rows, 60, 10, { selection: 11 });
-  const paintedRows = painted_.slice(1, -1).filter((row) => row.trim().length > 0);
-  assert.equal(paintedRows.length, 6, "the window holds six rows");
-  assert.match(paintedRows.at(-1) ?? "", /^› /, "the selected row is inside the window");
-  assert.match(paintedRows.at(-1) ?? "", /0000000b/);
+test("a narrow panel reads its first column and keeps the path whole", async () => {
+  const rows = [summary({ session_id: "0b1a2c3d-0000-4000-8000-0000000000ff" })];
+  const painted_ = await lines(rows, 60, 30);
+  assert.match(painted_.join("\n"), /0b1a2c3d/);
+});
+
+test("the footer counts the rows the window shows", async () => {
+  const rows = [summary(), summary({ session_id: "second" })];
+  const painted_ = await lines(rows, 80, 30);
+  assert.match(painted_.join("\n"), /1-2 of 2/);
+});
+
+test("a failure replaces the table with its own line", async () => {
+  const painted_ = await lines([], 80, 30, { error: "local_daemon_unavailable: no daemon" });
+  assert.match(painted_.join("\n"), /local_daemon_unavailable: no daemon/);
 });

@@ -143,3 +143,57 @@ export function inputBlockRows(lineBreaks: number): number {
 export function panelFits(width: number, height: number): boolean {
   return width > PANEL_MARGIN * 2 + PANEL_FRAME && height > PANEL_MARGIN * 2 + PANEL_FRAME;
 }
+
+/** The fewest rows the docked browser panel occupies, however small the result. */
+export const MIN_PANEL_ROWS = 6;
+
+/** The fewest rows the chat panel keeps above the docked browser and its gap. */
+export const MIN_CHAT_ROWS = 11;
+
+/** The blank canvas row the chat panel keeps above the docked browser. */
+export const PANEL_GAP_ROWS = 1;
+
+/** The browser body rows that are not session rows. */
+export const BROWSER_CHROME_ROWS = 6;
+
+/** The rows the browser's footer occupies: its separator row, then the legend. */
+export const BROWSER_FOOTER_ROWS = 2;
+
+/** The browser columns its own frame and padding take. */
+export const BROWSER_CHROME_COLUMNS = 6;
+
+/** One docked browser's geometry inside a window. */
+export interface BrowserLayout {
+  /** The rows the docked panel occupies. */
+  readonly rows: number;
+  /** The session rows the panel has room for. */
+  readonly dataRows: number;
+  /** The columns the browser's own content has. */
+  readonly contentColumns: number;
+}
+
+/**
+ * Returns the geometry the docked browser takes, or `null` while it does not fit.
+ *
+ * The panel is a layout row at the bottom of the window: it grows with the result
+ * up to half the window, so the chat above it keeps the majority, and it never
+ * opens at all when the chat would fall below its own floor.
+ */
+export function browserLayout(
+  width: number,
+  height: number,
+  rowCount: number,
+): BrowserLayout | null {
+  if (width <= PANEL_FRAME) {
+    return null;
+  }
+  const chrome = PANEL_FRAME + BROWSER_CHROME_ROWS + BROWSER_FOOTER_ROWS;
+  const cap = Math.max(MIN_PANEL_ROWS, Math.floor(height / 2));
+  const dataCap = Math.max(1, cap - chrome);
+  const dataRows = Math.min(Math.max(rowCount, 1), dataCap);
+  const rows = Math.min(Math.max(chrome + dataRows, MIN_PANEL_ROWS), cap);
+  if (height < rows + PANEL_GAP_ROWS + MIN_CHAT_ROWS) {
+    return null;
+  }
+  return { rows, dataRows, contentColumns: width - BROWSER_CHROME_COLUMNS };
+}

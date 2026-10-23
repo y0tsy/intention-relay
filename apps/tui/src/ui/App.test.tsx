@@ -98,11 +98,12 @@ test("the browser takes the panel and lists what the daemon sent", async () => {
     const store = storeFor(client);
     store.dispatch({ kind: "sessions_requested" });
     await until(() => store.state.sessions !== null);
-    const painted_ = await lines(store, 60, 16);
+    const painted_ = await lines(store, 90, 34);
     const text = painted_.join("\n");
-    assert.match(text, /sessions · 1/);
-    assert.match(text, /project\s+3/);
-    assert.match(text, /↑↓ move · enter open · esc close/);
+    assert.match(text, /Sessions/, "the browser is docked under the chat");
+    assert.match(text, /⦿ All/);
+    assert.match(text, /Enter select {2}Tab switch tab {2}Esc close/);
+    assert.match(text, /\/home\/user/, "the workspace the session is bound to");
     store.dispose();
   });
 });

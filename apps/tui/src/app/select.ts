@@ -13,8 +13,10 @@ import type {
   RunProjectionDto,
   RunStatusDto,
   SessionSummariesDto,
+  SessionSummaryDto,
 } from "../bindings";
 import type { ThemePreference } from "./action";
+import type { BrowserTab } from "./browser";
 import type { Draft } from "./editor";
 import { type CommandMenu, commandMenu } from "./menu";
 import type { RunPhase } from "./run";
@@ -81,6 +83,11 @@ export function selectCommandMenu(state: AppState): CommandMenu | null {
   return commandMenu(state.draft);
 }
 
+/** Returns the row of the command band the reader is on. */
+export function selectMenuHighlight(state: AppState): number {
+  return state.menuHighlight;
+}
+
 /** Returns the input line the composer shows. */
 export function selectDraft(state: AppState): Draft {
   return state.draft;
@@ -89,6 +96,21 @@ export function selectDraft(state: AppState): Draft {
 /** Returns the session summaries the browser shows, once the daemon answered. */
 export function selectSessions(state: AppState): SessionSummariesDto | null {
   return state.sessions;
+}
+
+/** Returns the rows the browser's tab and filter show. */
+export function selectBrowserRows(state: AppState): readonly SessionSummaryDto[] {
+  return state.browserRows;
+}
+
+/** Returns the word the browser filters its rows by. */
+export function selectBrowserFilter(state: AppState): string {
+  return state.browserFilter;
+}
+
+/** Returns the browser's tab. */
+export function selectBrowserTab(state: AppState): BrowserTab {
+  return state.browserTab;
 }
 
 /** Returns the failure the session browser reports instead of a list. */

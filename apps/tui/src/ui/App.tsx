@@ -14,7 +14,7 @@
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useState } from "react";
 import type { ThemePreference } from "../app/action";
-import { selectLive, selectSurface, selectTheme } from "../app/select";
+import { selectCommandMenu, selectLive, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
 import { type Palette, paletteFor } from "../theme/palette";
 import { ChatPanel } from "./ChatPanel";
@@ -50,11 +50,12 @@ export function App({ store }: { store: AppStore }) {
   const surface = useStore(store, selectSurface);
   const theme = useStore(store, selectTheme);
   const live = useStore(store, selectLive);
+  const menu = useStore(store, selectCommandMenu);
   const palette = usePalette(theme);
   const { width, height } = useTerminalDimensions();
 
   useKeyboard((event) => {
-    const intent = keyIntent(event, { surface, live, height });
+    const intent = keyIntent(event, { surface, live, menu: menu !== null, height });
     switch (intent.kind) {
       case "ignore":
         return;
@@ -98,6 +99,18 @@ export function App({ store }: { store: AppStore }) {
       case "expand_reasoning":
         store.dispatch({ kind: "reasoning_expanded", id: null });
         return;
+      case "filter_typed":
+        store.dispatch({ kind: "browser_filter_typed", text: intent.text });
+        return;
+      case "filter_backspace":
+        store.dispatch({ kind: "browser_filter_backspace" });
+        return;
+      case "switch_tab":
+        store.dispatch({ kind: "browser_tab_moved", delta: intent.delta });
+        return;
+      case "move_menu":
+        store.dispatch({ kind: "menu_moved", delta: intent.delta });
+        return;
     }
   });
 
@@ -111,8 +124,7 @@ export function App({ store }: { store: AppStore }) {
   });
 
   return (
-    <box flexDirection="column" width="100%" height="100%" backgroundColor={palette.canvas}>
-      <box height={1} />
+    <box width="100%" height="100%" backgroundColor={palette.canvas}>
       <ChatPanel store={store} palette={palette} width={width} height={height} />
     </box>
   );
