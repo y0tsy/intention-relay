@@ -5,40 +5,18 @@
 //! inside its own edges" are assertions about cells, not about intentions.
 
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import { testRender } from "@opentui/react/test-utils";
 import { pasteBytes } from "@opentui/core/testing";
-import { AppStore } from "../app/store";
-import { IntentionClient } from "../client/client";
+import type { AppStore } from "../app/store";
 import { row, run, SESSION_ID, snapshot } from "../testing/fixtures";
 import { withDaemon } from "../testing/daemon-stand-in";
+import { offlineStore, storeFor } from "../testing/store";
 import { App } from "./App";
-
-/** Builds a store over a client whose endpoint no daemon answers on. */
-function offlineStore(): AppStore {
-  return new AppStore({
-    client: new IntentionClient(
-      { instanceId: "intention-relay", address: join(tmpdir(), "intention-relay-absent.sock") },
-      {
-        program: "intention-daemon",
-        launch: () => {
-          throw new Error("no daemon in this test");
-        },
-      },
-    ),
-    workspaceRoot: "/home/user/project",
-    mode: null,
-    initialSession: null,
-    theme: "dark",
-    recorder: { writeTheme: async () => undefined },
-  });
-}
 
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width: number, height: number) {
-  const setup = await testRender(<App store={store} onQuit={() => undefined} />, {
+  const setup = await testRender(<App store={store} />, {
     width,
     height,
   });
@@ -128,14 +106,7 @@ test("a pasted block reaches the session as one prompt", async () => {
           return;
       }
     };
-    const store = new AppStore({
-      client,
-      workspaceRoot: "/home/user/project",
-      mode: null,
-      initialSession: SESSION_ID,
-      theme: "dark",
-      recorder: { writeTheme: async () => undefined },
-    });
+    const store = storeFor(client, { initialSession: SESSION_ID });
     store.dispatch({ kind: "connect_requested" });
     for (let attempt = 0; attempt < 400 && store.state.stream !== "live"; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 5));

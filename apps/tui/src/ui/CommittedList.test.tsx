@@ -1,27 +1,35 @@
-//! The transcript: committed rows, then the text of the step in flight.
+//! The committed rows: what a row says, and what follows them.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { frameLines, painted } from "../testing/render";
+import type { MessageProjectionDto } from "../bindings";
 import { row } from "../testing/fixtures";
+import { frameLines, painted } from "../testing/render";
+import { offlineStore, openSession } from "../testing/store";
 import { DARK } from "../theme/palette";
-import { Transcript, toolLabel } from "./Transcript";
+import { CommittedList, toolLabel } from "./CommittedList";
+import { ProvisionalTail } from "./ProvisionalTail";
 
-/** Renders a transcript of committed rows at one width. */
+/** Renders a transcript of committed rows and a tail at one width. */
 async function lines(
-  messages: Parameters<typeof Transcript>[0]["messages"],
-  options: { provisionalReasoning?: string; provisionalText?: string; height?: number } = {},
+  messages: readonly MessageProjectionDto[],
+  options: { reasoning?: string; answer?: string; height?: number } = {},
 ): Promise<string[]> {
+  const store = offlineStore();
+  openSession(store, {
+    messages: [...messages],
+    answer: options.answer,
+    reasoning: options.reasoning,
+  });
   const frame = await painted(
-    <Transcript
-      messages={messages}
-      provisionalReasoning={options.provisionalReasoning ?? ""}
-      provisionalText={options.provisionalText ?? ""}
-      palette={DARK}
-    />,
+    <box flexDirection="column" gap={1}>
+      <CommittedList store={store} palette={DARK} />
+      <ProvisionalTail store={store} palette={DARK} />
+    </box>,
     60,
     options.height ?? 20,
   );
+  store.dispose();
   return frameLines(frame);
 }
 
@@ -56,8 +64,8 @@ test("a tool row with no identity falls back to its own text", async () => {
 
 test("the step in flight follows the committed rows", async () => {
   const painted_ = await lines([row(1, "user", "hello")], {
-    provisionalReasoning: "weighing it",
-    provisionalText: "an answer forming",
+    reasoning: "weighing it",
+    answer: "an answer forming",
   });
   assert.equal(painted_[0], "> hello");
   assert.equal(painted_[2], "weighing it");

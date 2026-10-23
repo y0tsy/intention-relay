@@ -1,10 +1,11 @@
 //! The render-free state machine every front end drives.
 //!
-//! The state owns the open session, the client's committed state of it, and the
-//! status of the one stream that observes it. A front end reads the state and
-//! mutates it only through [`AppState.update`], which returns the client effects
-//! the transition asks for and never throws: a failure becomes the error line
-//! instead of an error return, so no caller has to recover from a transition.
+//! The state owns the open session, the client's committed state of it, the
+//! status of the one stream that observes it, and the input line itself. A front
+//! end reads the state and mutates it only through [`AppState.update`], which
+//! returns the client effects the transition asks for and never throws: a
+//! failure becomes the error line instead of an error return, so no caller has
+//! to recover from a transition.
 
 import type {
   ErrorDto,
@@ -18,13 +19,32 @@ import type {
 } from "../bindings";
 import { SessionStreamState } from "../client/stream";
 import { type Action, THEME_PREFERENCES, type ThemePreference } from "./action";
+import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
+import {
+  type Draft,
+  EMPTY_DRAFT,
+  editDraft,
+  insertNewline,
+  insertText,
+  replaceDraft,
+} from "./editor";
 import type { Effect } from "./effect";
+import { PromptHistory } from "./history";
 
 /** Which surface owns the keyboard. */
 export type Surface = "chat" | "sessions" | "theme";
 
 /** How far the one live channel of a session has got. */
 export type StreamStatus = "inactive" | "live" | "failed" | "ended";
+
+/**
+ * The rows of a session this front end has not opened.
+ *
+ * The empty list is one value, not one per read: a view subscribes to the rows
+ * and compares the value it was handed, so a selector that built a fresh empty
+ * list on every call would repaint forever.
+ */
+const NO_ROWS: readonly MessageProjectionDto[] = [];
 
 /** Every value one front end holds, with no terminal attached. */
 export class AppState {
@@ -66,6 +86,21 @@ export class AppState {
   selection = 0;
   /** The palette preference the configuration file declares. */
   theme: ThemePreference;
+  /**
+   * The prompt line the composer shows, and where its caret sits.
+   *
+   * The input line is the state's own: a keystroke reaches the draft through an
+   * action, so typing never touches the committed rows a transcript lays out.
+   */
+  draft: Draft = EMPTY_DRAFT;
+  /** The one-line notice the chat surface shows instead of an effect. */
+  notice: string | null = null;
+  /** The rows {@link AppState.transcript} handed out last, and their revision. */
+  #rows: readonly MessageProjectionDto[] = NO_ROWS;
+  #rowsSource: SessionStreamState | null = null;
+  #rowsRevision = -1;
+  /** The prompts this front end has submitted, for the arrow keys to walk. */
+  readonly #history = new PromptHistory();
 
   /**
    * Creates the state a front end starts from.
@@ -113,16 +148,32 @@ export class AppState {
       case "run_cancel_failed":
       case "effect_failed":
         return this.#applyFailure(action.error);
-      case "turn_submitted":
-        return this.#submitTurn(action.content);
+      case "draft_typed":
+        this.draft = insertText(this.draft, action.text);
+        return [];
+      case "draft_edited":
+        this.draft = editDraft(this.draft, action.edit);
+        return [];
+      case "draft_newline":
+        this.draft = insertNewline(this.draft);
+        return [];
+      case "draft_cleared":
+        this.draft = EMPTY_DRAFT;
+        this.notice = null;
+        return [];
+      case "history_recalled":
+        return this.#applyHistoryRecalled(action.delta);
+      case "notice_shown":
+        this.notice = action.text;
+        return [];
+      case "input_submitted":
+        return this.#applyInputSubmitted();
+      case "quit_requested":
+        return [{ kind: "quit" }];
       case "new_session_requested":
         return [{ kind: "create_session", firstTurn: null }];
       case "session_open_requested":
-        // Opening a session a user named takes the keyboard back to the
-        // transcript before the read it asks for has even been sent.
-        this.surface = "chat";
-        this.selection = 0;
-        return [{ kind: "open_session", sessionId: action.sessionId }];
+        return this.#applySessionOpenRequested(action.sessionId);
       case "cancel_run_requested":
         return this.#requestCancel();
       case "sessions_requested":
@@ -170,9 +221,24 @@ export class AppState {
     return THEME_PREFERENCES[this.selection] ?? null;
   }
 
-  /** Returns the committed transcript rows of the current session. */
+  /**
+   * Returns the committed transcript rows of the current session.
+   *
+   * The client mutates its rows in place, so the rows a view compares are copied
+   * once per revision: the same read hands back the same list, and an appended
+   * row hands back a new one.
+   */
   get transcript(): readonly MessageProjectionDto[] {
-    return this.sessionState?.messages ?? [];
+    const state = this.sessionState;
+    if (state === null) {
+      return NO_ROWS;
+    }
+    if (this.#rowsSource !== state || this.#rowsRevision !== state.revision) {
+      this.#rowsSource = state;
+      this.#rowsRevision = state.revision;
+      this.#rows = state.messages.slice();
+    }
+    return this.#rows;
   }
 
   /** Returns the last known run projection. */
@@ -348,6 +414,73 @@ export class AppState {
   }
 
   /**
+   * Recalls one earlier prompt into the input line.
+   *
+   * A walk that comes back to the live draft leaves what the user had typed
+   * alone: the draft is the fallback, so an accidental arrow key never spends a
+   * half-written prompt.
+   */
+  #applyHistoryRecalled(delta: number): readonly Effect[] {
+    const recalled = this.#history.navigate(delta);
+    if (recalled !== null) {
+      this.draft = replaceDraft(recalled);
+    }
+    return [];
+  }
+
+  /**
+   * Submits the line the input line holds.
+   *
+   * The draft is the state's own, so what a submitted line means is decided
+   * here: a prompt becomes a turn, a slash line runs the transition its
+   * registered command names, and a line that resolves to nothing becomes the
+   * notice that says why.
+   */
+  #applyInputSubmitted(): readonly Effect[] {
+    const text = this.draft.text;
+    if (text.trim().length === 0) {
+      return [];
+    }
+    this.#history.push(text);
+    this.draft = EMPTY_DRAFT;
+    this.notice = null;
+    const line = text.trim();
+    if (!isCommandLine(line)) {
+      return this.#submitTurn(text);
+    }
+    const resolution = resolveCommand(line.slice(1));
+    if (resolution.kind !== "invocation") {
+      this.notice = notice(resolution);
+      return [];
+    }
+    const { spec, words } = resolution.invocation;
+    switch (spec.action) {
+      case "quit":
+        return [{ kind: "quit" }];
+      case "new_session":
+        return [{ kind: "create_session", firstTurn: null }];
+      case "open_session": {
+        const sessionId = words[0];
+        return sessionId === undefined ? [] : this.#applySessionOpenRequested(sessionId);
+      }
+      case "list_sessions":
+        return this.#applySessionsRequested();
+      case "choose_theme": {
+        const word = words[0];
+        if (word === undefined) {
+          return this.#applyThemeRequested();
+        }
+        const preference = themeValue(word);
+        if (preference === undefined) {
+          this.notice = `unknown theme "${word}"; known themes: ${THEME_PREFERENCES.join(" ")}`;
+          return [];
+        }
+        return this.#applyThemeSelected(preference);
+      }
+    }
+  }
+
+  /**
    * Sends one prompt the caller supplied as data.
    *
    * With no session open the prompt creates the session it needs as that
@@ -368,6 +501,18 @@ export class AppState {
       return [];
     }
     return [{ kind: "cancel_run", sessionId: this.sessionId, runId: run.run_id }];
+  }
+
+  /**
+   * Opens the session a user named.
+   *
+   * The keyboard goes back to the transcript from this moment, before the read
+   * the open asks for has even been sent.
+   */
+  #applySessionOpenRequested(sessionId: SessionId): readonly Effect[] {
+    this.surface = "chat";
+    this.selection = 0;
+    return [{ kind: "open_session", sessionId }];
   }
 
   /**

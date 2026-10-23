@@ -27,6 +27,8 @@ export interface StoreOptions {
   readonly recorder: ThemeRecorder;
   /** The theme preference the configuration file declares. */
   readonly theme: ThemePreference;
+  /** Leaves the front end, once a submitted line asks for it. */
+  readonly onQuit: () => void;
 }
 
 /** Reads and writes the one theme preference the app persists. */
@@ -52,6 +54,7 @@ export class AppStore {
   readonly #mode: RunModeDto | null;
   readonly #listeners = new Set<StoreListener>();
   readonly #recorder: ThemeRecorder;
+  readonly #onQuit: () => void;
   #version = 0;
   #stream: SessionStream | null = null;
   #streamGeneration = 0;
@@ -62,6 +65,7 @@ export class AppStore {
     this.#workspaceRoot = options.workspaceRoot;
     this.#mode = options.mode;
     this.#recorder = options.recorder;
+    this.#onQuit = options.onQuit;
     this.state = new AppState(options.initialSession, options.theme);
   }
 
@@ -164,6 +168,10 @@ export class AppStore {
         return;
       case "persist_theme":
         await this.#persistTheme(effect.preference);
+        return;
+      case "quit":
+        this.dispose();
+        this.#onQuit();
         return;
       default:
         assertNever(effect);

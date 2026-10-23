@@ -27,4 +27,6 @@ export type Effect =
   /** Read the current durable session list. */
   | { readonly kind: "list_sessions" }
   /** Write one theme preference to the configuration file. */
-  | { readonly kind: "persist_theme"; readonly preference: ThemePreference };
+  | { readonly kind: "persist_theme"; readonly preference: ThemePreference }
+  /** Leave the front end. */
+  | { readonly kind: "quit" };

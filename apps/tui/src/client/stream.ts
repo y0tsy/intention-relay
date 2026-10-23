@@ -44,6 +44,15 @@ export class SessionStreamState {
   #provisionalStep: number | null = null;
   #provisionalText = "";
   #provisionalReasoning = "";
+  /**
+   * How many times the committed rows have moved.
+   *
+   * Rows are mutated in place, so a view that compares the array it was handed
+   * cannot tell an appended row from the same array read twice. A view keys the
+   * identity of what it renders on this number instead: transient text moves
+   * without moving it.
+   */
+  #revision = 0;
 
   private constructor(sessionId: SessionId) {
     this.#sessionId = sessionId;
@@ -88,6 +97,7 @@ export class SessionStreamState {
     // advance notice of an earlier stream never outlives it.
     this.#clearProvisional();
     this.#retainNewest();
+    this.#touch();
   }
 
   /**
@@ -132,6 +142,11 @@ export class SessionStreamState {
     return this.#messages;
   }
 
+  /** Returns how many times the committed rows have moved. */
+  get revision(): number {
+    return this.#revision;
+  }
+
   /** Returns the transient answer text of the current model step. */
   get provisionalText(): string {
     return this.#provisionalText;
@@ -156,6 +171,7 @@ export class SessionStreamState {
     }
     this.#messages.push(message);
     this.#retainNewest();
+    this.#touch();
     return { kind: "row", row: message.id };
   }
 
@@ -200,6 +216,11 @@ export class SessionStreamState {
     const changed = this.#run === null || !sameRun(this.#run, run);
     this.#run = run;
     return changed ? { kind: "run", run: run.run_id } : { kind: "unchanged" };
+  }
+
+  /** Moves the row revision forward after the committed rows changed. */
+  #touch(): void {
+    this.#revision += 1;
   }
 
   /** Drops the transient text of every channel of the current model step. */

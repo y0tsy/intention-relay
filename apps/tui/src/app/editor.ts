@@ -15,6 +15,9 @@ export interface Draft {
 /** The empty draft. */
 export const EMPTY_DRAFT: Draft = { text: "", caret: 0 };
 
+/** One caret edit a key names, as the state machine receives it. */
+export type DraftEdit = "backspace" | "delete" | "left" | "right";
+
 /** Inserts text at the caret and leaves the caret after it. */
 export function insertText(draft: Draft, text: string): Draft {
   const before = draft.text.slice(0, draft.caret);
@@ -64,7 +67,7 @@ export function caretToEnd(draft: Draft): Draft {
 }
 
 /** Applies one of the four caret edits the composer's keys name. */
-export function editDraft(draft: Draft, edit: "backspace" | "delete" | "left" | "right"): Draft {
+export function editDraft(draft: Draft, edit: DraftEdit): Draft {
   switch (edit) {
     case "backspace":
       return backspace(draft);

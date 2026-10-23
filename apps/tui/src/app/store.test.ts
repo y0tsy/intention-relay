@@ -25,6 +25,7 @@ function storeOver(
     mode: null,
     initialSession: options.initialSession ?? null,
     theme: options.theme ?? "auto",
+    onQuit: () => undefined,
     recorder: {
       writeTheme: async (preference) => {
         written.push(preference);
@@ -157,7 +158,8 @@ test("a prompt with no session creates one and sends it in the same command", as
     );
     store.dispatch({ kind: "connect_requested" });
     await until(() => daemon.requests.length > 0, "the daemon to be reached");
-    store.dispatch({ kind: "turn_submitted", content: "hello" });
+    store.dispatch({ kind: "draft_typed", text: "hello" });
+    store.dispatch({ kind: "input_submitted" });
     await until(() => store.state.sessionId !== null, "the created session");
     assert.equal(store.state.error, null);
     store.dispose();
@@ -185,7 +187,8 @@ test("a prompt with a session is one user turn", async () => {
     );
     store.dispatch({ kind: "connect_requested" });
     await until(() => store.state.stream === "live", "the stream to open");
-    store.dispatch({ kind: "turn_submitted", content: "hello" });
+    store.dispatch({ kind: "draft_typed", text: "hello" });
+    store.dispatch({ kind: "input_submitted" });
     await until(() => sent(daemon, "send_user_turn"), "the turn to leave");
     // The run a turn starts reaches the state as a status frame on the stream
     // that is already open, so no second subscription is asked for.
@@ -256,6 +259,7 @@ test("a written preference that fails lands on the error line", async () => {
       mode: null,
       initialSession: null,
       theme: "auto",
+      onQuit: () => undefined,
       recorder: {
         writeTheme: async (preference) => {
           written.push(preference);

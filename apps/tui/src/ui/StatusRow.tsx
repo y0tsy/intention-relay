@@ -1,8 +1,19 @@
 //! The status line: who this session is, and what is happening to the prompt.
 
+import {
+  selectAnswering,
+  selectLive,
+  selectRunStatus,
+  selectSessionId,
+  selectStartedAt,
+  selectTokens,
+} from "../app/select";
+import type { AppStore } from "../app/store";
 import type { RunStatusDto } from "../bindings";
 import type { Palette } from "../theme/palette";
 import { describeRun, formatElapsed, shortId } from "./format";
+import { useNow } from "./use-now";
+import { useStore } from "./use-store";
 
 /** The facts the status line renders. */
 export interface StatusFacts {
@@ -76,4 +87,33 @@ export function StatusRow({
       <text fg={palette.muted}>{right}</text>
     </box>
   );
+}
+
+/**
+ * Renders the status line from the store.
+ *
+ * The line subscribes to the facts it prints and keeps the clock itself, so a
+ * token count that moves with the stream, and the second that passes, repaint
+ * this one row.
+ */
+export function StatusLine({
+  store,
+  palette,
+  width,
+}: {
+  store: AppStore;
+  palette: Palette;
+  width: number;
+}) {
+  const sessionId = useStore(store, selectSessionId);
+  const runStatus = useStore(store, selectRunStatus);
+  const startedAt = useStore(store, selectStartedAt);
+  const answering = useStore(store, selectAnswering);
+  const tokens = useStore(store, selectTokens);
+  const live = useStore(store, selectLive);
+  // The elapsed time only moves while a run is live, so the clock runs then and
+  // is silent otherwise.
+  const now = useNow(live);
+  const facts: StatusFacts = { sessionId, runStatus, startedAt, answering, tokens, now };
+  return <StatusRow facts={facts} palette={palette} width={width} />;
 }

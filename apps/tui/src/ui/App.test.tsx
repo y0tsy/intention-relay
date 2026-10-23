@@ -4,45 +4,13 @@
 //! app paints, so the surface that owns the keyboard is the surface on screen.
 
 import assert from "node:assert/strict";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
-import type { ThemePreference } from "../app/action";
-import { AppStore } from "../app/store";
-import { IntentionClient } from "../client/client";
+import type { AppStore } from "../app/store";
 import { withDaemon } from "../testing/daemon-stand-in";
 import { row, run, SESSION_ID, snapshot } from "../testing/fixtures";
 import { frameLines, painted } from "../testing/render";
+import { offlineStore, storeFor } from "../testing/store";
 import { App } from "./App";
-
-/** Builds one store over a client, with a recorder that writes nothing. */
-function storeFor(
-  client: IntentionClient,
-  options: { initialSession?: string | null; theme?: ThemePreference } = {},
-): AppStore {
-  return new AppStore({
-    client,
-    workspaceRoot: "/home/user/project",
-    mode: null,
-    initialSession: options.initialSession ?? null,
-    theme: options.theme ?? "dark",
-    recorder: { writeTheme: async () => undefined },
-  });
-}
-
-/** Builds one store over a client whose endpoint no daemon answers on. */
-function offlineStore(theme: ThemePreference = "dark"): AppStore {
-  const client = new IntentionClient(
-    { instanceId: "intention-relay", address: join(tmpdir(), "intention-relay-absent.sock") },
-    {
-      program: "intention-daemon",
-      launch: () => {
-        throw new Error("no daemon in this test");
-      },
-    },
-  );
-  return storeFor(client, { theme });
-}
 
 /** Waits until the predicate holds, or gives up. */
 async function until(predicate: () => boolean): Promise<void> {
@@ -56,7 +24,7 @@ async function until(predicate: () => boolean): Promise<void> {
 
 /** Renders the app at one terminal size and returns its lines. */
 async function lines(store: AppStore, width: number, height: number): Promise<string[]> {
-  const frame = await painted(<App store={store} onQuit={() => undefined} />, width, height);
+  const frame = await painted(<App store={store} />, width, height);
   return frameLines(frame);
 }
 

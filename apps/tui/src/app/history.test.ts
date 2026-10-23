@@ -15,7 +15,7 @@ import {
   moveCaret,
   renderDraft,
   replaceDraft,
-} from "../ui/editor";
+} from "./editor";
 
 test("typed text lands at the caret and the caret follows it", () => {
   const draft = insertText(EMPTY_DRAFT, "hello");

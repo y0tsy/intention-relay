@@ -4,12 +4,18 @@
 //! app owns the indentation, the palette, and the wrap, which a ready-made
 //! renderer would take over. Only the block types a chat answer actually uses
 //! are handled, and anything else renders as its own text.
+//!
+//! Parsing is split from painting so a streamed answer is not re-parsed from its
+//! first word on every frame: [`MarkdownBlock`] parses the source it is handed
+//! once, and [`MarkdownBlocks`] hands it the settled prefix and the open tail as
+//! two sources.
 
 import { TextAttributes } from "@opentui/core";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
-import type { ReactNode } from "react";
+import { memo, type ReactNode, useMemo } from "react";
 import type { Palette } from "../theme/palette";
+import { splitBlocks } from "./markdown-blocks";
 
 /** One inline run of text and how it is marked. */
 interface Run {
@@ -86,12 +92,12 @@ function blockKey(index: number, raw: string): string {
 }
 
 /** Renders one markdown block. */
-function block(token: Token, palette: Palette, key: string): ReactNode {
+function block(token: Token, palette: Palette, ink: string, key: string): ReactNode {
   switch (token.type) {
     case "paragraph": {
       const paragraph = token as Tokens.Paragraph;
       return (
-        <text key={key} wrapMode="word" fg={palette.assistant}>
+        <text key={key} wrapMode="word" fg={ink}>
           {inline(paragraph.tokens, palette)}
         </text>
       );
@@ -114,7 +120,7 @@ function block(token: Token, palette: Palette, key: string): ReactNode {
               <text fg={palette.muted}>{list.ordered ? `${start + index}. ` : "- "}</text>
               <box flexDirection="column" flexGrow={1}>
                 {item.tokens.map((inner, innerIndex) =>
-                  block(inner, palette, blockKey(innerIndex, inner.raw)),
+                  block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
                 )}
               </box>
             </box>
@@ -151,7 +157,7 @@ function block(token: Token, palette: Palette, key: string): ReactNode {
           borderColor={palette.border}
         >
           {quote.tokens.map((inner, innerIndex) =>
-            block(inner, palette, blockKey(innerIndex, inner.raw)),
+            block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
           )}
         </box>
       );
@@ -169,7 +175,7 @@ function block(token: Token, palette: Palette, key: string): ReactNode {
     default: {
       const raw = "raw" in token ? token.raw : "";
       return (
-        <text key={key} wrapMode="word" fg={palette.assistant}>
+        <text key={key} wrapMode="word" fg={ink}>
           {raw}
         </text>
       );
@@ -178,17 +184,67 @@ function block(token: Token, palette: Palette, key: string): ReactNode {
 }
 
 /**
- * Renders one markdown document.
+ * Renders one source, parsed once.
+ *
+ * The parse is memoized on the source: a re-render that hands the same text back
+ * - a committed row repainted because the theme changed, say - paints the tokens
+ * it already has instead of reading the text again.
+ */
+export const MarkdownBlock = memo(function MarkdownBlock({
+  source,
+  palette,
+  ink,
+}: {
+  source: string;
+  palette: Palette;
+  ink?: string;
+}) {
+  const tokens = useMemo(() => marked.lexer(source), [source]);
+  const body = ink ?? palette.assistant;
+  return (
+    <box flexDirection="column">
+      {tokens.map((token, index) => block(token, palette, body, blockKey(index, token.raw)))}
+    </box>
+  );
+});
+
+/** Renders one whole markdown document. */
+export function Markdown({
+  source,
+  palette,
+  ink,
+}: {
+  source: string;
+  palette: Palette;
+  ink?: string;
+}) {
+  return <MarkdownBlock source={source} palette={palette} ink={ink} />;
+}
+
+/**
+ * Renders one streamed answer.
  *
  * Blocks are laid out one after another, so a paragraph wraps by word and a
  * fenced block keeps its own lines: the two decisions a terminal reader notices
- * first.
+ * first. The settled prefix is one source and the block still being written is
+ * another, so a frame re-parses the tail and leaves everything before it alone.
  */
-export function Markdown({ source, palette }: { source: string; palette: Palette }) {
-  const tokens = marked.lexer(source);
+export function MarkdownBlocks({
+  source,
+  palette,
+  ink,
+}: {
+  source: string;
+  palette: Palette;
+  ink?: string;
+}) {
+  const { closed, open } = splitBlocks(source);
+  // One column holds both parses: a streamed answer is one run of rows, so the
+  // spacing around it belongs to the row, not to the seam between two parses.
   return (
     <box flexDirection="column">
-      {tokens.map((token, index) => block(token, palette, blockKey(index, token.raw)))}
+      {closed.length === 0 ? null : <MarkdownBlock source={closed} palette={palette} ink={ink} />}
+      {open.length === 0 ? null : <MarkdownBlock source={open} palette={palette} ink={ink} />}
     </box>
   );
 }

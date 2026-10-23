@@ -127,14 +127,16 @@ test("a created session opens itself", () => {
 
 test("a prompt with no session creates the session it needs in one command", () => {
   const state = new AppState(null);
-  assert.deepEqual(state.update({ kind: "turn_submitted", content: "hello" }), [
+  state.update({ kind: "draft_typed", text: "hello" });
+  assert.deepEqual(state.update({ kind: "input_submitted" }), [
     { kind: "create_session", firstTurn: "hello" },
   ]);
 });
 
 test("a prompt with a session is one user turn", () => {
   const state = openedSession();
-  assert.deepEqual(state.update({ kind: "turn_submitted", content: "hello" }), [
+  state.update({ kind: "draft_typed", text: "hello" });
+  assert.deepEqual(state.update({ kind: "input_submitted" }), [
     { kind: "send_turn", sessionId: SESSION_ID, content: "hello" },
   ]);
 });

@@ -49,6 +49,36 @@ source `.tsx`, not transpiled output.
   resolves `@opentui/core-win32-x64`; the `tui` CI job runs there for exactly
   that reason.
 
+## The reactive layer
+
+The renderer is `@opentui/react`'s React 19 reconciler over a store that views
+subscribe to with selectors. No dependency was added for it: `useSyncExternalStore`
+is part of React, and the selector layer is thirty lines in `src/ui/use-store.ts`.
+
+**Solid was the alternative.** `@opentui/solid` 0.6.8 ships the same hooks, but
+its `preload.node.js` throws `@opentui/solid/preload is Bun-only`, and its JSX
+runtime applies props once, so every dynamic value would have to be an accessor.
+Reaching that runtime under Node and `tsx` means a custom Babel loader, which the
+Windows lane would carry as well. `@opentui/vue` 0.1.25 trails the core at 0.6.8
+and was never a candidate.
+
+**A streamed answer is parsed in two parts.** `splitBlocks` cuts the source at
+the last closed block, so a frame re-parses the paragraph still being written and
+leaves the settled prefix to its memoized block. The parse is memoized on the
+source string, so a repaint that hands the same text back paints the tokens it
+already has.
+
+**Row identity is a revision, not the array.** The client mutates its rows in
+place, so a view comparing the array it was handed cannot see an appended row.
+`SessionStreamState.revision` counts how many times the committed rows moved,
+`AppState.transcript` copies them once per revision, and a transient delta moves
+without moving it.
+
+**A scrollbox needs a basis.** In a bordered column, `flexGrow={1}` alone lets
+the scrollbox take the rows its content asks for and push the panels below it
+out of the frame. `flexBasis={0}` with `flexGrow={1}` gives it the free space and
+nothing else.
+
 ## Test run time
 
 `node --test` runs one process per file, so the suite is bounded by its slowest

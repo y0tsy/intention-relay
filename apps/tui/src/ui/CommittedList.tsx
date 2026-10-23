@@ -1,9 +1,18 @@
-//! The transcript: committed rows, then the text of the step in flight.
+//! The committed rows of the open session.
+//!
+//! The list subscribes to the rows itself, so a frame that only moves the
+//! transient tail never reaches it, and every row is memoized on its own
+//! identity: an appended row lays out the appended row alone, exactly as a
+//! direct layout would.
 
 import { TextAttributes } from "@opentui/core";
+import { memo } from "react";
+import { selectTranscript } from "../app/select";
+import type { AppStore } from "../app/store";
 import type { MessageProjectionDto, ToolRowDto } from "../bindings";
 import type { Palette } from "../theme/palette";
 import { Markdown } from "./Markdown";
+import { useStore } from "./use-store";
 
 /**
  * Returns the one-line label of a tool row.
@@ -22,7 +31,13 @@ export function toolLabel(tool: ToolRowDto): string {
 }
 
 /** Renders one committed row. */
-function Row({ message, palette }: { message: MessageProjectionDto; palette: Palette }) {
+const Row = memo(function Row({
+  message,
+  palette,
+}: {
+  message: MessageProjectionDto;
+  palette: Palette;
+}) {
   switch (message.kind) {
     case "user":
       return (
@@ -49,35 +64,16 @@ function Row({ message, palette }: { message: MessageProjectionDto; palette: Pal
         </text>
       );
   }
-}
+});
 
-/** Renders every committed row and the transient text that follows them. */
-export function Transcript({
-  messages,
-  provisionalReasoning,
-  provisionalText,
-  palette,
-}: {
-  messages: readonly MessageProjectionDto[];
-  provisionalReasoning: string;
-  provisionalText: string;
-  palette: Palette;
-}) {
+/** Renders every committed row, newest last. */
+export function CommittedList({ store, palette }: { store: AppStore; palette: Palette }) {
+  const messages = useStore(store, selectTranscript);
   return (
-    <box flexDirection="column" gap={1}>
+    <>
       {messages.map((message) => (
         <Row key={message.id} message={message} palette={palette} />
       ))}
-      {provisionalReasoning.length > 0 ? (
-        <text wrapMode="word" fg={palette.faint}>
-          {provisionalReasoning}
-        </text>
-      ) : null}
-      {provisionalText.length > 0 ? (
-        <text wrapMode="word" fg={palette.provisional}>
-          {provisionalText}
-        </text>
-      ) : null}
-    </box>
+    </>
   );
 }

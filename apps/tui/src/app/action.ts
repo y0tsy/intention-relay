@@ -13,6 +13,7 @@ import type {
   SessionSummariesDto,
 } from "../bindings";
 import type { SessionStreamState } from "../client/stream";
+import type { DraftEdit } from "./editor";
 
 /** One fact the client established or one gesture the user made. */
 export type Action =
@@ -46,8 +47,22 @@ export type Action =
   | { readonly kind: "run_cancel_accepted" }
   /** Stopping the active run failed. */
   | { readonly kind: "run_cancel_failed"; readonly error: ErrorDto }
-  /** The user submitted one prompt as a turn. */
-  | { readonly kind: "turn_submitted"; readonly content: string }
+  /** The user typed or pasted text into the input line. */
+  | { readonly kind: "draft_typed"; readonly text: string }
+  /** The user made one caret edit in the input line. */
+  | { readonly kind: "draft_edited"; readonly edit: DraftEdit }
+  /** The user asked for a line break in the input line. */
+  | { readonly kind: "draft_newline" }
+  /** The user cleared the input line. */
+  | { readonly kind: "draft_cleared" }
+  /** The user walked the submitted prompts. */
+  | { readonly kind: "history_recalled"; readonly delta: number }
+  /** The surface shows one notice line. */
+  | { readonly kind: "notice_shown"; readonly text: string }
+  /** The user submitted the input line. */
+  | { readonly kind: "input_submitted" }
+  /** The user asked to leave the front end. */
+  | { readonly kind: "quit_requested" }
   /** The user asked for a new session. */
   | { readonly kind: "new_session_requested" }
   /** The user named one session to open. */

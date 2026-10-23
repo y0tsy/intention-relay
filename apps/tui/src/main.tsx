@@ -41,6 +41,7 @@ const store = new AppStore({
   recorder: {
     writeTheme: (preference) => writeThemePreference(preference, configPath()),
   },
+  onQuit: () => void quit(),
 });
 
 /** Leaves the terminal exactly as it was found. */
@@ -50,7 +51,7 @@ async function quit(): Promise<void> {
   process.exit(0);
 }
 
-root.render(<App store={store} onQuit={() => void quit()} />);
+root.render(<App store={store} />);
 // The first frame is painted before the daemon is reached, so a slow bootstrap
 // shows the welcome surface instead of a blank terminal.
 store.dispatch({ kind: "connect_requested" });

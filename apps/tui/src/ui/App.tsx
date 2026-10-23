@@ -4,41 +4,42 @@
 //! keyboard is painted inside it, so a user is never typing into a screen that
 //! is not on screen. The composer, the hint band, and the status line stay put
 //! while the transcript scrolls between them.
+//!
+//! The app subscribes to what decides the frame's composition - the surface, the
+//! palette, whether the transcript is still empty, the two transient lines, and
+//! whether a run is live - and to nothing that moves with the stream. The rows,
+//! the tail, the composer, and the status line each subscribe to their own
+//! values, so a streamed frame repaints the tail and a keystroke repaints the
+//! composer.
 
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ThemePreference } from "../app/action";
-import { isCommandLine, notice, resolveCommand, themeValue } from "../app/commands";
-import { PromptHistory } from "../app/history";
-import type { AppStore } from "../app/store";
-import type { AppState } from "../app/state";
-import { paletteFor, type Palette } from "../theme/palette";
-import { Composer } from "./Composer";
 import {
-  EMPTY_DRAFT,
-  type Draft,
-  editDraft,
-  insertNewline,
-  insertText,
-  replaceDraft,
-} from "./editor";
+  selectEmpty,
+  selectError,
+  selectLive,
+  selectNotice,
+  selectSelection,
+  selectSessions,
+  selectSessionsError,
+  selectSurface,
+  selectTheme,
+} from "../app/select";
+import type { AppStore } from "../app/store";
+import { paletteFor, type Palette } from "../theme/palette";
+import { CommittedList } from "./CommittedList";
+import { Composer } from "./Composer";
 import { HintBand } from "./HintBand";
 import { keyIntent, pastedText } from "./keys";
+import { ProvisionalTail } from "./ProvisionalTail";
 import { SessionBrowser } from "./SessionBrowser";
-import { StatusRow, type StatusFacts } from "./StatusRow";
-import { THEME_ENTRIES, ThemePicker } from "./ThemePicker";
-import { Transcript } from "./Transcript";
+import { StatusLine } from "./StatusRow";
+import { ThemePicker } from "./ThemePicker";
+import { useNow } from "./use-now";
+import { useStore } from "./use-store";
 import { Welcome } from "./Welcome";
-
-/** Subscribes one component to the store's version. */
-function useStoreState(store: AppStore): AppState {
-  useSyncExternalStore(
-    (listener) => store.subscribe(listener),
-    () => store.getVersion(),
-  );
-  return store.state;
-}
 
 /** Resolves the palette the app paints with. */
 function usePalette(preference: ThemePreference): Palette {
@@ -64,133 +65,66 @@ function usePalette(preference: ThemePreference): Palette {
   return paletteFor(mode);
 }
 
-/** Runs a one-second clock, which is the resolution the status line reads. */
-function useNow(active: boolean): number {
-  const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const timer = setInterval(() => {
-      setNow(Math.floor(Date.now() / 1000));
-    }, 1_000);
-    return () => {
-      clearInterval(timer);
-    };
-  }, [active]);
-  return now;
+/** Renders one transient line under the transcript. */
+function NoticeLine({ text, color }: { text: string; color: string }) {
+  return (
+    <box paddingLeft={1} paddingRight={1}>
+      <text wrapMode="word" fg={color}>
+        {text}
+      </text>
+    </box>
+  );
 }
 
 /** The fullscreen application. */
-export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) {
-  const state = useStoreState(store);
-  const palette = usePalette(state.theme);
+export function App({ store }: { store: AppStore }) {
+  const surface = useStore(store, selectSurface);
+  const theme = useStore(store, selectTheme);
+  const empty = useStore(store, selectEmpty);
+  const error = useStore(store, selectError);
+  const notice = useStore(store, selectNotice);
+  const live = useStore(store, selectLive);
+  const sessions = useStore(store, selectSessions);
+  const sessionsError = useStore(store, selectSessionsError);
+  const selection = useStore(store, selectSelection);
+  // The browser prints how long ago a session moved, so the clock runs while it
+  // is the surface on screen and nowhere else.
+  const now = useNow(surface === "sessions");
+  const palette = usePalette(theme);
   const { width, height } = useTerminalDimensions();
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [noticeText, setNoticeText] = useState<string | null>(null);
-  const history = useMemo(() => new PromptHistory(), []);
   const scroll = useRef<ScrollBoxRenderable | null>(null);
-  const live = state.liveRun !== null;
-  const now = useNow(live);
-
-  const quit = useCallback(() => {
-    store.dispose();
-    onQuit();
-  }, [store, onQuit]);
-
-  /** Hands one submitted line to the grammar or to the session as a turn. */
-  const submit = useCallback(() => {
-    const text = draft.text;
-    if (text.trim().length === 0) {
-      return;
-    }
-    history.push(text);
-    setDraft(EMPTY_DRAFT);
-    setNoticeText(null);
-    const line = text.trim();
-    if (!isCommandLine(line)) {
-      store.dispatch({ kind: "turn_submitted", content: text });
-      return;
-    }
-    const resolution = resolveCommand(line.slice(1));
-    if (resolution.kind !== "invocation") {
-      setNoticeText(notice(resolution));
-      return;
-    }
-    const { spec, words } = resolution.invocation;
-    switch (spec.action) {
-      case "quit":
-        quit();
-        return;
-      case "new_session":
-        store.dispatch({ kind: "new_session_requested" });
-        return;
-      case "open_session": {
-        const sessionId = words[0];
-        if (sessionId !== undefined) {
-          store.dispatch({ kind: "session_open_requested", sessionId });
-        }
-        return;
-      }
-      case "list_sessions":
-        store.dispatch({ kind: "sessions_requested" });
-        return;
-      case "choose_theme": {
-        const word = words[0];
-        if (word === undefined) {
-          store.dispatch({ kind: "theme_requested" });
-          return;
-        }
-        const preference = themeValue(word);
-        if (preference === undefined) {
-          setNoticeText(
-            `unknown theme "${word}"; known themes: ${THEME_ENTRIES.map((entry) => entry.preference).join(" ")}`,
-          );
-          return;
-        }
-        store.dispatch({ kind: "theme_selected", preference });
-      }
-    }
-  }, [draft, history, quit, store]);
 
   useKeyboard((event) => {
-    const intent = keyIntent(event, {
-      surface: state.surface,
-      live: state.liveRun !== null,
-      height,
-    });
+    const intent = keyIntent(event, { surface, live, height });
     switch (intent.kind) {
       case "ignore":
         return;
       case "quit":
-        quit();
+        store.dispatch({ kind: "quit_requested" });
         return;
       case "submit":
-        submit();
+        store.dispatch({ kind: "input_submitted" });
         return;
       case "newline":
-        setDraft((current) => insertNewline(current));
+        store.dispatch({ kind: "draft_newline" });
         return;
       case "stop_run":
         store.dispatch({ kind: "cancel_run_requested" });
         return;
       case "clear_draft":
-        setDraft(EMPTY_DRAFT);
-        setNoticeText(null);
+        store.dispatch({ kind: "draft_cleared" });
         return;
       case "edit":
-        setDraft((current) => editDraft(current, intent.edit));
+        store.dispatch({ kind: "draft_edited", edit: intent.edit });
         return;
-      case "recall": {
-        const recalled = history.navigate(intent.delta);
-        setDraft(recalled === null ? EMPTY_DRAFT : replaceDraft(recalled));
+      case "recall":
+        store.dispatch({ kind: "history_recalled", delta: intent.delta });
         return;
-      }
       case "scroll":
         scroll.current?.scrollBy({ x: 0, y: intent.delta });
         return;
       case "insert":
-        setDraft((current) => insertText(current, intent.text));
+        store.dispatch({ kind: "draft_typed", text: intent.text });
         return;
       case "move_selection":
         store.dispatch({ kind: "selection_moved", delta: intent.delta });
@@ -205,26 +139,15 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
   });
 
   usePaste((event) => {
-    if (state.surface !== "chat") {
+    if (surface !== "chat") {
       return;
     }
     // A paste is data, never a gesture: it lands in the draft whole, and its
     // newlines are the prompt's own.
-    setDraft((current) => insertText(current, pastedText(event.bytes)));
+    store.dispatch({ kind: "draft_typed", text: pastedText(event.bytes) });
   });
 
   const inner = width - 2;
-  const facts: StatusFacts = {
-    sessionId: state.sessionId,
-    runStatus: state.runStatus,
-    startedAt: state.activeRun?.started_at ?? null,
-    answering: state.provisionalText.length > 0,
-    tokens:
-      state.activeRun?.usage?.state === "reported" ? state.activeRun.usage.total_tokens : null,
-    now,
-  };
-  const empty = state.transcript.length === 0 && state.provisionalText.length === 0;
-
   return (
     <box
       flexDirection="column"
@@ -237,20 +160,20 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
       title="intention relay"
       titleAlignment="left"
     >
-      {state.surface === "sessions" ? (
+      {surface === "sessions" ? (
         <SessionBrowser
-          summaries={state.sessions}
-          error={state.sessionsError}
-          selection={state.selection}
+          summaries={sessions}
+          error={sessionsError}
+          selection={selection}
           palette={palette}
           width={inner}
           height={height - 2}
           now={now}
         />
-      ) : state.surface === "theme" ? (
+      ) : surface === "theme" ? (
         <ThemePicker
-          selection={state.selection}
-          current={state.theme}
+          selection={selection}
+          current={theme}
           palette={palette}
           width={inner}
           height={height - 2}
@@ -268,35 +191,25 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
             <scrollbox
               ref={scroll}
               flexGrow={1}
+              // The scrollbox takes the rows the panels below it leave, never
+              // the rows its content asks for: a long transcript scrolls
+              // inside the frame instead of pushing the composer out of it.
+              flexBasis={0}
               stickyScroll
               stickyStart="bottom"
               contentOptions={{ paddingLeft: 1, paddingRight: 1 }}
             >
-              <Transcript
-                messages={state.transcript}
-                provisionalReasoning={state.provisionalReasoning}
-                provisionalText={state.provisionalText}
-                palette={palette}
-              />
+              <box flexDirection="column" gap={1}>
+                <CommittedList store={store} palette={palette} />
+                <ProvisionalTail store={store} palette={palette} />
+              </box>
             </scrollbox>
           )}
-          {state.error === null ? null : (
-            <box paddingLeft={1} paddingRight={1}>
-              <text wrapMode="word" fg={palette.error}>
-                {state.error}
-              </text>
-            </box>
-          )}
-          {noticeText === null ? null : (
-            <box paddingLeft={1} paddingRight={1}>
-              <text wrapMode="word" fg={palette.warning}>
-                {noticeText}
-              </text>
-            </box>
-          )}
+          {error === null ? null : <NoticeLine text={error} color={palette.error} />}
+          {notice === null ? null : <NoticeLine text={notice} color={palette.warning} />}
           <HintBand width={inner} palette={palette} />
-          <Composer draft={draft} palette={palette} focused />
-          <StatusRow facts={facts} palette={palette} width={inner} />
+          <Composer store={store} palette={palette} focused />
+          <StatusLine store={store} palette={palette} width={inner} />
         </box>
       )}
     </box>
