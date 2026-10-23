@@ -9,8 +9,8 @@
   },
   "scripts": {
     "start": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx src/main.tsx",
-    "test": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test 'src/**/*.test.ts' 'src/**/*.test.tsx'",
-    "coverage": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test --experimental-test-coverage --test-coverage-lines=60 --test-coverage-include='src/**' --test-coverage-exclude='src/bindings/**' 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "test": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test --test-concurrency=6 --test-timeout=30000 --test-force-exit 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "coverage": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test --test-concurrency=6 --test-timeout=30000 --test-force-exit --experimental-test-coverage --test-coverage-lines=60 --test-coverage-include='src/**' --test-coverage-exclude='src/bindings/**' 'src/**/*.test.ts' 'src/**/*.test.tsx'",
     "typecheck": "tsc --noEmit",
     "fmt": "biome format --write .",
     "lint": "biome lint ."

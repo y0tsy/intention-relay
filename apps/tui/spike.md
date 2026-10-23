@@ -49,6 +49,19 @@ source `.tsx`, not transpiled output.
   resolves `@opentui/core-win32-x64`; the `tui` CI job runs there for exactly
   that reason.
 
+## Test run time
+
+`node --test` runs one process per file, so the suite is bounded by its slowest
+file rather than by the sum of its tests. Measured on twelve cores, 204 tests:
+
+| Configuration                                 | Wall time |
+| --------------------------------------------- | --------- |
+| `--test-isolation=none` (one process, serial) | 24.9 s    |
+| default isolation, `--test-concurrency=6`     | 3.4 s     |
+
+`--test-timeout=30000` fails a wedged test instead of wedging the run, and
+`--test-force-exit` ends a run whose renderer outlives its test.
+
 ## Rejected alternative
 
 Ink 8.0.0 renders correctly on both Node and Bun, and needs no native artifact,
