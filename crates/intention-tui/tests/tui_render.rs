@@ -461,8 +461,13 @@ fn the_browser_footer_shows_the_legend_and_the_row_counter() {
     let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, BROWSER_HEIGHT);
     let pilot = Pilot::new(&mut app);
     pilot.assert_contains("Enter select");
-    pilot.assert_contains("Ctrl+F tree");
+    pilot.assert_contains("Tab switch tab");
     pilot.assert_contains("Esc close");
+    // The legend advertises only keys the browser acts on: rename, archive,
+    // and the tree read have no command behind them yet.
+    pilot.assert_not_contains("Ctrl+R");
+    pilot.assert_not_contains("Ctrl+X");
+    pilot.assert_not_contains("Ctrl+F");
     pilot.assert_contains("1-2 of 2");
     pilot.assert_not_contains("↑↓");
     pilot.assert_not_contains("navigate");

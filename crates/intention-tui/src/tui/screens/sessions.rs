@@ -96,14 +96,7 @@ const INACTIVE_TAB: char = '◦';
 /// palette to plain ANSI still shows which word is the key and which is the
 /// action. The arrow keys move the cursor but are not advertised: the wheel is
 /// the familiar pattern for that, and the legend has no room for both.
-const HINTS: [(&str, &str); 6] = [
-    ("Enter", "select"),
-    ("Tab", "switch tab"),
-    ("Ctrl+R", "rename"),
-    ("Ctrl+X", "archive"),
-    ("Ctrl+F", "tree"),
-    ("Esc", "close"),
-];
+const HINTS: [(&str, &str); 3] = [("Enter", "select"), ("Tab", "switch tab"), ("Esc", "close")];
 
 /// The month labels a date older than a week shows.
 const MONTHS: [&str; 12] = [
