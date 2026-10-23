@@ -143,11 +143,27 @@ quick: fmt-check lint ## Fast local quality loop.
 	$(PYTHON) quality/check_tools.py $(TEST_PINS)
 	$(TIMED) $(CARGO) nextest run --workspace --all-targets --locked --all-features
 
-check: tools-check fmt-check lint test doc ## Complete non-mutating source-quality gate.
+check: tools-check fmt-check lint test doc bindings-check ## Complete non-mutating source-quality gate.
 	@true
 
 verify: check coverage deps ## Full reproducible merge and release gate.
 	@true
+
+# The TypeScript declarations of the wire types. `bindings` rewrites the
+# committed directory; `bindings-check` regenerates into a scratch directory
+# and fails when the two differ, so a DTO change cannot reach the terminal app
+# as a silently mismatched decoder.
+BINDINGS_DIR = apps/tui/src/bindings
+BINDINGS_TEST = --test ts_bindings -- --ignored
+
+bindings: ## MUTATING: regenerate the TypeScript declarations of the wire types.
+	$(CARGO) test --package intention-proto --features ts $(BINDINGS_TEST)
+
+bindings-check: ## Verify the committed TypeScript declarations match the Rust wire types.
+	@scratch="$$(mktemp -d)"
+	trap 'rm -rf "$$scratch"' EXIT
+	TS_RS_EXPORT_DIR="$$scratch" $(CARGO) test --package intention-proto --features ts $(BINDINGS_TEST)
+	diff --recursive --unified "$(BINDINGS_DIR)" "$$scratch"
 
 ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true

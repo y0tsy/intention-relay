@@ -12,6 +12,7 @@ use crate::{RunModeDto, WorkspaceRootDto};
 /// these values, while a bound root keeps its binding and treats them as
 /// advisory, so any number of sessions can join one root.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CreateSessionCommandDto {
     project_id: ProjectId,
     session_id: SessionId,
@@ -120,6 +121,7 @@ impl CreateSessionCommandDto {
 /// one it joins. Its content is validated the way every user turn's is, so a
 /// blank prompt is never a turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CreateSessionFirstTurnDto {
     content: String,
 }
@@ -166,6 +168,7 @@ impl CreateSessionFirstTurnDto {
 
 /// A command requesting that the daemon accept a new user turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SendUserTurnCommandDto {
     session_id: SessionId,
     content: String,
@@ -226,6 +229,7 @@ impl SendUserTurnCommandDto {
 /// The daemon signals the run's in-flight operation and the run ends
 /// `interrupted` instead of continuing to the next model step.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CancelRunCommandDto {
     session_id: SessionId,
     run_id: RunId,
@@ -253,6 +257,7 @@ impl CancelRunCommandDto {
 
 /// A query requesting one current session projection or snapshot.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GetSessionSnapshotQueryDto {
     session_id: SessionId,
 }

@@ -73,6 +73,8 @@ macro_rules! define_id {
     ($name:ident, $description:literal) => {
         #[doc = $description]
         #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+        #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+        #[cfg_attr(feature = "ts", ts(type = "string"))]
         #[serde(transparent)]
         pub struct $name(Uuid);
 
@@ -131,6 +133,8 @@ define_id!(ToolCallId, "A stable identity for one tool invocation.");
 /// the single durable writer assigned, which an adapter matches committed rows
 /// by when two reads of the same transcript meet.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "number"))]
 #[serde(transparent)]
 pub struct MessageId(i64);
 
@@ -176,6 +180,8 @@ impl Display for MessageId {
 
 /// A safe Unix timestamp represented in whole seconds.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(type = "number"))]
 pub struct TimestampDto(i64);
 
 impl<'de> Deserialize<'de> for TimestampDto {
@@ -213,6 +219,7 @@ impl TimestampDto {
 
 /// A closed classification for a safe boundary error.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCategoryDto {
     /// The input does not satisfy a declared DTO or configuration constraint.
@@ -246,6 +253,7 @@ impl ErrorCategoryDto {
 
 /// A safe, structured error usable at crate and process boundaries.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ErrorDto {
     code: String,
     category: ErrorCategoryDto,
@@ -385,6 +393,7 @@ impl ErrorDto {
 
 /// A normalized logical path relative to an already-authorized workspace root.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct WorkspaceRelativePathDto(String);
 

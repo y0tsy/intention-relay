@@ -23,6 +23,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// serve requests, so the answer itself is the readiness fact: there is no
 /// second readiness state to report until a drain path exists.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct DaemonHealthDto {}
 
 impl DaemonHealthDto {
@@ -35,6 +36,7 @@ impl DaemonHealthDto {
 
 /// A subscription request scoped to one durable session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SubscribeSessionCommandDto {
     session_id: SessionId,
 }
@@ -60,6 +62,7 @@ impl SubscribeSessionCommandDto {
 /// assistant row. The channel is the only thing that tells them apart, so a
 /// client can buffer the reasoning without ever merging it into the answer.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum TextDeltaChannelDto {
     /// The answer text the step commits as the text of its assistant row.
@@ -87,6 +90,7 @@ impl TextDeltaChannelDto {
 /// which of that step's two text channels it carries, so the answer and the
 /// reasoning it precedes stay separate from the first chunk on.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TextDeltaFrameDto {
     session_id: SessionId,
     run_id: RunId,
@@ -186,6 +190,7 @@ impl TextDeltaFrameDto {
 /// A status frame carries the committed projection itself, never a status
 /// delta a client would have to merge.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionFrameDto {
     /// One committed transcript row of the session.
@@ -198,6 +203,7 @@ pub enum SessionFrameDto {
 
 /// A current session projection with its committed transcript rows.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionSnapshotDto {
     session_id: SessionId,
     projection: SessionProjectionDto,
@@ -281,6 +287,7 @@ impl SessionSnapshotDto {
 /// and last update times, its bound workspace root, and how many committed
 /// transcript rows it holds — beside the sole active run, if one exists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionSummaryDto {
     session_id: SessionId,
     project_id: ProjectId,
@@ -384,6 +391,7 @@ impl SessionSummaryDto {
 /// is the order a continuation reads — the first summary of the list is its
 /// continue target — and it is exactly the daemon's list order.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionSummariesDto {
     sessions: Vec<SessionSummaryDto>,
     omitted: u32,
@@ -441,6 +449,7 @@ impl SessionSummariesDto {
 
 /// One typed request from a local adapter to the daemon.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ClientRequestDto {
     /// Requests durable creation of a session.
@@ -461,6 +470,7 @@ pub enum ClientRequestDto {
 
 /// One correlated client request line.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProtocolRequestDto {
     id: u64,
     request: ClientRequestDto,
@@ -494,6 +504,7 @@ impl ProtocolRequestDto {
 
 /// The typed result of one client request.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolResultDto {
     /// A durable session was created.
@@ -514,6 +525,7 @@ pub enum ProtocolResultDto {
 
 /// Typed acceptance evidence for a created session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct CreateSessionAcceptedDto {
     project_id: ProjectId,
     workspace_id: WorkspaceId,
@@ -569,6 +581,7 @@ impl CreateSessionAcceptedDto {
 
 /// The durable disposition of an accepted user turn.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SendUserTurnOutcomeDto {
     /// The accepted turn started a run.
@@ -579,6 +592,7 @@ pub enum SendUserTurnOutcomeDto {
 
 /// Typed acceptance evidence for one user turn.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SendUserTurnAcceptedDto {
     session_id: SessionId,
     turn_id: TurnId,
@@ -621,6 +635,7 @@ impl SendUserTurnAcceptedDto {
 
 /// Typed acceptance evidence for a run stop request.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RunCancelledAcceptedDto {
     session_id: SessionId,
     run_id: RunId,
@@ -648,6 +663,7 @@ impl RunCancelledAcceptedDto {
 
 /// One correlated daemon reply carrying the request's typed result.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProtocolReplyDto {
     id: u64,
     result: ProtocolResultDto,
@@ -684,6 +700,7 @@ impl ProtocolReplyDto {
 /// The identity is absent only when the request line itself could not be
 /// decoded, so there is no request identity to echo.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProtocolRejectionDto {
     id: Option<u64>,
     error: ErrorDto,
@@ -718,6 +735,7 @@ impl ProtocolRejectionDto {
 /// One daemon-to-client line: a correlated reply, a correlated rejection, or an
 /// uncorrelated committed run frame.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum ProtocolDaemonMessageDto {
     /// A correlated reply carrying one request's typed result.

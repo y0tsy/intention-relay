@@ -8,6 +8,7 @@ use crate::{DtoResult, ErrorDto, ToolCallId};
 
 /// A validated model-generated function call with JSON object input.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCallDto {
     call_id: ToolCallId,
     name: String,
@@ -86,6 +87,7 @@ impl ToolCallDto {
 
 /// Provider-normalized token usage with a reported or not-reported state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum UsageDto {
     /// The provider did not report usage for this stream.
@@ -153,6 +155,7 @@ impl UsageDto {
 
 /// Provider-normalized terminal reason.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReasonDto {
     /// The model completed naturally.
@@ -171,6 +174,7 @@ pub enum FinishReasonDto {
 
 /// A safe provider-normalized failure that never includes native error text.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ProviderErrorDto {
     code: String,
     retryable: bool,
