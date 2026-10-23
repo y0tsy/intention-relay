@@ -43,8 +43,9 @@ Every kernel-originated call is an ordinary architecture-15 call. The daemon ass
 remains the one identity for that call's durable records and stream frames; an equal repeat within one turn is answered
 from the existing evidence instead of admitting a second action.
 
-Before the call start boundary, an admitted call that never started records `InterruptedBeforeStart` on daemon
-recovery; once the call has started, a repeat is read-only and returns only durable evidence, never re-executing.
+Before the call start boundary, an admitted call that never started records a `Partial` result with the
+`tool_execution_interrupted` code on daemon recovery; once the call has started, a repeat is read-only and returns only
+durable evidence, never re-executing.
 
 ```mermaid
 sequenceDiagram

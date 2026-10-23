@@ -56,8 +56,7 @@ opt-in `e2e-real-api`.
 - Pinned versions and invocation policy live in `quality/tools.toml`; the toolchain is pinned by `rust-toolchain.toml`;
   the lockfile is committed and gates run with `--locked`. A missing or mismatched tool is a typed quality-gate failure,
   never an implicit install.
-- The pinned stable toolchain is single-sourced: the Python runners read it from `quality/tools.toml`, and
-  `make tools-check` fails when a workflow `toolchain:` literal drifts from that value.
+- The pinned stable toolchain is single-sourced: the Python runners read it from `quality/tools.toml`.
 - The pinned toolchain also carries the `x86_64-pc-windows-gnu` target, so the cross-target lint has one declared
   source. MinGW (`gcc-mingw-w64-x86-64`) and `nasm` are host prerequisites of that pass alone; CI installs them for the
   lint job, and locally they are needed only to run `make lint-windows` or `make ci-lint-arch` by hand.
@@ -179,14 +178,15 @@ in the repository. Stale direct dependencies are not a gate either: a
 dependency releasing a patch would fail the build without any change to this repository, so freshness is dependabot's
 work rather than a blocking check.
 
-Duplicate versions are reviewed, not eliminated. Every duplicate family in the graph is owned by the two provider SDKs
-and their HTTP/TLS stacks, and neither SDK offers a release that would collapse one: `async-openai` 0.42.2 requires
-`reqwest` 0.13 with `base64` 0.22 and `getrandom` 0.3, while `openrouter-rs` 0.19.0 requires `reqwest` 0.12 with
-`thiserror` 1 and `dotenvy`, whose macro brings `syn` 1; `futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4,
-and `hyper-util` brings `base64` 0.23. `deny.toml`'s `[bans] skip` list carries each one with its owning chain, and
-`cargo deny` fails on any duplicate that list does not name, so a new family is a blocking finding rather than an
-accretion. The diagnostic needs `--workspace`: the root `Cargo.toml` declares `default-members`, so a bare
-`cargo tree -d` inspects only `intention-proto` and `intention-config` and reports nothing.
+Duplicate versions are reviewed, not eliminated. Every duplicate family in the graph belongs to one of the two
+provider SDKs, to the HTTP/TLS stacks they pull, or to one WASM-target-only dependency of the bundled SQLite chain, and
+no release collapses one: `async-openai` 0.42.2 requires `reqwest` 0.13, `base64` 0.22, and `getrandom` 0.3, while
+`openrouter-rs` 0.19.0 requires `reqwest` 0.12 with `thiserror` 1 and `dotenvy`, whose macro brings `syn` 1;
+`futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4, and `hyper-util` brings `base64` 0.23. `deny.toml`'s
+`[bans] skip` list carries each one with its owning chain, and `cargo deny` fails on any duplicate that list does not
+name, so a new family is a blocking finding rather than an accretion. The diagnostic needs `--workspace`: the root
+`Cargo.toml` declares `default-members`, so a bare `cargo tree -d` inspects only `intention-proto` and
+`intention-config` and reports nothing.
 
 That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-unic` entries is a review
 responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one

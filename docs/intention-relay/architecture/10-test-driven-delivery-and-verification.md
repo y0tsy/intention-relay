@@ -156,8 +156,7 @@ The following scenarios must become executable before the corresponding capabili
 
 1. Start the real daemon binary and connect over the local protocol.
 2. Send a user turn against a fake provider that emits a tool call; verify the
-outgoing request advertises the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`) and
-requests the `tool_calls` capability.
+outgoing request advertises the six active tools (`read`, `write`, `edit`, `execute`, `glob`, `grep`).
 3. Verify the daemon executes the call through the real typed tool service under `WorkspaceRoot`.
 4.  Verify the committed tool-call row and its answering tool-result message row commit before publication, and that
    the client's `SessionFrameDto` notifications carry only those committed values.
@@ -175,7 +174,7 @@ requests the `tool_calls` capability.
 the real daemon binary, drives it through the real local transport, and executes a real model tool loop against the live
 provider API over HTTPS.
 3. Verify the provider returns a real tool call; the outgoing request
-advertises the six active tools and requests the `tool_calls` capability (scenario I), the daemon executes
+advertises the six active tools (scenario I), the daemon executes
 the call through the real typed tool service under `WorkspaceRoot`, the committed tool call and its result commit before
 publication, and the run completes. When the configured model runs in thinking mode, the
 continuation request also carries the same round's accepted reasoning as `reasoning_content` on the assistant tool-call
@@ -213,7 +212,7 @@ pointers:
 - Gateway/RLM bridge — [architecture 19](19-gateway-rlm-bridge.md).
 - Session-scoped kernel lifecycle with run-scoped namespaces — [architecture 20](20-ipython-kernel-lifecycle.md).
 - Goals, skills, context, and compaction — [architecture 21](21-goals-skills-context-memory-and-compaction.md).
-- Provider evolution, profiles, and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
+- Provider configuration and reasoning — [architecture 22](22-provider-evolution-profiles-and-reasoning.md).
 - Session branching and regeneration — [architecture 23](23-non-destructive-session-branching-and-regeneration.md).
 - Daemon, transport, and adapter boundary — [architecture 03](03-daemon-transport-and-adapters.md).
 - Provider configuration, discovery, and typed configuration editing — [architecture 25](25-configuration-provider-control-plane.md) (session selection:

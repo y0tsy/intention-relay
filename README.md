@@ -30,7 +30,7 @@ backward compatibility is neither required nor in demand (see `AGENTS.md`).
   durable, redacted tool-result evidence. Workspace addressing and tool policy
   are owned by [architecture 05](docs/intention-relay/architecture/05-tools-and-workspace.md).
 - **SQLite-first durable state.** One composition crate selects the SQLite
-  adapter; the durable store is seven current-state tables in a single-version
+  adapter; the durable store is six current-state tables in a single-version
   schema, `messages` rows are the transcript, and every state change commits in
   one SQLite transaction before publication, with recovery-before-readiness on
   daemon start.
@@ -191,8 +191,8 @@ and pull requests to `main`:
   (`PLATFORM_TESTS`) and the doctests; Linux test execution happens inside
   `coverage-default`, which runs the full suite instrumented;
 - pinned toolchains and per-job tool installs, a per-phase build cache that
-  keeps each job's target tree warm, `mold` from its own pinned action on
-  Linux, LLD instead of `link.exe` on Windows, MinGW for the Windows-target
+  keeps each compiling job's target tree warm, `mold` from its own pinned action
+  on Linux, LLD instead of `link.exe` on Windows, MinGW for the Windows-target
   lint, and uploaded quality reports.
 
 The live-provider end-to-end run is a local target, `make e2e-real-api`, and

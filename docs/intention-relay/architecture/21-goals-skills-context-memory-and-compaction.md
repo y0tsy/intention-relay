@@ -82,20 +82,19 @@ SkillSelectionV1
 Bodies are bounded immutable UTF-8 text only: no binary, image, executable code, shell template, install instruction,
 plug-in runtime, raw schema, arbitrary URL or header, endpoint, credential, provider/SDK value, or process handle. A
 disabled record is invisible to selection. Discovery lists the applicable enabled cards in deterministic canonical-name
-order pinned to one exact revision; the model compares the request to a card's `name` and `description` and selects one
-exact revision before the body is attached to its model step. A selected revision is immutable: a later edit, disable,
-or removal affects future discovery only and never rewrites an admitted run, child, fork, or historical selection.
-Unknown, disabled, stale, or over-limit material blocks only the dependent attachment before external work.
+order pinned to one exact revision; the model compares the request to a card's `canonical_name` and `description`
+and selects one exact revision before the body is attached to its model step. A selected revision is immutable: a later
+edit, disable, or removal affects future discovery only and never rewrites an admitted run, child, fork, or historical
+selection. Unknown, disabled, stale, or over-limit material blocks only the dependent attachment before external work.
 
 Skill records are session-scoped and committed in exactly one session under the one-transaction state-change law of
 [architecture 04](04-sessions-runs-events-and-storage.md): `SkillSelected` and `SkillBodyAttached`. The closed failures
 are `skill_invalid`, `skill_disabled`, `skill_unknown`, `skill_revision_stale`, `skill_content_too_large`, and
 `skill_name_collision`; none reveals a body, path, or implementation resource. One frozen `SkillSelectionV1` rides the
-run's immutable selection record (`GoalRunSelectionV1` for a goal-directed run and the ordinary run's comparable
-selection otherwise). A child run receives only exact selected values explicitly selected for it. Forks retain the
-exact selected references in their immutable base snapshot. The project script library ([architecture
-20](20-ipython-kernel-lifecycle.md)) is not a Skill: a Skill may name a module only as untrusted instructional text,
-and the module itself stays an ordinary project file.
+run's immutable selection record, for a goal-directed run and an ordinary run alike. A child run receives only exact
+selected values explicitly selected for it. Forks retain the exact selected references in their immutable base
+snapshot. The project script library ([architecture 20](20-ipython-kernel-lifecycle.md)) is not a Skill: a Skill may
+name a module only as untrusted instructional text, and the module itself stays an ordinary project file.
 
 ## Context sources and model-step context
 

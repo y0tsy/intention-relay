@@ -172,8 +172,8 @@ sequenceDiagram
   C-->>A: Typed result and frames
 ```
 
-A live frame is published only after the storage commit succeeds. The command result and frames must include enough
-typed identity for an adapter to reconcile state.
+A live frame is published only after the storage commit succeeds, carrying the values the commit recorded. The command
+result and frames must include enough typed identity for an adapter to reconcile state.
 
 ## Versioning and compatibility
 
@@ -182,9 +182,9 @@ typed identity for an adapter to reconcile state.
   version, and no compatibility layer.
 - Optional stays optional inside that one version. A current payload may omit an optional field, and the omission
   decodes as `None`; that is a property of the live schema, never an allowance for an earlier or later writer.
-- Public DTOs tolerate unknown JSON fields unless a closed configuration schema explicitly documents
-  `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and any stored schema
-  other than the current one always fail safely.
+- Public DTOs tolerate unknown JSON fields unless a closed configuration schema or a closed provider value explicitly
+  documents `deny_unknown_fields`. Required fields, invalid types, invalid IDs, unknown closed variants, and any stored
+  schema other than the current one always fail safely.
 - The typed local wire has exactly one live version and no version marker at all
 ([architecture 03](03-daemon-transport-and-adapters.md)): there is no negotiated protocol version, no handshake, no
 per-payload `schema_version`, and no version byte in the endpoint name. Configuration and storage keep their own
@@ -216,6 +216,3 @@ the same resulting snapshot and frame DTOs without adapter-specific business rul
 See [03 Daemon, Transport, and Adapters](03-daemon-transport-and-adapters.md) for the process boundary, [10 Test-Driven
 Delivery and Verification](10-test-driven-delivery-and-verification.md) for mandatory test layers, and [12 Quality Gates
 and Makefile](12-quality-gates-and-makefile.md) for the blocking orchestration contract.
-
-- Publication follows the commit. A live frame is emitted once the durable commit succeeds, carrying the values the
-  commit recorded.

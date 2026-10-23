@@ -47,7 +47,7 @@ owed.
 
 -  `ConfigSnapshotDto` is the canonical persisted, credential-free configuration selection; raw TOML and credentials do
 not enter committed records, frames, or protocol DTOs.
-- The composition root accepts one valid snapshot per daemon startup and persists it before recovery/readiness.
+- The composition root accepts one valid snapshot per daemon startup before recovery/readiness.
 - A turn that starts a run freezes that startup snapshot on the run row; a turn that stays pending freezes no
 configuration of its own.
 -  Existing runs do not silently change provider, model, tool policy, VFR, Headroom, workspace, or timeout behavior due
@@ -104,8 +104,7 @@ inherit the invoking process environment; environment variables are not name-fil
 - configuration displays do not log values while rendering or validation fails;
 -  hermetic test fixtures use fake credentials only; the single opt-in live-provider e2e channel
 ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)) injects a real credential from the environment
-(or a CI repository secret) into a private temporary configuration file only and remains subject to every protection
-in this section.
+into a private temporary configuration file only and remains subject to every protection in this section.
 
 ## Limits by precedent
 
@@ -167,7 +166,7 @@ atomicity.
 | --- | --- | --- |
 | TOML validation | Parser fixture tests. | Invalid config returns typed errors without partial state replacement. |
 | M3 canonical snapshot persistence | Config/storage fixture. | Only a validated credential-free `ConfigSnapshotDto` is accepted and frozen on a started run's row. |
-| Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is recorded before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
+| Startup/restart-only application | Daemon composition lifecycle fixture. | The startup snapshot is resolved before recovery/readiness; an on-disk TOML change requires restart and cannot mutate an active run. |
 | Run snapshot immutability | Accepted-turn integration fixtures. | Started runs retain the immutable snapshot frozen on their row. |
 | Path selection | Config and platform-state location fixtures. | Config/storage locations use explicit absolute override or platform locations, never CWD. |
 | Credential isolation | Table-driven secret injection plus raw SQLite persistence fixtures. | A recognizable fake credential is absent from the persisted `config_snapshot_json`, the committed `runs`, `turns`, and `messages` rows, errors, logs, and presentation DTOs. |
@@ -176,9 +175,9 @@ atomicity.
 ## Quality-gate integration
 
 `intention-config` remains subject to its 60% line floor. TOML parsing, M1 snapshot serialization, credential
-isolation, and safe observability tests are blocking `make verify` inputs; M3 adds startup-snapshot persistence,
-restart-only application, and per-run frozen-snapshot coverage. The credential absence test is a mandatory
-regression fixture across logs, errors, persisted state, and adapter DTOs. See [12 Quality Gates and
+isolation, and safe observability tests are blocking `make verify` inputs; M3 adds restart-only application and per-run
+frozen-snapshot coverage. The credential absence test is a mandatory regression fixture across logs, errors, persisted
+state, and adapter DTOs. See [12 Quality Gates and
 Makefile](12-quality-gates-and-makefile.md).
 
 ## Open decisions

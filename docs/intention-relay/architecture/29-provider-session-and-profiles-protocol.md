@@ -33,8 +33,7 @@ Every accepted run freezes exactly one resolved entry's safe fields into its imm
 ([architecture 09](09-configuration-security-and-observability.md)): entry name, kind, model, normalized endpoint, the
 safe credential-transport mode and header name, and the reasoning-effort level when present. There is no profile
 revision, no resolved-selection record with more fields than that snapshot, no per-turn or fork override, and no usage
-aggregation keyed by selection: usage stays on the run row. `SendUserTurn`, `ForkSession`, and `StartForkRun` carry no
-provider fields.
+aggregation keyed by selection: usage stays on the run row. `SendUserTurn` and `ForkSession` carry no provider fields.
 
 ## Protocol and presentation
 
@@ -52,8 +51,7 @@ credentials, or receive configuration paths. The daemon advertises no provider c
 Provider entries are startup-only and activation stays daemon-startup-only ([architecture
 22](22-provider-evolution-profiles-and-reasoning.md), [architecture
 09](09-configuration-security-and-observability.md)); the layer adds no watcher, polling, restart protocol, or live
-reload. The layer does not include the held-run admission path (`AdmitRecoveredRunCommandDto`); the ordinary recovery
-path is the only one.
+reload. The layer adds no held-run admission path: the ordinary recovery path is the only one.
 
 ## Compatibility and historical preservation
 

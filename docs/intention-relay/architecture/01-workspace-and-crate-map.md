@@ -22,12 +22,12 @@ Contract Policy](02-dto-and-contract-policy.md).
   model and durable domain facts share; `intention-providers` re-exports them for its consumers.
 - Domain, storage, and protocol never depend on `intention-providers`. SQLite stores assistant content, reasoning text,
   tool calls, and tool results on the transcript and tool-result rows rather than in typed envelopes or per-run cursors.
-  `intention-engine` depends on the provider-neutral `intention-providers` contract only for its injected base execution
-  service; it neither selects a concrete provider nor exposes an async runtime resource.
-- `intention-daemon` may depend on the DTO, protocol, and transport crates needed to host selected execution and
-  streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
-  implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
-  contract.
+  `intention-engine` depends on the provider-neutral `intention-providers` contract for its injected model execution
+  driver and the model request and stream values it assembles; it neither selects a concrete provider nor exposes an
+  async runtime resource.
+- `intention-daemon` is the composition root: it may depend on the configuration, engine, storage, tools, provider, DTO,
+  protocol, and transport crates it connects, and on private Tokio/future support. It selects the concrete provider
+  driver and SQLite storage, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
 - The tool set is the closed six-variant `ToolId` (`read`, `write`, `edit`, `execute`, `glob`, and `grep`). No registry
   or reserved slot exists, and any other tool name is rejected as `unknown_tool` before effect.
 
@@ -40,7 +40,7 @@ the root `Makefile`'s `COVERAGE_FLOORS` declares the line floor of every measure
 
 | Crate | Owns |
 | --- | --- |
-| `intention-proto` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, their typed serde payloads, and the typed tool contract (the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection). |
+| `intention-proto` | Identity newtypes, shared value types, run lifecycle and projection values, the typed public protocol DTOs, their typed serde payloads, and the typed tool contract (the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection). |
 | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
 | `intention-engine` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
 | `intention-tools` | The declared tools' model-facing JSON Schema descriptors, the cancellation-aware dispatch surface, and the `WorkspaceRoot` addressing policy, over the proto's typed tool contract. VFR and Headroom arrive here as modules at M7. |
@@ -81,7 +81,11 @@ flowchart BT
   TL --> EN
   PV --> EN
   EN --> DH[intention-daemon]
+  CF --> DH
+  PR --> DH
+  PV --> DH
   ST --> DH
+  TL --> DH
   TR --> DH
   PR --> TR[intention-transport]
   TR --> CL[intention-client]
@@ -142,11 +146,10 @@ The future `intention-tauri` crate (created at M6) is a desktop integration crat
 The dependency manifests and rustc decide the dependency direction: a crate that names a foreign implementation crate,
 a provider SDK outside `intention-providers`, or a composition-only concrete implementation outside
 `intention-daemon`'s composition root fails to compile, and `cargo metadata` reports the same edges the manifests
-declare. The root `clippy.toml` denies `clippy::disallowed_types` for untyped JSON and
-`clippy::disallowed_methods` for the process working directory, so the DTO-first and `WorkspaceRoot` source rules fail
-the lint gate at the exact line that breaks them. Provider-SDK ownership, DTO-only public boundaries, the acyclic
-production graph, and the closed ordering-authority set are review responsibilities, checked against this map and the
-manifests.
+declare. The root `clippy.toml` and the denied `clippy::disallowed_types` and `clippy::disallowed_methods` lints forbid
+untyped JSON and the process working directory, so the DTO-first and `WorkspaceRoot` source rules fail the lint gate at
+the exact line that breaks them. Provider-SDK ownership, DTO-only public boundaries, and the acyclic production graph
+are review responsibilities, checked against this map and the manifests.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
 Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate line floors),

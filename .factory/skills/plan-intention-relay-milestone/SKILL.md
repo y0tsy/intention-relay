@@ -1,6 +1,6 @@
 ---
 name: plan-intention-relay-milestone
-description: Prepare an approved implementation specification for one named Intention Relay roadmap milestone through repository research, detailed user decision briefs, a visible pre-draft, and a consolidated draft. Use when the user asks to execute, prepare, or plan a specific milestone from docs/intention-relay. Do not use for implementation from an approved specification, generic planning outside this repository, review-only work, or M7 physical plan artifacts.
+description: Prepare an approved implementation specification for one named Intention Relay roadmap milestone through repository research, detailed user decision briefs, a visible pre-draft, and a consolidated draft. Use when the user asks to execute, prepare, or plan a specific milestone from docs/intention-relay. Do not use for implementation from an approved specification, generic planning outside this repository, review-only work, or M5+ Slice 3 physical plan artifacts.
 allowed-tools:
   - Read
   - Grep
@@ -75,7 +75,7 @@ Determine and report:
 
 - predecessor milestones that must be accepted first;
 - whether the target milestone is unstarted, in progress, closed, or has an evidence/implementation gap;
-- architecture contracts, coverage floors, feature profiles, and known deferrals that constrain the milestone;
+- architecture contracts, coverage floors, the single feature configuration, and known deferrals that constrain the milestone;
 - requirements that are already decided, implementation-required, or deferred.
 
 ### Closed or corrective milestones
@@ -150,7 +150,7 @@ The draft must:
 - define observable outcomes and failure behavior, not only code structure;
 - identify test-first DTO, domain, contract, architecture, integration, and outcome evidence appropriate to the slice;
 - map every quality requirement to the root Makefile contract and machine-readable policy changes where applicable;
-- preserve the established coverage floors and feature-profile rules;
+- preserve the established coverage floors and the single feature configuration;
 - list repository documentation that must change in the same slice.
 
 Use a Mermaid diagram only where a data flow, lifecycle, or relationship would otherwise be unclear. Keep labels short enough for terminal rendering.

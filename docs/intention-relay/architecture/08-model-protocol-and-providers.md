@@ -19,12 +19,13 @@ ModelExecutionDriver
 ```
 
 The contract defines text-only `ModelMessageDto` context and an optional system context. Every provider stream starts
-with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one terminal `Finished` event.
-The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) is the only order enforcer: every adapter
-stream is built from its normalizing stream, which owns the pending queue, the seeded start, the translation order, and
-the terminal fact, while each adapter implements only the `EventTranslator` seam over its own native items. A terminal
-fact ends the stream and admits nothing behind it, so a consumer reads an already ordered stream and does not
-re-validate it. `ModelRunExecutionService` consumes an injected stream, requires exact persisted/current safe-selection
+with `Started`, then zero or more text/reasoning/tool/usage events, followed by exactly one terminal fact: a `Finished`
+event or a typed provider failure. The crate-private `stream` module (`crates/intention-providers/src/stream.rs`) is
+the only order enforcer: every adapter stream is built from its normalizing stream, which owns the pending queue, the
+seeded start, the translation order, and the terminal fact, while each adapter implements only the `EventTranslator`
+seam over its own native items. A terminal fact ends the stream and admits nothing behind it, so a consumer reads an
+already ordered stream and does not re-validate it.
+`ModelRunExecutionService` consumes an injected stream, requires exact persisted/current safe-selection
 equality before execution, owns cancellation late-event suppression, deadlines, and
 retries, and commits only current-state rows (assistant transcript rows, run status, usage, finish, and failure) through
 the DTO-only storage contract. Its `ModelTimePort` exposes fresh
@@ -43,7 +44,7 @@ Core DTO families:
 | `ToolCallDto` | Typed tool identity and typed tool input. |
 | `UsageDto` | Provider-normalized usage values with explicit unknown/not-reported states. |
 | `FinishReasonDto` | Typed terminal reason. |
-| `ProviderErrorDto` | Safe normalized failure, retry category, and correlation data. |
+| `ProviderErrorDto` | Safe normalized failure and retry category. |
 
 The optional system context is the frozen instruction text of [architecture
 30](30-instruction-sources-and-system-context.md): the daemon assembles it once per admitted run from the
@@ -192,14 +193,14 @@ The same-run continuation is the only place provider reasoning returns to a requ
 current round's accepted reasoning to the assistant tool-call message (`assistant_reasoning`), and no prior-turn
 reasoning is transferred. The attachment is transient request state with no durable representation and never becomes
 message text or durable history. A gateway with the DeepSeek contract needs more than that round, so the previous-turn
-replay is the open `@todo(provider)` of this section and not the future typed transfer surface of [architecture
-22](22-provider-evolution-profiles-and-reasoning.md); two shapes stay outside the replay even then, because neither has
-a message in the model context: a step that reasoned without answering and without issuing a call, and a call whose
-committed result never followed. The request validates at least one unique tool-call identity
-and control-character-safe text bounded at 512 KiB per attachment, and the runtime bounds each round's accumulated echo
-at that same 512 KiB per-round bound. A round that exceeds the bound or carries a control character other than `\n`,
-`\r`, or `\t` terminalizes as a typed failed run with the dedicated `reasoning_attachment_unrepresentable` code instead
-of aborting with a DTO validation error; the echo is never truncated or silently omitted.
+replay is the open `@todo(provider)` of this section and not cross-run reasoning transfer, which [architecture
+22](22-provider-evolution-profiles-and-reasoning.md) keeps `Disabled` in v1; two shapes stay outside the replay even
+then, because neither has a message in the model context: a step that reasoned without answering and without issuing a
+call, and a call whose committed result never followed. The attachment carries control-character-safe text bounded at
+512 KiB, and the runtime bounds each round's accumulated echo at that same 512 KiB per-round bound. A round that exceeds
+the bound or carries a control character other than `\n`, `\r`, or `\t` terminalizes as a typed failed run with the
+dedicated `reasoning_attachment_unrepresentable` code instead of aborting with a DTO validation error; the echo is never
+truncated or silently omitted.
 
 Provider drivers do not invoke local tools directly. The application builds the typed invocation from a provider-emitted
 tool call, and the daemon-owned tool service executes it under `WorkspaceRoot`. Execution requires an
@@ -251,7 +252,8 @@ The classification selects the normalized `generic_chat_provider_unavailable` (r
 `generic_chat_provider_request_rejected` (permanent) failure.
 - Runtime/application policy determines whether an error is retryable for the run.
 - Config snapshots define timeout/retry limits applied to the run.
-- A retry preserves its causal relation to the originating model turn through the run's durable attempt count.
+- A retry stays inside the same run and keeps that run's live model context, so it preserves its causal relation to the
+  originating model turn.
 - A daemon restart does not retry an in-flight provider request.
 - Recorded truncation limitation: the pinned OpenRouter SDK consumes the `[DONE]` marker inside its own stream, so the
   adapter's completion signal is the SDK's terminal event rather than the marker. A native stream that ends without
@@ -264,10 +266,10 @@ window after every normalized event the stream delivers — stream start, text d
 or finish — so a stream that keeps producing facts is never cut off, and only a stream that delivers nothing for the
 whole window expires one. An expired window is a retryable
 `provider_attempt_timed_out` failure. Before any durable text, reasoning, usage, or tool fact, only a delayed/retryable
-provider failure may produce one retry; the runtime increments the run's durable attempt count, waits exactly 250 ms
-through `ModelTimePort`, and starts attempt two. No separate durable retry events are written. Interruption races the
-stream, deadline, and wait: the stopped stream ends and the run rebuilds its next request with the durable notice, and
-an interrupt during the retry wait starts the next attempt immediately.
+provider failure may produce one retry; the runtime waits exactly 250 ms through `ModelTimePort` and starts attempt
+two. No separate durable retry events are written. Interruption races the stream, deadline, and wait: the stopped stream
+ends and the run rebuilds its next request with the durable notice, and an interrupt during the retry wait starts the
+next attempt immediately.
 
 ## Required tests and outcomes
 
@@ -280,7 +282,7 @@ an interrupt during the retry wait starts the next attempt immediately.
 | Reasoning round trip | Model/adapter/runtime tests. | The generic adapter normalizes typed `reasoning_content` deltas as `ReasoningDelta` events and serializes the same round's accepted reasoning on the assistant tool-call continuation without adding a durable representation; empty text is presence-only; the capability declaration states only streamed text with tool calls. The echo's scope is the same run today; replaying the session's earlier steps is the open `@todo(provider)` of [Streaming and tool calls](#streaming-and-tool-calls) and needs its own test evidence. |
 | Tool loop integration | Runtime/provider/application integration test. | Provider emits a tool-call DTO; the application builds the typed invocation, the daemon-owned tool service executes it, and the runtime persists the correlated result and continues the exchange. |
 | Provider selection | Configuration contract test. | A configured provider and model ID are preserved. |
-| Retry | Controlled provider failure test. | Retry lifecycle is typed, bounded, and durable. |
+| Retry | Controlled provider failure test. | Retry lifecycle is typed and bounded, and the run records one durable outcome. |
 | Attempt idle deadline | Scripted slow-progress and silent-stall engine tests. | A stream that keeps delivering progress outlives the configured window and completes without a retry; a stream that delivers nothing for the window fails retryably with `provider_attempt_timed_out`, consumes the attempt budget, and commits no transcript row. |
 | Secret redaction | Provider error fixture. | API key never appears in `ProviderErrorDto`, logs, or events. |
 

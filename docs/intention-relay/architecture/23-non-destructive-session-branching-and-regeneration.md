@@ -50,8 +50,8 @@ response committed.
 
 `ForkBoundaryDto` has exactly these variants:
 
-- `CommittedUserTurn`: a committed user turn with `RunStarted` that is not pending. The child receives that validated
-user text once through a new child anchor and receives no response fact from that run.
+- `CommittedUserTurn`: a committed user turn whose run has started and that is not pending. The child receives that
+validated user text once through a new child anchor and receives no response fact from that run.
 - `CompletedAssistantTurn`: a genuinely completed run with one valid terminal `Finished` fact, no terminal failure,
 pending interaction, or unfinished external action. A valid empty response adds no synthetic assistant message.
 
@@ -151,7 +151,7 @@ the normal admission rules, with the frozen context already in place as the chil
 `RenameSessionCommandDto`, `ArchiveSessionCommandDto`, and `RestoreSessionCommandDto` each carry a session ID and
 `expected_ordinary_session_sequence`; rename also carries a `SessionTitleDto`. A stale sequence fails
 `session_changed`. A command that already observes its requested presentation state succeeds with `changed = false`
-and appends no event. Archive still performs its mandatory idle check before either outcome.
+and appends no durable record. Archive still performs its mandatory idle check before either outcome.
 
 `GetConversationTreeQueryDto` takes one `SessionId`. `SessionBranchesDto` returns that session's root summary, the
 session's own summary, and its immediate children in stable creation order. A tree is intentionally live between reads:
@@ -166,8 +166,8 @@ every named session belongs to the same root, project, and workspace.
 `SessionTitleDto` is bounded to 128 Unicode scalar values after trim and NFC normalization, and rejects blank, control,
 and bidi-override characters. An adapter may request a title when it forks; otherwise the daemon stores a deterministic
 safe title derived from the source title or its stable fallback and the fork point. A root session without a stored
-title uses only the stable presentation fallback until renamed. Rename changes one session only, writes
-`SessionRenamed`, and never changes lineage, a base snapshot, or a tree-wide title.
+title uses only the stable presentation fallback until renamed. Rename changes one session only, writes its stored
+title, and never changes lineage, a base snapshot, or a tree-wide title.
 
 ### Field tables
 
@@ -181,17 +181,17 @@ canonicalization-version, or digest layer wraps them ([architecture
 inherited_future_defaults`, `9 workspace_state`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 boundary`, `4 source_head_sequence`,
 `5 inherited_future_defaults`, `6 workspace_state`, `7 inherited_reference_counts`. Field 4 is
-the selected boundary sequence, not the current source head observed during the fork operation; field 7 carries the
+the source head observed by the preview, not the selected boundary sequence; field 7 carries the
 counts and safe types of what the child inherits, read from the source records rather than stored in the preview.
 - `fork-command`: `1 source_session_id`, `2 boundary`, `3 expected_source_sequence`, `4 title_present`,
-`5 requested_title`.
+`5 requested_title`, `6 fork_operation_id`.
 
 The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-command` digest construction are removed with
 the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the client
 accepted through `expected_source_sequence`, which the fork transaction validates; no canonical digest and no preview
 binding are part of the current contract.
 
-`effective_instruction_text` and `materialized_effective_instruction_text` carry the frozen instruction text of
+`effective_instruction_text` carries the frozen instruction text of
 [architecture 30](30-instruction-sources-and-system-context.md), materialized
 when the fork is created. A child
 inherits the text verbatim; no fork, regeneration, or later run re-derives it from current configuration,

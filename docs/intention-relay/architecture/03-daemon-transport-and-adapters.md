@@ -124,9 +124,9 @@ currently projects.
 subscriber has a private bounded outgoing queue (`SUBSCRIBER_QUEUE_CAPACITY`, 64), its own writer path, and a bounded
 write deadline (`SUBSCRIBER_WRITE_DEADLINE`, 10 seconds); these are implementation safeguards owned by the host, not
 product ceilings. An overflowing, closed, or timed-out subscriber is removed without awaiting it from execution,
-persistence, or healthy subscriber delivery. Queue-capacity isolation and the paused-clock deadline are daemon-host unit
-evidence; the persistent-host outcome fixture proves a real healthy local peer's subscribe/live/reconnect-read lifecycle
-rather than OS-buffer timing. The transport message bound and local Unix-socket/Windows-pipe permissions are unchanged.
+persistence, or healthy subscriber delivery. Queue-capacity isolation is daemon-host unit evidence; the persistent-host
+outcome fixture proves a real healthy local peer's subscribe/live/reconnect-read lifecycle rather than OS-buffer timing.
+The transport message bound and local Unix-socket/Windows-pipe permissions are unchanged.
 
 Test-only restart fixtures explicitly abort and join all first-host connection and execution tasks before dropping every
 first-host facade clone and reopening the database; this is deterministic fixture lifecycle ownership, not a production

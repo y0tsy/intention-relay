@@ -59,7 +59,7 @@ parsed as JSON, bounded in size, and passed through as text; there is no closed 
 into typed families, and no JSON Schema validator beyond the parse. A malformed or over-bound schema makes that method
 unavailable and fails with `mcp_schema_mismatch`; every other schema is carried unchanged.
 
-The run's frozen architecture-15 tool selection records the method set the model saw, as safe connection references,
+The run's frozen method selection records the method set the model saw, as safe connection references,
 method names, and schema text. A missing or unknown selection is never rebuilt from a later discovery, current
 configuration, server state, or UI state ([architecture
 15](15-tool-registry-and-model-tool-loop.md)); a method discovered later cannot change an already-sent model step or an

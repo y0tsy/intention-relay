@@ -150,7 +150,7 @@ work; the second stays owned by the named slice.
 
 | Topic | Decision required |
 | --- | --- |
-| Transcript retention | Retention and compaction policy for transcript rows and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 8. |
+| Transcript retention | Retention and compaction policy for transcript rows and stream deltas. Closing it also needs one owner: [architecture 04](04-sessions-runs-events-and-storage.md) defers the policy, [architecture 09](09-configuration-security-and-observability.md) records it as its own open item, and the roadmap assigns closure to Milestone 5+ Slice 6. |
 | CCR backend | The read-through view's storage backend ([architecture 06](06-vfr-and-headroom.md), "Open decisions"). The durable tool result is the record, so the view carries no retention, rotation, expiry, or capacity policy. |
 
 ## Deferred decisions

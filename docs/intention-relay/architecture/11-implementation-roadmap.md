@@ -33,9 +33,6 @@ flowchart TD
   K --> M[M10 Tool selection bridge]
   M --> N[M11 Capabilities and context]
   K --> I[M8 End to end hardening]
-  P --> F[M6 Tauri bridge UI]
-  P --> H[M7 VFR Headroom]
-  P --> I[M8 End to end hardening]
   B --> D
   C --> D
   A --> E
@@ -67,8 +64,9 @@ The coverage policy is the per-crate line floors in the root `Makefile`'s `COVER
 former M7 milestone — except the optional implementation handoff, delivered by Slice 6 — and the `sub_agent` tool
 path of the former M11; the remaining milestones renumber in sequence, so the former M8 is M7, the former M9 is M8, the
 former M11 is M10, and the former M12 is M11. This milestone is the declared prerequisite of
-the remaining milestones in the dependency graph and activates only foundation work, including the terminal presentation
-foundation and the Slice 3 agent-operation scope, never their direct boundary implementation. The remaining post-M4
+the remaining milestones in the dependency graph. It activates only foundation work, including the terminal
+presentation foundation, and defines the Slice 3 agent-operation scope without activating it; neither is a direct
+boundary implementation. The remaining post-M4
 package implementations are not part of its slices: they are delivered by Milestones 10 and 11, which consume this
 milestone's foundation. The activation decision is the Milestone 5+ package, extended by [architecture
 30](30-instruction-sources-and-system-context.md) for the third slice's instruction channel, [architecture
@@ -121,7 +119,7 @@ focus instruction being the `Mode` contribution this same slice assembles; and t
 Session stays Slice 6 work. The slice also carries the `sub_agent` tool path of
 [architecture 15](15-tool-registry-and-model-tool-loop.md): the closed `ToolId` variant whose typed input carries the
 bounded markdown task and the selected mode; `Sync` holds the call open until the child run's terminal markdown answer,
-and `Async` ends it immediately with a `Deferred` outcome carrying the child session handle; a child run is an ordinary
+and `Async` ends it immediately with a `Completed` result carrying the child session handle; a child run is an ordinary
 run with its own lifecycle, tool loop, cancellation, and no-resume rules, and its terminal answer commits as one durable
 child-result fact bound to the same `ToolCallId` and delivered once into the parent's next fresh model request. The
 `sub_agent` tool activates on the live six-tool admission path and activates no registry, bridge, or MCP contract: the
@@ -190,10 +188,10 @@ Facts this milestone leaves open are recorded here as known deferrals, each with
 
 | Deferred fact | Owner |
 | --- | --- |
-| the execute-call fact on the session summary (the browser's `Exec` tab) | no owner yet |
-| a durable session title and its rename command (the title column, its filter, and the `Ctrl+R` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
-| a durable favorite flag (the `Favorites` tab) | no owner yet |
-| a durable archive flag and its command (the `Archived` tab and its `Ctrl+X` notice) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
+| the execute-call fact on the session summary | no owner yet |
+| a durable session title and its rename command (the title column and its filter) | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
+| a durable favorite flag | no owner yet |
+| a durable archive flag and its command | M5+ Slice 6, via [architecture 23](23-non-destructive-session-branching-and-regeneration.md) (not activated) |
 | a session list paged past its bounded window (the row counter's `+N omitted`) | no owner yet |
 | a notice code or severity (a notice block's text-only body) | no owner yet |
 | durable committed-row identity for streamed text (the durable `messages.step`/`MessageProjectionDto.step` alternative to the client-derived supersession) | no owner yet |
@@ -297,7 +295,7 @@ Verification](10-test-driven-delivery-and-verification.md);
 -  a recorded opt-in live-provider e2e run against a real provider API
 ([Quality Gates and Makefile](12-quality-gates-and-makefile.md); manual, non-hermetic, never blocking) reporting date,
 commit,
-provider, model, and run URL;
+provider, model, and the command and machine it ran on;
 - secret injection regression suite;
 - daemon restart and reconnect endurance fixtures;
 - architecture dependency/API boundary checks across all crates;
@@ -361,7 +359,7 @@ publication;
 **Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
 project script library of [architecture
 20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
-not activated: the `responses` driver and the optional named authentication header. It starts only when an activating specification per [architecture
+not activated: the `responses` driver. It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
 typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
 
@@ -380,7 +378,7 @@ projection;
 -  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
 selection, model-step context, and immutable compaction over exact completed history
 (architecture 21), with the Goal domain itself owned by architecture 28;
--  the canonical `responses` provider driver and the optional named authentication header (architecture 22);
+-  the canonical `responses` provider driver (architecture 22);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
@@ -418,6 +416,5 @@ recorded artifacts);
 - all critical architecture rules have automated protection or documented, approved justification;
 - security redaction and workspace boundary tests pass;
 - Plan, VFR, and Headroom demonstrate their required physical/runtime outcomes;
--  `make verify` passes all strict formatting, lint, feature, test, documentation, architecture, coverage, and
-supply-chain checks;
+-  `make verify` passes all strict formatting, lint, test, documentation, coverage, and supply-chain checks;
 - no legacy Antibusy implementation detail is relied upon without an explicit new decision.

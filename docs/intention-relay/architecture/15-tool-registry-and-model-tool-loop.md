@@ -78,10 +78,11 @@ version; labels, executor handles, live readiness, and opaque owner resources ar
 -  **`execute`** takes one `ShellCommandTextDto` plus optional typed launch parameters (`cwd`, `env`,
   `timeout_seconds`); a private local shell adapter interprets the command text, and
   the executable path, platform resource, and parser never cross a public DTO boundary. Shell syntax (pipelines,
-  redirects, compound commands) is code-owned tool semantics. `stdout`, `stderr`, and exit status stay separate
-  typed result fields before the bounded durable stream and safe projection and are never reconstructed from a formatted
-  text footer. `execute` runs with the user's ordinary OS authority and the workspace root as its default CWD, is not a
-  sandbox, and claims no complete effect enumeration. A call without a declared timeout has no deadline: run
+  redirects, compound commands) is code-owned tool semantics. `stdout` and `stderr` are captured separately and rendered
+  into the bounded result text, and the exit status rides the result as the typed `ToolProcessStatus` classification
+  that rendering is derived from, so the text and the classification can never disagree. `execute` runs with the user's
+  ordinary OS authority and the workspace root as its default CWD, is not a sandbox, and claims no complete effect
+  enumeration. A call without a declared timeout has no deadline: run
   cancellation and the child's own exit are its only stops, and one fixed pipe-collection window after the direct child
   is reaped keeps a descendant that inherited the pipes from extending the call. A declared timeout that fires is the
   call's own observed interruption: the tool terminates the program's process group and returns what the pipes captured
@@ -354,7 +355,7 @@ deferred.
 
 The model-tool-loop executor requires a tool executor, and provider tool calls execute through the one durable tool
 path. A row carries no synthetic tool collection, tool-loop, child, MCP, Skill, policy, or execution-kind state
-beyond the nine identity newtypes and the plain step and group indices.
+beyond the seven identity newtypes and the plain step and group indices.
 
 ## Dependencies and non-goals
 

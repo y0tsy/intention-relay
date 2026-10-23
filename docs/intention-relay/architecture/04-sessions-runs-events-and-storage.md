@@ -11,7 +11,7 @@ Adapters](03-daemon-transport-and-adapters.md).
 ```mermaid
 erDiagram
   PROJECT ||--o{ SESSION : contains
-  SESSION ||--|| WORKSPACE_ROOT : uses
+  SESSION }o--|| WORKSPACE_ROOT : uses
   SESSION ||--o{ TURN : records
   SESSION ||--o{ RUN : owns
   SESSION ||--o{ MESSAGE : keeps
@@ -63,9 +63,8 @@ stateDiagram
   Interrupted --> [*]
 ```
 
-Interruption is not a run state. `Cancelling` and `Cancelled` no longer exist, and the only endings that write
-`Interrupted` are recovery for an unfinished run and the terminal `run.cancel` stop. The closed status vocabulary is
-`Starting`, `Running`, `Completed`, `Failed`, and
+Interruption is not a run state: the only endings that write `Interrupted` are recovery for an unfinished run and the
+terminal `run.cancel` stop. The closed status vocabulary is `Starting`, `Running`, `Completed`, `Failed`, and
 `Interrupted`; the live path creates every run in `Starting`, and a terminal repository transition commits its state
 change in one transaction.
 
@@ -118,8 +117,9 @@ acceptance that started the run froze, committed with the run row, never deduped
 identity of its own.
 
 The storage schema contains the `projects`, `workspace_roots`, `sessions`, `runs`, `turns`, and `messages` tables, all
-created directly on open, plus the `messages_session_id_id` and `messages_session_run_id_id` indexes that serve the
-transcript reads. The `turns` table carries one accepted turn row with a closed `turns.state` in `started` for the turn
+created directly on open, plus the `one_active_run_per_session` unique index that keeps at most one active run per
+session, and the `messages_session_id_id` and `messages_session_run_id_id` indexes that serve the transcript reads.
+The `turns` table carries one accepted turn row with a closed `turns.state` in `started` for the turn
 that owns the run it opened, `pending` for a queued turn, or `appended` for a turn consumed into a run context. The
 `messages` table carries the committed typed tool projection in `projection_json`; that column is the transcript's
 single durable home of a result's status, payload, and metadata, and the current schema stamp is 7, so a database
@@ -154,9 +154,6 @@ sequenceDiagram
 If a write fails before commit, nothing changes. The daemon host publishes run frames from the committed values
 returned by the repository; a publisher failure never rolls back committed state. A later read observes only committed
 state.
-
-Catalog and lineage audit records are read through their own bounded queries; they never enter run publication merely
-because they relate to the same user operation.
 
 ## Transcript, tool results, and model context
 

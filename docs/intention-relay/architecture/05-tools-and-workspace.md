@@ -69,7 +69,7 @@ default scope decides what a pathless call addresses, not what the process may r
 - `execute` starts with `cwd = workspace_root` unless the call declares a `cwd`, and inherits the invoking process
 environment with the call's own declared variables overlaid by name. WorkspaceRoot is an addressing anchor and
 default CWD, not a security, environment, or privilege boundary.
-- a tool result identifies the logical path/CWD it used;
+- the committed tool-call row identifies the logical path/CWD the call used;
 - plan artifact storage is not implicitly included in `workspace_root`; it is authorized by mode policy.
 
 ### Project script library
@@ -82,7 +82,7 @@ The project script library is the logical, slash-separated, workspace-relative p
 in, or excluded from, any other policy, and no plan artifact, daemon state, checkpoint, or configuration lives there;
 - modules are created and edited only through `write` and `edit`, read through
 `read`, `glob`, and `grep`, and run through `execute`; the relative-path addressing rules above apply unchanged;
-- a tool result or error identifies a module by its logical relative path,
+- a tool call or error identifies a module by its logical relative path,
 like every other workspace path; and
 - `write` and `edit` remain incompatible in Plan mode, so library mutation stays
 Build activity.

@@ -420,7 +420,8 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 2. Use it through `Text::fg`/`bg`, `Border::fg`/`bg`, or `Card::background`,
    reading it from the resolved `&'static Palette` the frame handed down, and
    pair it with a glyph or a modifier whenever it carries a state.
-3. Never construct a colour outside the palette: `Color::rgb` is palette-only,
+3. Never construct a colour outside the palette: `Color::rgb` is palette-only
+   apart from the sixteen-colour `COLORFGBG` table the background probe reads,
    and the views read roles, not values.
 
 ### A new key or wheel binding

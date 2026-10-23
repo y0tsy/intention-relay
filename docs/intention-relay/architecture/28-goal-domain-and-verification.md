@@ -80,10 +80,10 @@ admission. Verification evidence attaches to the leading Goal revision it attest
 ordinary goal-directed run: no run kind exists for verification.
 
 A run's immutable selection is a typed serde JSON record rather than one canonical execution-meaning envelope
-([architecture 02](02-dto-and-contract-policy.md)). The applicable record is `GoalRunSelectionV1`; its absence means
-the run is ordinary, and historical M4 records gain nothing.
+([architecture 02](02-dto-and-contract-policy.md)). A goal-directed run's selection records the leading `GoalId` and
+its exact revision; an absent selection means the run is ordinary, and historical M4 records gain nothing.
 
-`GoalRunSelectionV1` contains the leading `GoalId`, its exact revision, the session-link provenance, the
+The goal-directed selection also carries the session-link provenance, the
 target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1` defined by [architecture
 21](21-goals-skills-context-memory-and-compaction.md). It holds no full Skill/role/summary,
 credential, provider value, current machine state, raw transcript, process resource, or handle.
@@ -130,7 +130,7 @@ ordinary command that validates the exact base revision and creates a new immuta
 
 Compaction is a versioned model-context projection over one continuous completed durable-history range, never a
 replacement for the source transcript, model facts, tool facts, reasoning, kernel checkpoint, child dossier, or Goal
-evidence. The summary record, its immutable corrections, its failures, and the frozen summary-reference semantics are
+evidence. The summary record, its failures, and the frozen summary-reference semantics are
 owned by [architecture 21](21-goals-skills-context-memory-and-compaction.md). A fork stores only the exact compatible
 selected summary references that document freezes and never reads a current ancestor or imports a future summary.
 Headroom, VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
