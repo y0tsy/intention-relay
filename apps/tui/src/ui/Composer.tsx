@@ -23,13 +23,13 @@ export function Composer({
   const empty = draft.text.length === 0;
   return (
     <box flexDirection="row" paddingLeft={1} paddingRight={1}>
-      <text fg={focused ? palette.accent : palette.muted}>{"> "}</text>
+      <text fg={focused ? palette.accent : palette.inkMuted}>{"> "}</text>
       {empty ? (
-        <text wrapMode="word" fg={palette.faint}>
+        <text wrapMode="word" fg={palette.inkFaint}>
           {focused ? "▏type a prompt" : "type a prompt"}
         </text>
       ) : (
-        <text wrapMode="word" fg={palette.foreground}>
+        <text wrapMode="word" fg={palette.ink}>
           {renderDraft(draft)}
         </text>
       )}

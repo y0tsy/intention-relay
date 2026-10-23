@@ -62,7 +62,7 @@ function flatten(token: Token): Run[] {
 
 /** Renders one run with the palette's mark for what it is. */
 function runElement(run: Run, palette: Palette, index: number): ReactNode {
-  const color = run.code ? palette.code : run.link ? palette.link : undefined;
+  const color = run.code ? palette.markdownCode : run.link ? palette.markdownLink : undefined;
   const attributes = run.strong
     ? TextAttributes.BOLD
     : run.emphasis
@@ -105,7 +105,7 @@ function block(token: Token, palette: Palette, ink: string, key: string): ReactN
     case "heading": {
       const heading = token as Tokens.Heading;
       return (
-        <text key={key} wrapMode="word" fg={palette.foreground} attributes={TextAttributes.BOLD}>
+        <text key={key} wrapMode="word" fg={palette.ink} attributes={TextAttributes.BOLD}>
           {inline(heading.tokens, palette)}
         </text>
       );
@@ -117,7 +117,7 @@ function block(token: Token, palette: Palette, ink: string, key: string): ReactN
         <box key={key} flexDirection="column">
           {list.items.map((item, index) => (
             <box key={blockKey(index, item.raw)} flexDirection="row">
-              <text fg={palette.muted}>{list.ordered ? `${start + index}. ` : "- "}</text>
+              <text fg={palette.inkMuted}>{list.ordered ? `${start + index}. ` : "- "}</text>
               <box flexDirection="column" flexGrow={1}>
                 {item.tokens.map((inner, innerIndex) =>
                   block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
@@ -139,7 +139,7 @@ function block(token: Token, palette: Palette, ink: string, key: string): ReactN
           border={["left"]}
           borderColor={palette.border}
         >
-          <text wrapMode="word" fg={palette.code}>
+          <text wrapMode="word" fg={palette.markdownCode}>
             {code.text}
           </text>
         </box>
@@ -166,7 +166,7 @@ function block(token: Token, palette: Palette, ink: string, key: string): ReactN
       return <box key={key} height={1} />;
     case "hr":
       return (
-        <text key={key} fg={palette.faint}>
+        <text key={key} fg={palette.inkFaint}>
           {"─".repeat(3)}
         </text>
       );
@@ -200,7 +200,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   ink?: string;
 }) {
   const tokens = useMemo(() => marked.lexer(source), [source]);
-  const body = ink ?? palette.assistant;
+  const body = ink ?? palette.ink;
   return (
     <box flexDirection="column">
       {tokens.map((token, index) => block(token, palette, body, blockKey(index, token.raw)))}

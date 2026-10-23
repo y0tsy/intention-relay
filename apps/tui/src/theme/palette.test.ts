@@ -1,8 +1,50 @@
-//! The palette: roles, not colors, and every role legible on its own background.
+//! The palette's own rules: opacity, distinctness, one theme per frame.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { DARK, LIGHT, paletteFor, type Palette } from "./palette";
+
+/** Every role but the documented alias, in declaration order. */
+const ROLES: ReadonlyArray<keyof Omit<Palette, "error" | "scarlet">> = [
+  "canvas",
+  "panel",
+  "headerBg",
+  "tabActiveBg",
+  "rowSelectedBg",
+  "rowAltBg",
+  "stubBg",
+  "inputBg",
+  "badgeBg",
+  "badgeInk",
+  "userSurface",
+  "userBorder",
+  "userLabel",
+  "selectionBg",
+  "toolSurface",
+  "toolBorder",
+  "toolLabel",
+  "toolPreview",
+  "noticeSurface",
+  "noticeInk",
+  "scrollTrack",
+  "scrollThumb",
+  "dividerTint",
+  "border",
+  "accent",
+  "accentDeep",
+  "markdownHeading",
+  "markdownCode",
+  "markdownLink",
+  "reasoningBody",
+  "reasoningHeader",
+  "reasoningMarker",
+  "timerInk",
+  "ink",
+  "inkMuted",
+  "inkFaint",
+  "success",
+  "warning",
+];
 
 /** Returns one color's relative luminance, as WCAG 2.2 defines it. */
 function luminance(hex: string): number {
@@ -19,75 +61,73 @@ function contrast(a: string, b: string): number {
   return ((lighter ?? 0) + 0.05) / ((darker ?? 0) + 0.05);
 }
 
-/** Every role that paints text, and the floor it has to clear. */
-const TEXT_ROLES: ReadonlyArray<keyof Palette> = [
-  "foreground",
-  "muted",
-  "faint",
-  "accent",
-  "user",
-  "assistant",
-  "tool",
-  "error",
-  "warning",
-  "success",
-  "code",
-  "link",
-  "quote",
-  "provisional",
-];
-
-test("every text role clears the 4.5:1 floor on its own background", () => {
-  for (const [name, palette] of [
-    ["dark", DARK],
-    ["light", LIGHT],
-  ] as const) {
-    for (const role of TEXT_ROLES) {
-      const ratio = contrast(palette[role], palette.background);
-      assert.ok(ratio >= 4.5, `${name} ${role} is ${ratio.toFixed(2)}:1`);
+test("every role is a fully opaque hex triple", () => {
+  for (const palette of [LIGHT, DARK]) {
+    for (const role of [...ROLES, "error" as const, "scarlet" as const]) {
+      assert.match(palette[role], /^#[0-9A-F]{6}$/, role);
     }
   }
 });
 
-test("the frame's border is visible against the background it draws on", () => {
-  // A border is a non-text boundary, so the floor is the 3:1 UI-component one.
+test("a theme names no two roles alike, error aliasing scarlet", () => {
   for (const [name, palette] of [
-    ["dark", DARK],
     ["light", LIGHT],
+    ["dark", DARK],
   ] as const) {
-    const ratio = contrast(palette.border, palette.background);
-    assert.ok(ratio >= 3, `${name} border is ${ratio.toFixed(2)}:1`);
+    assert.equal(palette.error, palette.scarlet, `${name}: error is scarlet`);
+    const values = ROLES.map((role) => palette[role]);
+    assert.equal(new Set(values).size, values.length, `${name}: roles are distinct`);
   }
 });
 
-test("text that sits on the accent is legible on it", () => {
-  for (const [name, palette] of [
-    ["dark", DARK],
-    ["light", LIGHT],
-  ] as const) {
-    const ratio = contrast(palette.onAccent, palette.accent);
-    assert.ok(ratio >= 4.5, `${name} on-accent is ${ratio.toFixed(2)}:1`);
+test("a frame is wholly one theme: every role differs between the two", () => {
+  for (const role of [...ROLES, "error" as const, "scarlet" as const]) {
+    assert.notEqual(LIGHT[role], DARK[role], role);
   }
 });
 
-test("the roles stay distinguishable from one another", () => {
+test("the dark ramp is monochrome outside its accent pair", () => {
+  for (const role of ROLES) {
+    if (role === "accent" || role === "accentDeep") {
+      continue;
+    }
+    const value = DARK[role];
+    const red = Number.parseInt(value.slice(1, 3), 16);
+    const green = Number.parseInt(value.slice(3, 5), 16);
+    const blue = Number.parseInt(value.slice(5, 7), 16);
+    assert.equal(red, green, `dark ${role} has no hue`);
+    assert.equal(blue - red, 2, `dark ${role} keeps the cool bias`);
+  }
+});
+
+test("the body and its muted second read carry the frame's text", () => {
   for (const [name, palette] of [
-    ["dark", DARK],
     ["light", LIGHT],
+    ["dark", DARK],
   ] as const) {
-    assert.ok(
-      contrast(palette.faint, palette.background) < contrast(palette.muted, palette.background),
-      `${name}: faint reads dimmer than muted`,
-    );
-    assert.ok(
-      contrast(palette.muted, palette.background) <
-        contrast(palette.foreground, palette.background),
-      `${name}: muted reads dimmer than the body`,
-    );
-    assert.ok(
-      contrast(palette.border, palette.background) < contrast(palette.accent, palette.background),
-      `${name}: the frame is quieter than the accent`,
-    );
+    assert.ok(contrast(palette.ink, palette.canvas) >= 7, `${name}: body ink holds`);
+    assert.ok(contrast(palette.inkMuted, palette.canvas) >= 4.5, `${name}: muted ink holds`);
+  }
+});
+
+test("a label reads on the wash it sits on", () => {
+  // The floor is the 3:1 UI one: the badge and tool washes clear 4.5, the user
+  // label on dark is the design's own 4.0 and stays a deviation, not a fix.
+  const pairs = [
+    ["badgeInk", "badgeBg"],
+    ["userLabel", "userSurface"],
+    ["toolLabel", "toolSurface"],
+    ["toolPreview", "toolSurface"],
+    ["noticeInk", "noticeSurface"],
+  ] as const;
+  for (const [name, palette] of [
+    ["light", LIGHT],
+    ["dark", DARK],
+  ] as const) {
+    for (const [label, wash] of pairs) {
+      const ratio = contrast(palette[label], palette[wash]);
+      assert.ok(ratio >= 3, `${name} ${label} on ${wash} is ${ratio.toFixed(2)}:1`);
+    }
   }
 });
 

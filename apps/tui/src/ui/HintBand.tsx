@@ -14,7 +14,7 @@ import { renderHints } from "./format";
 export function HintBand({ width, palette }: { width: number; palette: Palette }) {
   return (
     <box paddingLeft={1} paddingRight={1}>
-      <text wrapMode="none" fg={palette.faint}>
+      <text wrapMode="none" fg={palette.inkFaint}>
         {renderHints(width - 2)}
       </text>
     </box>

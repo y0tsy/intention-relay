@@ -53,7 +53,7 @@ export function SessionBrowser({
   const window = rows.slice(offset, offset + visible);
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={1} paddingRight={1}>
-      <text fg={palette.foreground} attributes={TextAttributes.BOLD}>
+      <text fg={palette.ink} attributes={TextAttributes.BOLD}>
         {title}
       </text>
       {error === null ? null : (
@@ -62,7 +62,7 @@ export function SessionBrowser({
         </text>
       )}
       {summaries !== null && rows.length === 0 ? (
-        <text wrapMode="word" fg={palette.muted}>
+        <text wrapMode="word" fg={palette.inkMuted}>
           no sessions yet; send a prompt to create one
         </text>
       ) : null}
@@ -72,11 +72,11 @@ export function SessionBrowser({
           const cells = sessionCells(summary, columns, now);
           return (
             <box key={summary.session_id} flexDirection="row" gap={2}>
-              <text fg={selected ? palette.accent : palette.faint}>{selected ? "›" : " "}</text>
+              <text fg={selected ? palette.accent : palette.inkFaint}>{selected ? "›" : " "}</text>
               {cells.map((cell, cellIndex) => (
                 <text
                   key={columns[cellIndex]?.header ?? cellIndex}
-                  fg={selected ? palette.foreground : palette.muted}
+                  fg={selected ? palette.ink : palette.inkMuted}
                   attributes={cellIndex === 0 && selected ? TextAttributes.BOLD : undefined}
                 >
                   {cell}
@@ -86,7 +86,7 @@ export function SessionBrowser({
           );
         })}
       </box>
-      <text wrapMode="none" fg={palette.faint}>
+      <text wrapMode="none" fg={palette.inkFaint}>
         {renderHints(width - 2, BROWSER_HINTS)}
       </text>
     </box>

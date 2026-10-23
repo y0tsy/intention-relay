@@ -41,7 +41,7 @@ const Row = memo(function Row({
   switch (message.kind) {
     case "user":
       return (
-        <text wrapMode="word" fg={palette.user}>
+        <text wrapMode="word" fg={palette.ink}>
           <span attributes={TextAttributes.BOLD}>{"> "}</span>
           {message.text}
         </text>
@@ -51,7 +51,7 @@ const Row = memo(function Row({
     case "tool_call":
     case "tool_result":
       return (
-        <text wrapMode="word" fg={palette.tool}>
+        <text wrapMode="word" fg={palette.toolPreview}>
           {message.tool === null
             ? message.text
             : `${toolLabel(message.tool)} ${message.text}`.trimEnd()}
@@ -59,7 +59,7 @@ const Row = memo(function Row({
       );
     case "notice":
       return (
-        <text wrapMode="word" fg={palette.muted}>
+        <text wrapMode="word" fg={palette.inkMuted}>
           {message.text}
         </text>
       );

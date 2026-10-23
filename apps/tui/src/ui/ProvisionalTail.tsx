@@ -18,12 +18,12 @@ export function ProvisionalTail({ store, palette }: { store: AppStore; palette: 
   return (
     <>
       {reasoning.length === 0 ? null : (
-        <text wrapMode="word" fg={palette.faint}>
+        <text wrapMode="word" fg={palette.inkFaint}>
           {reasoning}
         </text>
       )}
       {text.length === 0 ? null : (
-        <MarkdownBlocks source={text} palette={palette} ink={palette.provisional} />
+        <MarkdownBlocks source={text} palette={palette} ink={palette.inkMuted} />
       )}
     </>
   );

@@ -60,7 +60,7 @@ export function ThemePicker({
   const roomy = height >= 10 && width >= 40;
   return (
     <box flexDirection="column" flexGrow={1} paddingLeft={1} paddingRight={1}>
-      <text fg={palette.foreground} attributes={TextAttributes.BOLD}>
+      <text fg={palette.ink} attributes={TextAttributes.BOLD}>
         theme
       </text>
       {/* Three entries in a tall panel read as a broken list when they hang off
@@ -76,16 +76,16 @@ export function ThemePicker({
           const inForce = entry.preference === current;
           return (
             <box key={entry.preference} flexDirection="row" gap={1}>
-              <text fg={selected ? palette.accent : palette.faint}>{selected ? "›" : " "}</text>
+              <text fg={selected ? palette.accent : palette.inkFaint}>{selected ? "›" : " "}</text>
               <text
-                fg={selected ? palette.foreground : palette.muted}
+                fg={selected ? palette.ink : palette.inkMuted}
                 attributes={selected ? TextAttributes.BOLD : undefined}
               >
                 {entry.label}
               </text>
               {inForce ? <text fg={palette.success}>current</text> : null}
               {roomy ? (
-                <text wrapMode="word" fg={palette.faint}>
+                <text wrapMode="word" fg={palette.inkFaint}>
                   {entry.detail}
                 </text>
               ) : null}
@@ -93,7 +93,7 @@ export function ThemePicker({
           );
         })}
       </box>
-      <text wrapMode="none" fg={palette.faint}>
+      <text wrapMode="none" fg={palette.inkFaint}>
         {renderHints(width - 2, PICKER_HINTS)}
       </text>
     </box>

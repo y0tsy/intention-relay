@@ -35,33 +35,33 @@ export function Welcome({
         justifyContent={free >= 3 ? "center" : "flex-start"}
         gap={1}
       >
-        <text fg={palette.foreground} attributes={TextAttributes.BOLD}>
+        <text fg={palette.ink} attributes={TextAttributes.BOLD}>
           intention relay
         </text>
-        {plan.rule ? <text fg={palette.faint}>{"─".repeat(Math.max(4, textWidth))}</text> : null}
+        {plan.rule ? <text fg={palette.inkFaint}>{"─".repeat(Math.max(4, textWidth))}</text> : null}
         {plan.tagline === null ? null : (
-          <text wrapMode="word" fg={palette.muted}>
+          <text wrapMode="word" fg={palette.inkMuted}>
             {plan.tagline}
           </text>
         )}
         {plan.examples.length === 0 ? null : (
           <box flexDirection="column">
             {plan.examples.map((example) => (
-              <text key={example} wrapMode="word" fg={palette.faint}>
+              <text key={example} wrapMode="word" fg={palette.inkFaint}>
                 {`- ${example}`}
               </text>
             ))}
           </box>
         )}
         {plan.commands === "none" ? null : plan.commands === "hint" ? (
-          <text fg={palette.faint}>/ commands</text>
+          <text fg={palette.inkFaint}>/ commands</text>
         ) : (
           <box flexDirection="column">
             {COMMANDS.map((command) => {
               const [usage, summary] = commandRow(command, textWidth).split("  ");
               return (
-                <text key={command.name} wrapMode="word" fg={palette.faint}>
-                  <span fg={palette.link}>{usage}</span>
+                <text key={command.name} wrapMode="word" fg={palette.inkFaint}>
+                  <span fg={palette.markdownLink}>{usage}</span>
                   {summary === undefined ? "" : `  ${summary}`}
                 </text>
               );
@@ -70,7 +70,7 @@ export function Welcome({
         )}
       </box>
       {plan.workspace ? (
-        <text wrapMode="word" fg={palette.faint}>
+        <text wrapMode="word" fg={palette.inkFaint}>
           {workspaceLine}
         </text>
       ) : null}

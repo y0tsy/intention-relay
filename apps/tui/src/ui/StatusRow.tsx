@@ -83,8 +83,8 @@ export function StatusRow({
   const showIdentity = identity.length + right.length + 4 <= width;
   return (
     <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-      <text fg={palette.faint}>{showIdentity ? identity : ""}</text>
-      <text fg={palette.muted}>{right}</text>
+      <text fg={palette.inkFaint}>{showIdentity ? identity : ""}</text>
+      <text fg={palette.inkMuted}>{right}</text>
     </box>
   );
 }

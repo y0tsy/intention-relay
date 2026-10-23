@@ -153,7 +153,7 @@ export function App({ store }: { store: AppStore }) {
       flexDirection="column"
       width="100%"
       height="100%"
-      backgroundColor={palette.background}
+      backgroundColor={palette.canvas}
       borderStyle="rounded"
       border
       borderColor={palette.accent}
