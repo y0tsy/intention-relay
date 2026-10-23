@@ -25,16 +25,21 @@ export type KeyIntent =
   | { readonly kind: "ignore" }
   /** Leave the front end. */
   | { readonly kind: "quit" }
+  /** The layered interrupt: stop the live run, clear the line, or exit. */
+  | { readonly kind: "interrupt" }
+  /** The layered escape, whose meaning the state it finds decides. */
+  | { readonly kind: "escape" }
   /** Hand the draft to the command grammar or to the session as a turn. */
   | { readonly kind: "submit" }
   /** Put a line break into the draft. */
   | { readonly kind: "newline" }
-  /** Stop the live run. */
-  | { readonly kind: "stop_run" }
-  /** Throw the draft away. */
-  | { readonly kind: "clear_draft" }
-  /** Move or delete one character of the draft. */
-  | { readonly kind: "edit"; readonly edit: "backspace" | "delete" | "left" | "right" }
+  /** Commit the row the command band highlights into the draft. */
+  | { readonly kind: "accept_menu" }
+  /** Move the caret or delete, one character or one paste label at a time. */
+  | {
+      readonly kind: "edit";
+      readonly edit: "backspace" | "delete" | "left" | "right" | "home" | "end";
+    }
   /** Walk the prompt history one entry. */
   | { readonly kind: "recall"; readonly delta: number }
   /** Scroll the transcript half a panel. */
@@ -109,8 +114,13 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
   if (event.eventType === "release") {
     return { kind: "ignore" };
   }
-  if (event.ctrl && event.name === "d") {
+  // Ctrl+Q is the immediate exit; Ctrl+C is the layered key every surface
+  // shares, so it reaches the stop, clear, and exit arms of the state.
+  if (event.ctrl && event.name === "q") {
     return { kind: "quit" };
+  }
+  if (event.ctrl && event.name === "c") {
+    return { kind: "interrupt" };
   }
   // Ctrl+E reveals more of the newest reasoning block on the chat surface; on a
   // surface that owns the keyboard it stays a key that surface may claim.
@@ -158,7 +168,10 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
     return { kind: "newline" };
   }
   if (event.name === "escape") {
-    return context.live ? { kind: "stop_run" } : { kind: "clear_draft" };
+    return { kind: "escape" };
+  }
+  if (event.name === "tab" && context.menu) {
+    return { kind: "accept_menu" };
   }
   switch (event.name) {
     case "backspace":
@@ -169,6 +182,10 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
       return { kind: "edit", edit: "left" };
     case "right":
       return { kind: "edit", edit: "right" };
+    case "home":
+      return { kind: "edit", edit: "home" };
+    case "end":
+      return { kind: "edit", edit: "end" };
     case "up":
       return context.menu ? { kind: "move_menu", delta: -1 } : { kind: "recall", delta: -1 };
     case "down":

@@ -30,9 +30,27 @@ test("return submits and a modified return is a line break", () => {
   assert.deepEqual(chat(key("j", { ctrl: true })), { kind: "newline" });
 });
 
-test("escape stops a live run and otherwise clears the draft", () => {
-  assert.deepEqual(chat(key("escape"), { live: true }), { kind: "stop_run" });
-  assert.deepEqual(chat(key("escape"), { live: false }), { kind: "clear_draft" });
+test("escape is one layered gesture, whatever the state it finds", () => {
+  assert.deepEqual(chat(key("escape"), { live: true }), { kind: "escape" });
+  assert.deepEqual(chat(key("escape"), { live: false }), { kind: "escape" });
+});
+
+test("Ctrl+C is the layered interrupt and Ctrl+Q the immediate exit", () => {
+  for (const surface of ["chat", "sessions", "theme"] as const) {
+    const context = { ...CHAT, surface };
+    assert.deepEqual(keyIntent(key("c", { ctrl: true }), context), { kind: "interrupt" });
+    assert.deepEqual(keyIntent(key("q", { ctrl: true }), context), { kind: "quit" });
+  }
+});
+
+test("Tab commits the band's row while the band is open", () => {
+  assert.deepEqual(keyIntent(key("tab"), { ...CHAT, menu: true }), { kind: "accept_menu" });
+  assert.deepEqual(chat(key("tab")), { kind: "ignore" }, "no band, no row to commit");
+});
+
+test("Home and End move the caret to the line's own edges", () => {
+  assert.deepEqual(chat(key("home")), { kind: "edit", edit: "home" });
+  assert.deepEqual(chat(key("end")), { kind: "edit", edit: "end" });
 });
 
 test("the caret keys edit the draft and never a live surface", () => {
@@ -41,6 +59,8 @@ test("the caret keys edit the draft and never a live surface", () => {
     ["delete", "delete"],
     ["left", "left"],
     ["right", "right"],
+    ["home", "home"],
+    ["end", "end"],
   ] as const) {
     assert.deepEqual(chat(key(name)), { kind: "edit", edit });
   }
@@ -80,8 +100,13 @@ test("a modified printable key still types its character", () => {
 
 test("leaving works on every surface", () => {
   for (const surface of ["chat", "sessions", "theme"] as const) {
-    assert.deepEqual(keyIntent(key("d", { ctrl: true }), { ...CHAT, surface }), { kind: "quit" });
+    assert.deepEqual(keyIntent(key("q", { ctrl: true }), { ...CHAT, surface }), { kind: "quit" });
   }
+  assert.deepEqual(
+    keyIntent(key("d", { ctrl: true }), CHAT),
+    { kind: "ignore" },
+    "Ctrl+D is not a quit key: Ctrl+C is",
+  );
 });
 
 test("an open surface owns the arrows, the return, and the escape", () => {

@@ -62,17 +62,20 @@ export function App({ store }: { store: AppStore }) {
       case "quit":
         store.dispatch({ kind: "quit_requested" });
         return;
+      case "interrupt":
+        store.dispatch({ kind: "ctrl_c_pressed" });
+        return;
+      case "escape":
+        store.dispatch({ kind: "escape_pressed" });
+        return;
       case "submit":
         store.dispatch({ kind: "input_submitted" });
         return;
       case "newline":
         store.dispatch({ kind: "draft_newline" });
         return;
-      case "stop_run":
-        store.dispatch({ kind: "cancel_run_requested" });
-        return;
-      case "clear_draft":
-        store.dispatch({ kind: "draft_cleared" });
+      case "accept_menu":
+        store.dispatch({ kind: "menu_accepted" });
         return;
       case "edit":
         store.dispatch({ kind: "draft_edited", edit: intent.edit });
@@ -120,7 +123,7 @@ export function App({ store }: { store: AppStore }) {
     }
     // A paste is data, never a gesture: it lands in the draft whole, and its
     // newlines are the prompt's own.
-    store.dispatch({ kind: "draft_typed", text: pastedText(event.bytes) });
+    store.dispatch({ kind: "draft_pasted", text: pastedText(event.bytes) });
   });
 
   return (

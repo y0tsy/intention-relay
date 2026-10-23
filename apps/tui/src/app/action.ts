@@ -61,14 +61,26 @@ export type Action =
   | { readonly kind: "run_cancel_accepted" }
   /** Stopping the active run failed. */
   | { readonly kind: "run_cancel_failed"; readonly error: ErrorDto }
-  /** The user typed or pasted text into the input line. */
+  /** The user typed one character into the input line. */
   | { readonly kind: "draft_typed"; readonly text: string }
+  /**
+   * The terminal delivered one paste.
+   *
+   * A paste is one edit: it enters the line at once instead of character by
+   * character, and a paste too large for the line leaves one labelled line
+   * behind whose text the submission path expands.
+   */
+  | { readonly kind: "draft_pasted"; readonly text: string }
   /** The user made one caret edit in the input line. */
   | { readonly kind: "draft_edited"; readonly edit: DraftEdit }
   /** The user asked for a line break in the input line. */
   | { readonly kind: "draft_newline" }
-  /** The user cleared the input line. */
+  /** The user abandoned the input line into the recallable history. */
   | { readonly kind: "draft_cleared" }
+  /** The user pressed Esc, whose meaning the state it finds decides. */
+  | { readonly kind: "escape_pressed" }
+  /** The user pressed Ctrl+C, whose meaning the state it finds decides. */
+  | { readonly kind: "ctrl_c_pressed" }
   /** The user walked the submitted prompts. */
   | { readonly kind: "history_recalled"; readonly delta: number }
   /** The surface shows one notice line. */
@@ -101,6 +113,8 @@ export type Action =
   | { readonly kind: "browser_tab_moved"; readonly delta: number }
   /** The reader walked the command band's rows. */
   | { readonly kind: "menu_moved"; readonly delta: number }
+  /** The reader committed the row the command band highlights. */
+  | { readonly kind: "menu_accepted" }
   /** The user dismissed the surface that owns the keyboard. */
   | { readonly kind: "surface_closed" }
   /** The user asked for the theme picker. */
@@ -130,3 +144,37 @@ export const THEME_PREFERENCES: readonly ThemePreference[] = ["auto", "dark", "l
 
 /** Returns the run identity a live run carries, for a caller that needs it. */
 export type RunIdentity = RunId;
+
+/**
+ * Returns whether one action is a report from the client.
+ *
+ * A report is a fact the front end learned, never a gesture the user made, so
+ * the consecutive-press arm a layered key leaves standing survives every one of
+ * them: a live run's frames and the front end's own elapsed readings arrive
+ * between the two presses the arm waits for.
+ */
+export function isClientReport(action: Action): boolean {
+  switch (action.kind) {
+    case "bootstrapped":
+    case "bootstrap_failed":
+    case "session_snapshot_loaded":
+    case "session_snapshot_failed":
+    case "session_created":
+    case "session_create_failed":
+    case "session_stream_opened":
+    case "session_stream_failed":
+    case "session_stream_ended":
+    case "frame_received":
+    case "turn_accepted":
+    case "turn_failed":
+    case "elapsed_reported":
+    case "run_cancel_accepted":
+    case "run_cancel_failed":
+    case "sessions_listed":
+    case "sessions_list_failed":
+    case "effect_failed":
+      return true;
+    default:
+      return false;
+  }
+}

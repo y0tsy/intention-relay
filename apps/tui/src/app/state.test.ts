@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ErrorDto } from "../bindings";
 import { SessionStreamState } from "../client/stream";
-import { RUN_ID, row, run, SESSION_ID, snapshot } from "../testing/fixtures";
+import { RUN_ID, row, run, SESSION_ID, snapshot, summary } from "../testing/fixtures";
 import type { Action } from "./action";
 import { THEME_PREFERENCES } from "./action";
 import { AppState } from "./state";
@@ -343,4 +343,152 @@ test("a dismissed picker changes nothing", () => {
   assert.deepEqual(state.update({ kind: "surface_closed" }), []);
   assert.equal(state.theme, "dark");
   assert.equal(state.surface, "chat");
+});
+
+/** Returns one paste of `lines` lines, large enough for the line to label it. */
+function block(lines: number): string {
+  return Array.from({ length: lines }, (_, index) => `line ${index}`).join("\n");
+}
+
+test("a paste the line can hold enters it as text, and a large one as one label", () => {
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_pasted", text: "one\r\ntwo" });
+  assert.equal(state.draft.text, "one\ntwo", "the line keeps one spelling of a break");
+  state.update({ kind: "draft_cleared" });
+  state.update({ kind: "draft_pasted", text: block(12) });
+  const labelled: string = state.draft.text;
+  assert.equal(labelled, "[pasted line 0 line 1 line 2 line 3 line 4 line 5 line 6 l... 12 lines]");
+  assert.equal(state.draft.caret, labelled.length);
+});
+
+test("a paste label is one unit for the caret and the delete keys", () => {
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_pasted", text: block(12) });
+  const label = state.draft.text;
+  state.update({ kind: "draft_edited", edit: "left" });
+  assert.equal(state.draft.caret, 0, "the caret steps over the whole label");
+  state.update({ kind: "draft_edited", edit: "right" });
+  assert.equal(state.draft.caret, label.length);
+  state.update({ kind: "draft_edited", edit: "backspace" });
+  assert.equal(state.draft.text, "", "the whole label goes at once");
+});
+
+test("submitting a line expands every label into the paste it stands for", () => {
+  const state = openedSession();
+  state.update({ kind: "draft_pasted", text: block(12) });
+  const submitted = state.update({ kind: "input_submitted" });
+  assert.deepEqual(submitted, [{ kind: "send_turn", sessionId: SESSION_ID, content: block(12) }]);
+  assert.equal(state.draft.text, "");
+});
+
+test("Ctrl+C arms the stop, and its next press fires it", () => {
+  const state = runningSession();
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), []);
+  assert.match(state.notice ?? "", /press Ctrl\+C again to stop run/);
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), ["cancel_run"]);
+});
+
+test("a client report leaves the arm standing", () => {
+  const state = runningSession();
+  state.update({ kind: "ctrl_c_pressed" });
+  state.update({ kind: "elapsed_reported", millis: 500 });
+  state.update({ kind: "sessions_listed", summaries: { sessions: [summary()], omitted: 0 } });
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), ["cancel_run"]);
+});
+
+test("Ctrl+C abandons a typed line into the recallable history", () => {
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_typed", text: "half a prompt" });
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), []);
+  assert.equal(state.draft.text, "");
+  assert.equal(state.notice, null, "the clear arms nothing");
+  state.update({ kind: "history_recalled", delta: -1 });
+  assert.equal(state.draft.text, "half a prompt");
+});
+
+test("Ctrl+C on an empty line arms the exit, and its next press leaves", () => {
+  const state = new AppState(SESSION_ID);
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), []);
+  assert.equal(state.notice, "press Ctrl+C again to exit");
+  assert.deepEqual(effects(state, { kind: "ctrl_c_pressed" }), ["quit"]);
+});
+
+test("Esc closes the band first and means nothing else", () => {
+  const state = runningSession();
+  state.update({ kind: "draft_typed", text: "/theme" });
+  assert.notEqual(state.menu, null);
+  assert.deepEqual(effects(state, { kind: "escape_pressed" }), []);
+  assert.equal(state.menu, null, "the band is gone");
+  assert.equal(state.draft.text, "/theme", "the line is untouched");
+  assert.deepEqual(effects(state, { kind: "escape_pressed" }), ["cancel_run"]);
+});
+
+test("Esc stops a live run on one press and clears a typed line on two", () => {
+  const running = runningSession();
+  assert.deepEqual(effects(running, { kind: "escape_pressed" }), ["cancel_run"]);
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_typed", text: "typed" });
+  assert.deepEqual(effects(state, { kind: "escape_pressed" }), []);
+  assert.equal(state.notice, "press Esc again to clear the input");
+  assert.deepEqual(effects(state, { kind: "escape_pressed" }), []);
+  assert.equal(state.draft.text, "");
+  state.update({ kind: "history_recalled", delta: -1 });
+  assert.equal(state.draft.text, "typed");
+});
+
+test("Esc on an empty line leaves the front end", () => {
+  const state = new AppState(SESSION_ID);
+  assert.deepEqual(effects(state, { kind: "escape_pressed" }), ["quit"]);
+});
+
+test("Enter completes an incomplete word and runs a complete one", () => {
+  const state = openedSession();
+  state.update({ kind: "draft_typed", text: "/the" });
+  assert.deepEqual(effects(state, { kind: "input_submitted" }), []);
+  assert.equal(state.draft.text, "/theme ", "the press completes the word it ranks");
+  assert.equal(state.menu?.kind, "argument", "the band reopens on the argument word");
+  // An argument word that is still empty has nothing to complete, so the next
+  // press runs the command itself.
+  assert.deepEqual(effects(state, { kind: "input_submitted" }), []);
+  assert.equal(state.surface, "theme");
+  state.update({ kind: "surface_closed" });
+  state.update({ kind: "draft_typed", text: "/sessions" });
+  assert.deepEqual(
+    effects(state, { kind: "input_submitted" }),
+    ["list_sessions"],
+    "a word that spells the command has nothing to complete",
+  );
+});
+
+test("Tab commits the highlighted row, whatever the word spells", () => {
+  const state = openedSession();
+  state.update({ kind: "draft_typed", text: "/theme" });
+  assert.deepEqual(effects(state, { kind: "menu_accepted" }), []);
+  assert.equal(state.draft.text, "/theme ");
+  assert.equal(state.menu?.kind, "argument", "the band reopens on the argument word");
+  state.update({ kind: "menu_moved", delta: 1 });
+  state.update({ kind: "menu_accepted" });
+  assert.equal(state.draft.text, "/theme dark ");
+});
+
+test("the band's cursor is bounded by its rows and reset by another word", () => {
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_typed", text: "/" });
+  state.update({ kind: "menu_moved", delta: 9 });
+  assert.equal(state.menuHighlight, 4, "the walk stops at the last row");
+  state.update({ kind: "menu_moved", delta: -9 });
+  assert.equal(state.menuHighlight, 0, "and at the first");
+  state.update({ kind: "menu_moved", delta: 2 });
+  state.update({ kind: "draft_typed", text: "t" });
+  assert.equal(state.menuHighlight, 0, "another word is another list");
+});
+
+test("the arrows walk the draft's own lines before they walk the history", () => {
+  const state = new AppState(SESSION_ID);
+  state.update({ kind: "draft_typed", text: "one\ntwo" });
+  state.update({ kind: "draft_edited", edit: "home" });
+  state.update({ kind: "history_recalled", delta: 1 });
+  assert.equal(state.draft.caret, 4, "the caret moved to the line below");
+  state.update({ kind: "history_recalled", delta: 1 });
+  assert.equal(state.draft.text, "one\ntwo", "the last line has no line below it");
 });

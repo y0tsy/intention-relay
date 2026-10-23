@@ -22,12 +22,24 @@ export interface MenuRow {
   readonly trailing: string;
 }
 
+/** One word's span inside the input line. */
+export interface WordSpan {
+  /** The index of the word's first character. */
+  readonly start: number;
+  /** The index after the word's last character. */
+  readonly end: number;
+}
+
 /** The rows a word opens. */
 export interface CommandMenu {
   /** Whether the rows rank commands or one argument's values. */
   readonly kind: "command" | "argument";
   /** The rows the word ranks, in the order the band paints them. */
   readonly rows: readonly MenuRow[];
+  /** The word the rows were ranked for, exactly as the user typed it. */
+  readonly filter: string;
+  /** The word's own span, which a completion replaces. */
+  readonly word: WordSpan;
 }
 
 /**
@@ -79,13 +91,19 @@ export function commandMenu(draft: Draft): CommandMenu | null {
   const line = lineEnd < 0 ? text : text.slice(0, lineEnd);
   const nameEnd = firstBlank(line);
   if (draft.caret <= nameEnd) {
-    return commandRows(line.slice(1, nameEnd));
+    return commandRows(line.slice(1, nameEnd), { start: 0, end: nameEnd });
   }
   const command = COMMANDS.find((entry) => entry.name === line.slice(1, nameEnd));
   if (command === undefined || command.arguments.length === 0) {
     return null;
   }
-  return argumentMenu(command, argumentWord(line.slice(nameEnd)));
+  const rest = line.slice(nameEnd);
+  const leading = rest.length - rest.trimStart().length;
+  const word = argumentWord(rest);
+  return argumentMenu(command, word, {
+    start: nameEnd + leading,
+    end: nameEnd + leading + word.length,
+  });
 }
 
 /** Returns the offset of the first blank of one line, or its length. */
@@ -100,7 +118,7 @@ function argumentWord(rest: string): string {
 }
 
 /** Returns the commands one typed filter ranks. */
-function commandRows(filter: string): CommandMenu | null {
+function commandRows(filter: string, word: WordSpan): CommandMenu | null {
   const wanted = filter.toLowerCase();
   const rows = COMMANDS.filter((command) => command.name.startsWith(wanted)).map((command) => ({
     label: `/${command.name}`,
@@ -110,11 +128,11 @@ function commandRows(filter: string): CommandMenu | null {
   if (rows.length === 0) {
     return null;
   }
-  return { kind: "command", rows };
+  return { kind: "command", rows, filter, word };
 }
 
 /** Returns the values one declared argument's word ranks, or `null`. */
-function argumentMenu(command: CommandSpec, filter: string): CommandMenu | null {
+function argumentMenu(command: CommandSpec, filter: string, word: WordSpan): CommandMenu | null {
   if (command.action !== "choose_theme") {
     // Every other argument takes a free-form value: a session id has nothing
     // to rank, so the word opens nothing.
@@ -131,7 +149,57 @@ function argumentMenu(command: CommandSpec, filter: string): CommandMenu | null 
   if (rows.length === 0) {
     return null;
   }
-  return { kind: "argument", rows };
+  return { kind: "argument", rows, filter, word };
+}
+
+/**
+ * Returns the identity of the word one band ranks.
+ *
+ * The band's cursor is reset whenever this changes: a word that ranks other
+ * rows is another list, and the row the reader was on says nothing about it.
+ */
+export function menuKey(menu: CommandMenu): string {
+  return `${menu.kind}:${menu.filter}`;
+}
+
+/**
+ * Returns whether the word one band ranks already says what its row is worth.
+ *
+ * A band has nothing to complete when the line already spells one registered
+ * command, one of an argument's declared values - however the case is typed,
+ * exactly as the submission path accepts it - or the argument word is still
+ * empty, so the command itself is complete. Enter runs such a line instead of
+ * spending a press on the row's trailing space, while Tab still completes the
+ * row the band highlights.
+ */
+export function menuCompletesNothing(menu: CommandMenu): boolean {
+  if (menu.kind === "command") {
+    return COMMANDS.some((command) => command.name === menu.filter);
+  }
+  if (menu.filter === "") {
+    return true;
+  }
+  return THEME_PREFERENCES.some(
+    (preference) => preference.toLowerCase() === menu.filter.toLowerCase(),
+  );
+}
+
+/**
+ * Returns the edit one accepted row makes, or `null` for a row that is gone.
+ *
+ * The word the band was opened for is replaced by the row's completion - its
+ * label and one trailing space - so the caret lands ready for the argument
+ * after a command or for the submission after a value.
+ */
+export function menuCompletion(
+  menu: CommandMenu,
+  highlight: number,
+): { readonly start: number; readonly end: number; readonly text: string } | null {
+  const row = menu.rows[highlight];
+  if (row === undefined) {
+    return null;
+  }
+  return { start: menu.word.start, end: menu.word.end, text: `${row.label} ` };
 }
 
 /** Returns the window of rows the band paints around one highlighted row. */

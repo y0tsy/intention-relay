@@ -16,7 +16,7 @@ export interface Draft {
 export const EMPTY_DRAFT: Draft = { text: "", caret: 0 };
 
 /** One caret edit a key names, as the state machine receives it. */
-export type DraftEdit = "backspace" | "delete" | "left" | "right";
+export type DraftEdit = "backspace" | "delete" | "left" | "right" | "home" | "end";
 
 /** Inserts text at the caret and leaves the caret after it. */
 export function insertText(draft: Draft, text: string): Draft {
@@ -56,6 +56,37 @@ export function moveCaret(draft: Draft, delta: number): Draft {
   return { text: draft.text, caret };
 }
 
+/**
+ * Moves the caret one line towards `delta`, keeping its column.
+ *
+ * A multi-line prompt is navigated the way its own rows are: the caret keeps
+ * the column it had, shortened to the target line's own length. `null` means
+ * the draft carries no line in that direction, which is what leaves the arrows
+ * their other meaning - the history - at the first and last line.
+ */
+export function moveCaretLine(draft: Draft, delta: number): Draft | null {
+  const text = draft.text;
+  const start = text.lastIndexOf("\n", Math.max(0, draft.caret - 1)) + 1;
+  const lineEnd = text.indexOf("\n", draft.caret);
+  const end = lineEnd < 0 ? text.length : lineEnd;
+  const column = draft.caret - start;
+  if (delta < 0) {
+    if (start === 0) {
+      return null;
+    }
+    const previousStart = text.lastIndexOf("\n", start - 2) + 1;
+    const previousEnd = start - 1;
+    return { text, caret: previousStart + Math.min(column, previousEnd - previousStart) };
+  }
+  if (end >= text.length) {
+    return null;
+  }
+  const nextStart = end + 1;
+  const nextEnd = text.indexOf("\n", nextStart);
+  const stop = nextEnd < 0 ? text.length : nextEnd;
+  return { text, caret: nextStart + Math.min(column, stop - nextStart) };
+}
+
 /** Moves the caret to the start of the draft. */
 export function caretToStart(draft: Draft): Draft {
   return { text: draft.text, caret: 0 };
@@ -77,6 +108,10 @@ export function editDraft(draft: Draft, edit: DraftEdit): Draft {
       return moveCaret(draft, -1);
     case "right":
       return moveCaret(draft, 1);
+    case "home":
+      return caretToStart(draft);
+    case "end":
+      return caretToEnd(draft);
   }
 }
 

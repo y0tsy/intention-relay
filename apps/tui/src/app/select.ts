@@ -18,7 +18,7 @@ import type {
 import type { ThemePreference } from "./action";
 import type { BrowserTab } from "./browser";
 import type { Draft } from "./editor";
-import { type CommandMenu, commandMenu } from "./menu";
+import type { CommandMenu } from "./menu";
 import type { RunPhase } from "./run";
 import type { AppState, ConnectionStatus, Surface } from "./state";
 
@@ -80,7 +80,7 @@ export function selectNotice(state: AppState): string | null {
  * keystroke that does not move the word costs no band.
  */
 export function selectCommandMenu(state: AppState): CommandMenu | null {
-  return commandMenu(state.draft);
+  return state.menu;
 }
 
 /** Returns the row of the command band the reader is on. */

@@ -21,20 +21,37 @@ import type {
   WorkspaceRootDto,
 } from "../bindings";
 import { runStatusIsTerminal, SessionStreamState } from "../client/stream";
-import { type Action, THEME_PREFERENCES, type ThemePreference } from "./action";
+import { type Action, isClientReport, THEME_PREFERENCES, type ThemePreference } from "./action";
+import { type Arm, CLEAR_ARM_NOTICE, EXIT_ARM_NOTICE, stopArmNotice } from "./arm";
 import { BROWSER_TABS, type BrowserTab, browserRows } from "./browser";
 import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
 import {
   type Draft,
+  type DraftEdit,
   EMPTY_DRAFT,
   editDraft,
   insertNewline,
   insertText,
+  moveCaretLine,
   replaceDraft,
 } from "./editor";
 import type { Effect } from "./effect";
 import { PromptHistory } from "./history";
-import { commandMenu } from "./menu";
+import {
+  type CommandMenu,
+  commandMenu,
+  menuCompletesNothing,
+  menuCompletion,
+  menuKey,
+} from "./menu";
+import {
+  expandPastes,
+  normalisePaste,
+  type PastedText,
+  pasteIsLarge,
+  pasteLabel,
+  pasteSpans,
+} from "./paste";
 import { type RunPhase, TOOL_WORKING_AFTER_MILLIS } from "./run";
 
 /** Which surface owns the keyboard. */
@@ -140,6 +157,14 @@ export class AppState {
   #rowsRevision = -1;
   /** The prompts this front end has submitted, for the arrow keys to walk. */
   readonly #history = new PromptHistory();
+  /** The pastes the input line stands for with one labelled line each. */
+  #pastes: readonly PastedText[] = [];
+  /** What the last layered key press armed for its next consecutive press. */
+  #armed: Arm | null = null;
+  /** The word the band's cursor belongs to, which a new word resets. */
+  #menuWord: string | null = null;
+  /** Whether the band's current word was dismissed, which an edit reopens. */
+  #menuDismissed = false;
 
   /**
    * Creates the state a front end starts from.
@@ -155,6 +180,13 @@ export class AppState {
 
   /** Applies one action and returns the client effects it asks for. */
   update(action: Action): readonly Effect[] {
+    // The arm is consecutive over the user's own actions: only a press of the
+    // key it belongs to keeps it standing, and a client report - a live run's
+    // frames, the front end's elapsed readings - arrives between two presses
+    // without being an action of the user's at all.
+    if (!isClientReport(action) && !this.#armedIsPressedBy(action)) {
+      this.#armed = null;
+    }
     switch (action.kind) {
       case "connect_requested":
         this.connection = "connecting";
@@ -196,19 +228,24 @@ export class AppState {
         return this.#applyFailure(action.error);
       case "draft_typed":
         this.draft = insertText(this.draft, action.text);
-        this.menuSelection = 0;
+        this.#refreshMenu();
+        return [];
+      case "draft_pasted":
+        this.#applyDraftPasted(action.text);
         return [];
       case "draft_edited":
-        this.draft = editDraft(this.draft, action.edit);
+        this.#applyDraftEdited(action.edit);
         return [];
       case "draft_newline":
         this.draft = insertNewline(this.draft);
+        this.#refreshMenu();
         return [];
       case "draft_cleared":
-        this.draft = EMPTY_DRAFT;
-        this.notice = null;
-        this.menuSelection = 0;
-        return [];
+        return this.#clearIntoHistory();
+      case "escape_pressed":
+        return this.#applyEscape();
+      case "ctrl_c_pressed":
+        return this.#applyCtrlC();
       case "history_recalled":
         return this.#applyHistoryRecalled(action.delta);
       case "notice_shown":
@@ -253,6 +290,9 @@ export class AppState {
       case "menu_moved":
         this.menuSelection += action.delta;
         return [];
+      case "menu_accepted":
+        this.#acceptMenu();
+        return [];
       case "surface_closed":
         return this.#applySurfaceClosed();
       case "theme_requested":
@@ -278,15 +318,33 @@ export class AppState {
    *
    * The cursor is the state's, and it is clamped to the rows the current word
    * ranks: a keystroke that narrows the list leaves the cursor on a row that
-   * exists, and a band with no rows cursors nothing.
+   * exists, and a band with no rows cursors nothing. The walk stops at the
+   * first and last row instead of wrapping, which is the same bounded walk the
+   * session browser's cursor makes.
    */
   get menuHighlight(): number {
-    const menu = commandMenu(this.draft);
-    const rows = menu?.rows.length ?? 0;
+    const rows = this.menu?.rows.length ?? 0;
     if (rows === 0) {
       return 0;
     }
-    return ((this.menuSelection % rows) + rows) % rows;
+    return Math.min(rows - 1, Math.max(0, this.menuSelection));
+  }
+
+  /**
+   * Resets the band's cursor whenever the word it ranks is another word.
+   *
+   * A word that ranks other rows is another list, and the row the reader was on
+   * says nothing about it; the same word keeps the row it had, so a caret that
+   * moves inside a word does not move the highlight.
+   */
+  #refreshMenu(): void {
+    this.#menuDismissed = false;
+    const menu = this.menu;
+    const word = menu === null ? null : menuKey(menu);
+    if (word !== this.#menuWord) {
+      this.#menuWord = word;
+      this.menuSelection = 0;
+    }
   }
 
   /** Returns the rows the browser's tab and filter show. */
@@ -338,6 +396,17 @@ export class AppState {
       this.#rows = state.messages.slice();
     }
     return this.#rows;
+  }
+
+  /**
+   * Returns the rows the band shows for the word the caret sits in, if any.
+   *
+   * The band is derived from the line, except for one state the line cannot
+   * carry: a word the user dismissed with Esc stays closed until the next edit,
+   * which is what makes the dismissing press mean nothing else.
+   */
+  get menu(): CommandMenu | null {
+    return this.#menuDismissed ? null : commandMenu(this.draft);
   }
 
   /** Returns the last known run projection. */
@@ -525,11 +594,205 @@ export class AppState {
    * half-written prompt.
    */
   #applyHistoryRecalled(delta: number): readonly Effect[] {
+    // A multi-line prompt is navigated the way its own rows are: the arrows
+    // move the caret while the draft carries a line in that direction, and only
+    // at the first and last line do they walk the history.
+    const moved = moveCaretLine(this.draft, delta);
+    if (moved !== null) {
+      this.draft = moved;
+      this.#refreshMenu();
+      return [];
+    }
     const recalled = this.#history.navigate(delta);
     if (recalled !== null) {
       this.draft = replaceDraft(recalled);
+      this.#pastes = [];
+      this.#refreshMenu();
     }
     return [];
+  }
+
+  /**
+   * Applies one caret edit, with a paste label read as one unit.
+   *
+   * Removing one character of a label would leave a label standing for nothing,
+   * so the whole label goes at once, exactly as it was inserted, and the caret
+   * steps over one instead of into it.
+   */
+  #applyDraftEdited(edit: DraftEdit): void {
+    const spans = pasteSpans(this.draft.text, this.#pastes);
+    const caret = this.draft.caret;
+    const removal =
+      edit === "backspace"
+        ? spans.find((span) => span.start < caret && caret <= span.end)
+        : edit === "delete"
+          ? spans.find((span) => span.start === caret)
+          : undefined;
+    if (removal !== undefined) {
+      this.draft = {
+        text: this.draft.text.slice(0, removal.start) + this.draft.text.slice(removal.end),
+        caret: removal.start,
+      };
+      this.#pastes = this.#pastes.filter((_, index) => index !== removal.index);
+      this.#refreshMenu();
+      return;
+    }
+    const step = spans.find((span) =>
+      edit === "left" ? span.end === caret : edit === "right" ? span.start === caret : false,
+    );
+    if (step !== undefined) {
+      this.draft = { text: this.draft.text, caret: edit === "left" ? step.start : step.end };
+      return;
+    }
+    this.draft = editDraft(this.draft, edit);
+    this.#refreshMenu();
+  }
+
+  /**
+   * Applies one paste, as one edit.
+   *
+   * A paste the line can hold is inserted as the ordinary text it is; a paste
+   * larger than the line can show - more characters than the inline limit, or
+   * more lines than one - leaves one labelled line behind and keeps its text
+   * outside the buffer, because a line the user cannot read at a glance is not a
+   * line they can edit.
+   */
+  #applyDraftPasted(raw: string): void {
+    const text = normalisePaste(raw);
+    if (text === "") {
+      return;
+    }
+    if (pasteIsLarge(text)) {
+      const label = pasteLabel(text);
+      this.draft = insertText(this.draft, label);
+      this.#pastes = [...this.#pastes, { label, text }];
+    } else {
+      this.draft = insertText(this.draft, text);
+    }
+    this.#refreshMenu();
+  }
+
+  /**
+   * Commits the band's highlighted row into the input line.
+   *
+   * The word the band was opened for is replaced by the row's completion, and
+   * the band then follows the same open rule: a command that declares an
+   * argument reopens it on the argument word, and a complete command or value
+   * closes it.
+   */
+  #acceptMenu(): void {
+    const menu = this.menu;
+    if (menu === null) {
+      return;
+    }
+    const completion = menuCompletion(menu, this.menuHighlight);
+    if (completion === null) {
+      return;
+    }
+    const text =
+      this.draft.text.slice(0, completion.start) +
+      completion.text +
+      this.draft.text.slice(completion.end);
+    this.draft = { text, caret: completion.start + completion.text.length };
+    this.#refreshMenu();
+  }
+
+  /**
+   * Abandons the input line into the recallable history and clears it.
+   *
+   * The line is kept whole: a paste label is expanded first, so the history
+   * carries the text the user pasted and a recall puts it back as the line it
+   * was.
+   */
+  #clearIntoHistory(): readonly Effect[] {
+    const text = expandPastes(this.draft.text, this.#pastes);
+    if (text.trim() !== "") {
+      this.#history.push(text);
+    }
+    this.draft = EMPTY_DRAFT;
+    this.#pastes = [];
+    this.notice = null;
+    this.#refreshMenu();
+    return [];
+  }
+
+  /**
+   * Applies one Esc press on the chat surface.
+   *
+   * Four meanings meet on the key, and the state it finds decides which one the
+   * press carries: the band is the innermost layer, so one press closes it and
+   * touches nothing else; a live run stops on a single press, the way a shell
+   * cancels a running command; a typed line arms the clear, which its next
+   * consecutive press fires; and an empty line leaves the front end.
+   */
+  #applyEscape(): readonly Effect[] {
+    if (this.menu !== null) {
+      // Closing the band is not editing the line: the word stays exactly where
+      // it is and the caret does not move, and the next edit opens the band
+      // again, because an edit is what recomputes the word.
+      this.#menuDismissed = true;
+      this.#menuWord = null;
+      this.menuSelection = 0;
+      return [];
+    }
+    if (this.liveRun !== null) {
+      return this.#requestCancel();
+    }
+    if (this.draft.text.trim() !== "") {
+      if (this.#armed === "clear") {
+        this.#armed = null;
+        return this.#clearIntoHistory();
+      }
+      this.#arm("clear", CLEAR_ARM_NOTICE);
+      return [];
+    }
+    this.#armed = null;
+    return [{ kind: "quit" }];
+  }
+
+  /**
+   * Applies one Ctrl+C press on any surface.
+   *
+   * The press is layered over the state it finds: a live run arms the stop its
+   * next consecutive press fires; a typed line abandons into the recallable
+   * history without arming anything; and an empty line arms the exit.
+   */
+  #applyCtrlC(): readonly Effect[] {
+    const run = this.liveRun;
+    if (run !== null) {
+      if (this.#armed === "stop") {
+        this.#armed = null;
+        return this.#requestCancel();
+      }
+      this.#arm("stop", stopArmNotice(run.run_id));
+      return [];
+    }
+    if (this.draft.text.trim() !== "") {
+      this.#armed = null;
+      return this.#clearIntoHistory();
+    }
+    if (this.#armed === "exit") {
+      this.#armed = null;
+      return [{ kind: "quit" }];
+    }
+    this.#arm("exit", EXIT_ARM_NOTICE);
+    return [];
+  }
+
+  /** Arms one act for its next consecutive press and shows its notice. */
+  #arm(arm: Arm, notice: string): void {
+    this.#armed = arm;
+    this.notice = notice;
+  }
+
+  /** Returns whether the arm standing belongs to the key one action pressed. */
+  #armedIsPressedBy(action: Action): boolean {
+    if (this.#armed === null) {
+      return false;
+    }
+    return this.#armed === "clear"
+      ? action.kind === "escape_pressed"
+      : action.kind === "ctrl_c_pressed";
   }
 
   /**
@@ -541,13 +804,26 @@ export class AppState {
    * notice that says why.
    */
   #applyInputSubmitted(): readonly Effect[] {
-    const text = this.draft.text;
+    const menu = this.menu;
+    if (menu !== null && !menuCompletesNothing(menu)) {
+      // The band owns Enter while its word is incomplete: the press completes
+      // the word the user is typing instead of running it, so an abbreviated
+      // line grows to its command or value first. A word that already spells
+      // the command or a declared value has nothing left to complete, so Enter
+      // runs the line - one press for `/sessions`, not two.
+      this.#acceptMenu();
+      return [];
+    }
+    const text = expandPastes(this.draft.text, this.#pastes);
     if (text.trim().length === 0) {
+      this.notice = "type a message before sending it";
       return [];
     }
     this.#history.push(text);
     this.draft = EMPTY_DRAFT;
+    this.#pastes = [];
     this.notice = null;
+    this.#refreshMenu();
     const line = text.trim();
     if (!isCommandLine(line)) {
       return this.#submitTurn(text);
