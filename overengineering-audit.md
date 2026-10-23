@@ -67,6 +67,12 @@ clauses, or evidence lines. `d43fc9a` refreshes the webpki patches past three ad
 deferred by decision (F2-5). See
 [Work status](#work-status-2026-10-22) and [Closure wave in detail](#closure-wave-in-detail).
 
+**Front-end migration.** The terminal front end draws with `ratatui` 0.30.2 in place of `revue` 3.10.0:
+`tui-markdown` renders the answers, `tui-scrollview` holds the transcript's row buffer, and the framework owns no keys,
+so the layered Ctrl+C and Ctrl+Q reach the core's own handler with no `prevent_default` seam between the two. The five
+`unmaintained` `rust-unic` advisories the old widget library pulled are gone with it, and `deny.toml`'s
+`advisories.ignore` is empty. See [Front-end migration in detail](#front-end-migration-in-detail).
+
 ## Work status (2026-10-22)
 
 | State | Findings | Evidence |
@@ -1097,3 +1103,25 @@ recorded as deferred, not as resolved.
 Validation of the final tree (`d43fc9a`): `cargo check --workspace --all-targets --locked --all-features` is clean,
 `cargo clippy --workspace --all-targets --locked --all-features -- -Dwarnings` is clean, `make verify` is green, and
 the suite reports 876 tests passed with 2 skipped.
+
+## Front-end migration in detail
+
+The front end moved from `revue` 3.10.0 to `ratatui` 0.30.2, taken with `default-features = false` and only the
+`crossterm`, `std`, and `layout-cache` features.
+
+| Area | Change |
+| --- | --- |
+| Manifest | `revue` and the direct `crossterm` leave `intention-tui`; `ratatui` 0.30.2, `tui-markdown` 0.3.12, `tui-scrollview` 0.6.8, and `unicode-width` 0.2 enter. The `cfg(unix)` block keeps `mio` alone: the backend and the event source come through ratatui's `crossterm` re-export, so the crate names no crossterm version of its own |
+| Widgets | Every pane paints into a `Frame` with a `Rect` it was handed: `Block`, `Paragraph`, and `Line`/`Span` values replace the framework's widget tree, `Style::patch` merges a markdown heading's line style with its spans' styles, and `Cell::reset` clears a row before it is repainted |
+| Markdown | `tui-markdown`'s `from_str_with_options` renders through a `PaletteSheet` that implements the crate's `StyleSheet` trait over the palette's own roles; the table width comes from the pane's content width, and the renderer's own heading markers, fences, and tables are the layout |
+| Transcript | `tui-scrollview`'s `ScrollView` holds the painted display rows in a buffer grown in 256-row steps, with `ScrollbarVisibility::Never` so the widget's own bars never take a column from the rows the pane laid out. The pane paints its own bar from the same `total`/`start` pair, and only while the transcript is taller than the window |
+| Input | The core keeps the buffer: no input crate enters. The pane windows the core's lines, draws the block cursor itself, and the keymap reads `KeyCode`/`KeyModifiers` off the events the loop reads |
+| Event loop | `ratatui::try_init()` and `restore()` bracket the session with mouse capture and bracketed paste; `event::poll`/`event::read` drive a 100 ms tick; key releases are dropped. No framework key handling stands between the terminal and the core |
+| Tests | `src/tui/testing.rs` draws a view into `ratatui`'s `TestBackend` and reads cells back, replacing the previous framework's test app; `tests/tui_render.rs` asserts characters, cells, and rows through it |
+| Policy | `deny.toml`'s `advisories.ignore` is empty, and two duplicate families join `[bans] skip` with their chains: `darling` 0.20 (the provider SDKs' `derive_builder`) beside 0.24 (`instability`), and `itertools` 0.14 (`ratatui-core`) beside 0.15 (`tui-markdown`) |
+
+Validation: `make check` is green (fmt, Clippy with `-D warnings`, 878 nextest tests with 2 skipped, rustdoc with
+`-D warnings`), `make deps` is green (`cargo deny` with an empty acknowledgement set, `cargo-machete` clean), and
+`make coverage` holds every floor (`intention-tui` 91.86% against its 20 floor). The fullscreen front end was driven in
+a virtual PTY at 100×30, 60×18, and 34×10: the welcome surface, the input block, the layered `Esc`, the theme picker,
+the docked sessions browser, and Ctrl+Q's exit and terminal restore all behave as the tests state.
