@@ -5,7 +5,7 @@ import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { row } from "../testing/fixtures";
 import { DARK } from "../theme/palette";
-import { Transcript, toolLabel, toolName } from "./Transcript";
+import { Transcript, toolLabel } from "./Transcript";
 
 /** Renders a transcript of committed rows at one width. */
 async function lines(
@@ -35,16 +35,16 @@ test("a prompt row reads as the prompt and an answer row as the answer", async (
 });
 
 test("a tool row names the tool the daemon reported", async () => {
-  const declared = row(3, "tool_call", "src/main.rs", {
-    tool: { row: "call", value: { tool_id: { Declared: "read" }, input: {} } } as never,
+  const call = row(3, "tool_call", "src/main.rs", {
+    tool: { row: "call", value: { tool_id: "read", input: {} } } as never,
   });
-  const undeclared = row(4, "tool_result", "done", {
+  const result = row(4, "tool_result", "done", {
     tool: {
       row: "result",
-      value: { tool_id: { Undeclared: "mystery" }, status: "completed", result: {} },
+      value: { tool_id: "mystery", status: "completed", result: {} },
     } as never,
   });
-  const painted_ = await lines([declared, undeclared]);
+  const painted_ = await lines([call, result]);
   assert.equal(painted_[0], "read src/main.rs");
   assert.equal(painted_[2], "result done");
 });
@@ -69,14 +69,22 @@ test("a notice row reads as prose, not as a protocol row", async () => {
   assert.equal(painted_[0], "the run was interrupted");
 });
 
-test("the tool labels come from the wire identity, never from a guess", () => {
-  assert.equal(toolName({ Declared: "execute" }), "execute");
-  assert.equal(toolName({ Undeclared: "mystery" }), "mystery");
+test("the tool label is the wire name, whatever the model called", () => {
+  // The identity travels as one string, so a name the product does not expose
+  // reaches the reader unchanged instead of failing a lookup.
+  assert.equal(
+    toolLabel({ row: "call", value: { tool_id: "execute", input: {} } } as never),
+    "execute",
+  );
+  assert.equal(
+    toolLabel({ row: "call", value: { tool_id: "mystery", input: {} } } as never),
+    "mystery",
+  );
   assert.equal(
     toolLabel({
-      row: "call",
-      value: { tool_id: { Declared: "grep" }, input: {} },
+      row: "result",
+      value: { tool_id: "grep", status: "completed", result: {} },
     } as never),
-    "grep",
+    "result",
   );
 });

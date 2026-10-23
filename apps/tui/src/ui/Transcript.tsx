@@ -1,20 +1,21 @@
 //! The transcript: committed rows, then the text of the step in flight.
 
 import { TextAttributes } from "@opentui/core";
-import type { MessageProjectionDto, ToolIdentityDto, ToolRowDto } from "../bindings";
+import type { MessageProjectionDto, ToolRowDto } from "../bindings";
 import type { Palette } from "../theme/palette";
 import { Markdown } from "./Markdown";
 
-/** Returns the name a tool row reports. */
-export function toolName(identity: ToolIdentityDto): string {
-  return "Declared" in identity ? identity.Declared : identity.Undeclared;
-}
-
-/** Returns the one-line label of a tool row. */
+/**
+ * Returns the one-line label of a tool row.
+ *
+ * The identity travels as the wire name the model used, so a row names the tool
+ * exactly as it was called: there is no declared-tool vocabulary to look up and
+ * nothing to fall back to when the name is one the product does not expose.
+ */
 export function toolLabel(tool: ToolRowDto): string {
   switch (tool.row) {
     case "call":
-      return toolName(tool.value.tool_id);
+      return tool.value.tool_id;
     case "result":
       return "result";
   }

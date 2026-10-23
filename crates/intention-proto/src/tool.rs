@@ -105,8 +105,13 @@ impl Display for ToolId {
 /// `Declared` is exactly [`ToolId::parse`] succeeding; `Undeclared` keeps a
 /// non-blank wire name that no declared tool owns, because a model can request
 /// a tool the product does not expose and that request stays durable evidence.
+///
+/// The wire form is one string, not a tagged enum: the custom [`Serialize`]
+/// impl below writes [`Self::wire_name`], so the generated declaration has to
+/// say `string` instead of describing the Rust variants.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(as = "String"))]
 pub enum ToolIdentityDto {
     /// A wire name inside the declared tool set.
     Declared(ToolId),
