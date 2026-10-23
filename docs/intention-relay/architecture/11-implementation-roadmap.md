@@ -266,8 +266,10 @@ explicit v1 non-goals below.
 
 ### Deliver
 
--  final architecture checks; observability, health, and safe structured diagnostics; frozen config-snapshot behavior
-and redaction hardening; the restart/reconnect/cancellation smoke suite;
+-  the final architecture review crate by crate against the dependency manifests and the structural boundary rules,
+which the compiler and the manifests enforce and no checker re-asserts ([architecture
+12](12-quality-gates-and-makefile.md)); observability, health, and safe structured diagnostics; frozen config-snapshot
+behavior and redaction hardening; the restart/reconnect/cancellation smoke suite;
 -  documentation reconciliation against implemented public contracts, including ownership of the architecture index and
 its owner paragraphs (`architecture/README.md`);
 - the post-M4 evidence obligations of architecture 10 for the remaining post-M4 packages; and
@@ -298,7 +300,6 @@ commit,
 provider, model, and the command and machine it ran on;
 - secret injection regression suite;
 - daemon restart and reconnect endurance fixtures;
-- architecture dependency/API boundary checks across all crates;
 - a complete `make verify` reproducibility check from a clean, pinned-tool environment.
 
 ### Exit criteria
@@ -356,12 +357,14 @@ publication;
 
 ## Milestone 11: Capabilities and context — MCP, kernel, and Skills/context
 
-**Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21), the
+**Depends on Milestone 10.** It delivers the post-M4 MCP, kernel, and context packages (architectures 18/20/21) and the
 project script library of [architecture
-20](20-ipython-kernel-lifecycle.md), and the architecture 22 provider work that remains
-not activated: the `responses` driver. It starts only when an activating specification per [architecture
+20](20-ipython-kernel-lifecycle.md). It starts only when an activating specification per [architecture
 12](12-quality-gates-and-makefile.md) is accepted; that activating change also declares the kernel contract families as
-typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)).
+typed serde JSON contracts ([architecture 02](02-dto-and-contract-policy.md)). It carries no `responses` provider kind:
+architecture 22 keeps that kind unactivated and defines no Responses SDK or adapter, and introducing one requires the
+separately declared driver crate and contract decision of [architecture
+08](08-model-protocol-and-providers.md).
 
 ### Deliver
 
@@ -378,7 +381,6 @@ projection;
 -  scoped Goal acceptance and evidence, immutable untrusted Skill selection, the admission-frozen context-source
 selection, model-step context, and immutable compaction over exact completed history
 (architecture 21), with the Goal domain itself owned by architecture 28;
--  the canonical `responses` provider driver (architecture 22);
 -  crate ownership and coverage declarations under [Quality Gates and
 Makefile](12-quality-gates-and-makefile.md), plus quality-policy declarations for every activated family.
 
