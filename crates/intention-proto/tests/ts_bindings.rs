@@ -20,10 +20,9 @@ use intention_proto::{
     SendUserTurnOutcomeDto, SessionFrameDto, SessionProjectionDto, SessionSnapshotDto,
     SessionSummariesDto, SessionSummaryDto, ShellCommandTextDto, SubscribeSessionCommandDto,
     TextDeltaChannelDto, TextDeltaFrameDto, TextResult, TimestampDto, ToolCallDto, ToolCallRowDto,
-    ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult,
-    ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
-    ToolTimeoutSecondsDto, UsageDto, WorkspaceBindingDto, WorkspaceRelativePathDto,
-    WorkspaceRootDto, WriteInput, WriteResult,
+    ToolId, ToolIdentityDto, ToolInput, ToolProcessStatus, ToolResult, ToolResultMetadataEntryDto,
+    ToolResultRowDto, ToolResultStatusDto, ToolRowDto, ToolTimeoutSecondsDto, UsageDto,
+    WorkspaceBindingDto, WorkspaceRelativePathDto, WorkspaceRootDto, WriteInput, WriteResult,
 };
 use ts_rs::{Config, TS};
 
@@ -43,7 +42,11 @@ fn the_wire_types_export_to_the_terminal_app() {
     // so the directory is the only complete source of names.
     let mut names = std::fs::read_dir(config.out_dir())
         .expect("the export directory exists")
-        .map(|entry| entry.expect("a readable export directory entry").file_name())
+        .map(|entry| {
+            entry
+                .expect("a readable export directory entry")
+                .file_name()
+        })
         .filter_map(|name| name.to_str().map(str::to_owned))
         .filter(|name| name.ends_with(".ts") && name != "index.ts")
         .map(|name| name.trim_end_matches(".ts").to_owned())
