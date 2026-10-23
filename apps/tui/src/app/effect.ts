@@ -4,6 +4,7 @@
 //! reducer stays constructible, and testable, without a daemon.
 
 import type { RunId, SessionId } from "../bindings";
+import type { ThemePreference } from "./action";
 
 /** One client operation the reducer asks the store to perform. */
 export type Effect =
@@ -22,4 +23,8 @@ export type Effect =
   /** Open the live stream of one session. */
   | { readonly kind: "subscribe"; readonly sessionId: SessionId }
   /** Stop one exact active run. */
-  | { readonly kind: "cancel_run"; readonly sessionId: SessionId; readonly runId: RunId };
+  | { readonly kind: "cancel_run"; readonly sessionId: SessionId; readonly runId: RunId }
+  /** Read the current durable session list. */
+  | { readonly kind: "list_sessions" }
+  /** Write one theme preference to the configuration file. */
+  | { readonly kind: "persist_theme"; readonly preference: ThemePreference };

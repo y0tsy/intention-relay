@@ -10,6 +10,7 @@ import type { ErrorDto } from "../bindings";
 import { SessionStreamState } from "../client/stream";
 import { RUN_ID, row, run, SESSION_ID, snapshot } from "../testing/fixtures";
 import type { Action } from "./action";
+import { THEME_PREFERENCES } from "./action";
 import { AppState } from "./state";
 
 /** Returns one typed failure. */
@@ -311,4 +312,33 @@ test("an effect the store could not start becomes the error line", () => {
     [],
   );
   assert.match(state.error ?? "", /^daemon_program_unavailable:/);
+});
+
+test("the picker opens on the preference in force", () => {
+  const state = new AppState(null, "light");
+  state.update({ kind: "theme_requested" });
+  assert.equal(state.surface, "theme");
+  assert.equal(state.selectedTheme, "light");
+});
+
+test("committing the highlight writes the preference it names", () => {
+  for (const preference of THEME_PREFERENCES) {
+    const state = new AppState(null, "auto");
+    state.update({ kind: "theme_requested" });
+    state.update({ kind: "selection_moved", delta: THEME_PREFERENCES.indexOf(preference) });
+    assert.deepEqual(state.update({ kind: "selection_committed" }), [
+      { kind: "persist_theme", preference },
+    ]);
+    assert.equal(state.theme, preference);
+    assert.equal(state.surface, "chat");
+  }
+});
+
+test("a dismissed picker changes nothing", () => {
+  const state = new AppState(null, "dark");
+  state.update({ kind: "theme_requested" });
+  state.update({ kind: "selection_moved", delta: 1 });
+  assert.deepEqual(state.update({ kind: "surface_closed" }), []);
+  assert.equal(state.theme, "dark");
+  assert.equal(state.surface, "chat");
 });

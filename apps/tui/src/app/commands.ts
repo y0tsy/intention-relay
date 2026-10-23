@@ -5,6 +5,8 @@
 //! and the unknown-command notice lists the same entries, so a command can never
 //! exist in the registry and not in the surface it drives.
 
+import { THEME_PREFERENCES, type ThemePreference } from "./action";
+
 /** One argument a command declares. */
 export interface ArgumentSpec {
   /** The argument's name, as the notices spell it. */
@@ -19,6 +21,10 @@ export type CommandAction =
   | "new_session"
   /** Open the session the command's one argument names. */
   | "open_session"
+  /** Browse the sessions the daemon holds. */
+  | "list_sessions"
+  /** Choose the palette, either through the picker or by one declared value. */
+  | "choose_theme"
   /** Leave the front end. */
   | "quit";
 
@@ -28,20 +34,58 @@ export interface CommandSpec {
   readonly name: string;
   /** The arguments the command declares, in the order a line fills them. */
   readonly arguments: readonly ArgumentSpec[];
+  /** What the command does, as the welcome surface offers it. */
+  readonly summary: string;
   /** The transition a submitted command of this name runs. */
   readonly action: CommandAction;
 }
 
 /** Every command the fullscreen surface knows, in the order a notice lists them. */
 export const COMMANDS: readonly CommandSpec[] = [
-  { name: "new", arguments: [], action: "new_session" },
+  {
+    name: "new",
+    arguments: [],
+    summary: "start a fresh session",
+    action: "new_session",
+  },
   {
     name: "session",
     arguments: [{ name: "session", required: true }],
+    summary: "open the session with this id",
     action: "open_session",
   },
-  { name: "quit", arguments: [], action: "quit" },
+  {
+    name: "sessions",
+    arguments: [],
+    summary: "browse the sessions on this machine",
+    action: "list_sessions",
+  },
+  {
+    name: "theme",
+    // The value is optional: a bare `/theme` opens the picker, and a declared
+    // value pins the palette in one word.
+    arguments: [{ name: "theme", required: false }],
+    summary: "choose the palette",
+    action: "choose_theme",
+  },
+  {
+    name: "quit",
+    arguments: [],
+    summary: "leave",
+    action: "quit",
+  },
 ];
+
+/**
+ * Returns the preference one declared word names.
+ *
+ * The case rule is the registry's: a value is matched without regard to case, so
+ * `/theme DARK` and `/theme dark` name the same preference.
+ */
+export function themeValue(word: string): ThemePreference | undefined {
+  const normalized = word.trim().toLowerCase();
+  return THEME_PREFERENCES.find((value) => value === normalized);
+}
 
 /** One resolved command line: the registered command and its argument words. */
 export interface CommandInvocation {
@@ -64,7 +108,7 @@ export function commandNamed(name: string): CommandSpec | undefined {
 }
 
 /** Returns the name as a user writes it, with its leading slash. */
-export function typedName(command: CommandSpec): string {
+export function typedName(command: { readonly name: string }): string {
   return `/${command.name}`;
 }
 

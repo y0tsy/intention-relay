@@ -13,6 +13,7 @@ import type {
   RunStatusDto,
   SessionId,
   SessionSnapshotDto,
+  SessionSummaryDto,
   TextDeltaFrameDto,
   TurnId,
 } from "../bindings";
@@ -92,4 +93,19 @@ export function delta(
   text: string,
 ): TextDeltaFrameDto {
   return { session_id: SESSION_ID, run_id: RUN_ID, step, channel, text };
+}
+
+/** Returns one session summary, as the browser's table reads it. */
+export function summary(overrides: Partial<SessionSummaryDto> = {}): SessionSummaryDto {
+  return {
+    session_id: SESSION_ID,
+    project_id: "0b1a2c3d-0000-4000-8000-0000000000c1",
+    workspace_id: "0b1a2c3d-0000-4000-8000-0000000000d1",
+    mode: "build",
+    created_at: 1_700_000_000,
+    updated_at: 1_700_000_060,
+    workspace_root: "/workspace",
+    message_count: 3,
+    ...overrides,
+  };
 }

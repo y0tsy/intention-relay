@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import type { CreateSessionCommandDto, ErrorDto, RunModeDto, WorkspaceRootDto } from "../bindings";
 import type { IntentionClient, SessionStream, StreamStep } from "../client/client";
 import { ClientFailure } from "../client/errors";
-import type { Action } from "./action";
+import type { Action, ThemePreference } from "./action";
 import type { Effect } from "./effect";
 import { AppState } from "./state";
 
@@ -23,6 +23,16 @@ export interface StoreOptions {
   readonly mode: RunModeDto | null;
   /** The session to open on bootstrap, if any. */
   readonly initialSession: string | null;
+  /** Where the theme preference is read from and written to. */
+  readonly recorder: ThemeRecorder;
+  /** The theme preference the configuration file declares. */
+  readonly theme: ThemePreference;
+}
+
+/** Reads and writes the one theme preference the app persists. */
+export interface ThemeRecorder {
+  /** Writes one preference to the configuration file. */
+  writeTheme(preference: ThemePreference): Promise<void>;
 }
 
 /** Reports how a store change happened, so a view can react to its own cause. */
@@ -41,6 +51,7 @@ export class AppStore {
   readonly #workspaceRoot: WorkspaceRootDto;
   readonly #mode: RunModeDto | null;
   readonly #listeners = new Set<StoreListener>();
+  readonly #recorder: ThemeRecorder;
   #version = 0;
   #stream: SessionStream | null = null;
   #streamGeneration = 0;
@@ -50,7 +61,8 @@ export class AppStore {
     this.#client = options.client;
     this.#workspaceRoot = options.workspaceRoot;
     this.#mode = options.mode;
-    this.state = new AppState(options.initialSession);
+    this.#recorder = options.recorder;
+    this.state = new AppState(options.initialSession, options.theme);
   }
 
   /** Subscribes one listener; returns the unsubscribe function. */
@@ -64,6 +76,11 @@ export class AppStore {
   /** Returns the version a view compares to decide whether to re-render. */
   getVersion(): number {
     return this.#version;
+  }
+
+  /** Returns the workspace a session this store creates is bound to. */
+  get workspaceRoot(): WorkspaceRootDto {
+    return this.#workspaceRoot;
   }
 
   /** Dispatches one action and performs the effects it asks for. */
@@ -137,6 +154,28 @@ export class AppStore {
         return;
       case "subscribe":
         await this.#openStream(effect.sessionId);
+        return;
+      case "list_sessions":
+        await this.#run(
+          () => this.#client.listSessions(),
+          (summaries) => ({ kind: "sessions_listed", summaries }),
+          (error) => ({ kind: "sessions_list_failed", error }),
+        );
+        return;
+      case "persist_theme":
+        await this.#persistTheme(effect.preference);
+        return;
+      default:
+        assertNever(effect);
+    }
+  }
+
+  /** Writes one theme preference to the configuration file. */
+  async #persistTheme(preference: ThemePreference): Promise<void> {
+    try {
+      await this.#recorder.writeTheme(preference);
+    } catch (error) {
+      this.dispatch({ kind: "effect_failed", error: failureOf(error) });
     }
   }
 
@@ -218,6 +257,11 @@ export class AppStore {
       listener();
     }
   }
+}
+
+/** Makes an unhandled effect a compile error instead of a silent no-op. */
+function assertNever(effect: never): never {
+  throw new Error(`unhandled effect: ${JSON.stringify(effect)}`);
 }
 
 /** Reads the typed failure out of anything a client call threw. */

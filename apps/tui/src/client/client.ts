@@ -18,6 +18,7 @@ import type {
   SendUserTurnOutcomeDto,
   SessionId,
   SessionSnapshotDto,
+  SessionSummariesDto,
   SubscribeSessionCommandDto,
 } from "../bindings";
 import { Connection, withDeadline } from "./connection";
@@ -134,6 +135,22 @@ export class IntentionClient {
     const command: CancelRunCommandDto = { session_id: sessionId, run_id: runId };
     const result = await this.#request({ kind: "cancel_run", data: command });
     if (result.kind !== "run_cancelled") {
+      throw new ClientFailure(invalidResponse());
+    }
+    return result.data;
+  }
+
+  /**
+   * Lists the current durable sessions in their durable order.
+   *
+   * The reply carries an explicit omitted count, so a caller renders the window
+   * as partial instead of reading it as the complete list.
+   *
+   * @throws {ClientFailure} The daemon's typed rejection or a transport failure.
+   */
+  async listSessions(): Promise<SessionSummariesDto> {
+    const result = await this.#request({ kind: "list_sessions" });
+    if (result.kind !== "sessions_listed") {
       throw new ClientFailure(invalidResponse());
     }
     return result.data;

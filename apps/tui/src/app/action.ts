@@ -10,11 +10,14 @@ import type {
   SendUserTurnOutcomeDto,
   SessionId,
   SessionSnapshotDto,
+  SessionSummariesDto,
 } from "../bindings";
 import type { SessionStreamState } from "../client/stream";
 
 /** One fact the client established or one gesture the user made. */
 export type Action =
+  /** The front end asked for the daemon, at start or after a loss. */
+  | { readonly kind: "connect_requested" }
   /** The client reached a ready daemon. */
   | { readonly kind: "bootstrapped" }
   /** The client could not reach a daemon. */
@@ -47,10 +50,46 @@ export type Action =
   | { readonly kind: "turn_submitted"; readonly content: string }
   /** The user asked for a new session. */
   | { readonly kind: "new_session_requested" }
+  /** The user named one session to open. */
+  | { readonly kind: "session_open_requested"; readonly sessionId: SessionId }
   /** The user asked to stop the active run for good. */
   | { readonly kind: "cancel_run_requested" }
+  /** The user asked for the session list. */
+  | { readonly kind: "sessions_requested" }
+  /** The daemon listed the sessions it holds. */
+  | { readonly kind: "sessions_listed"; readonly summaries: SessionSummariesDto }
+  /** Listing the sessions failed. */
+  | { readonly kind: "sessions_list_failed"; readonly error: ErrorDto }
+  /** The user moved the selection of the surface that owns the keyboard. */
+  | { readonly kind: "selection_moved"; readonly delta: number }
+  /** The user committed the selection of the surface that owns the keyboard. */
+  | { readonly kind: "selection_committed" }
+  /** The user dismissed the surface that owns the keyboard. */
+  | { readonly kind: "surface_closed" }
+  /** The user asked for the theme picker. */
+  | { readonly kind: "theme_requested" }
+  /** The user chose a theme preference. */
+  | { readonly kind: "theme_selected"; readonly preference: ThemePreference }
   /** An effect failed before it reached the daemon. */
   | { readonly kind: "effect_failed"; readonly error: ErrorDto };
+
+/**
+ * Which palette the terminal app paints with.
+ *
+ * `auto` follows the terminal's own light or dark background; the other two
+ * pin it, and the choice is written back to the configuration file.
+ */
+export type ThemePreference = "auto" | "light" | "dark";
+
+/**
+ * Every theme preference, in the one order the app lists and indexes them.
+ *
+ * The picker's highlight is an index into this list, so the order is a
+ * contract: a surface that listed the preferences differently would commit the
+ * one next to the reader's choice. The command registry takes its vocabulary
+ * from here too, so the words a line may name cannot drift from the picker.
+ */
+export const THEME_PREFERENCES: readonly ThemePreference[] = ["auto", "dark", "light"];
 
 /** Returns the run identity a live run carries, for a caller that needs it. */
 export type RunIdentity = RunId;

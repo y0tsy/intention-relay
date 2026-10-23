@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Runs the fullscreen terminal app.
+#
+# The app needs Node 26.4 or newer: OpenTUI's native core is loaded through the
+# FFI that version exposes. The launcher finds a suitable runtime instead of
+# trusting whatever `node` the current shell happens to have first on PATH, and
+# `INTENTION_NODE` overrides the search.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+app="$(dirname "$here")"
+
+minimum_major=26
+minimum_minor=4
+
+version_of() {
+  "$1" --version 2>/dev/null | sed -n 's/^v\([0-9]*\)\.\([0-9]*\).*/\1 \2/p'
+}
+
+suitable() {
+  local major minor
+  read -r major minor <<<"$(version_of "$1" || true)"
+  [ -n "${major:-}" ] && { [ "$major" -gt "$minimum_major" ] || { [ "$major" -eq "$minimum_major" ] && [ "$minor" -ge "$minimum_minor" ]; }; }
+}
+
+runtime=""
+for candidate in "${INTENTION_NODE:-}" "$(command -v node || true)" "$HOME/.local/node-v26/bin/node"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ] && suitable "$candidate"; then
+    runtime="$candidate"
+    break
+  fi
+done
+
+if [ -z "$runtime" ]; then
+  printf '%s\n' \
+    "intention-relay needs Node >= ${minimum_major}.${minimum_minor} to run the terminal app." \
+    "Set INTENTION_NODE to a suitable runtime, for example:" \
+    "  INTENTION_NODE=/path/to/node26/bin/node $0" >&2
+  exit 1
+fi
+
+if [ ! -d "$app/node_modules" ]; then
+  printf '%s\n' "dependencies are not installed; run: npm --prefix $app ci" >&2
+  exit 1
+fi
+
+# The app's own working directory is not the caller's: a session runs in the
+# directory the user launched from, and the loader reads this app's tsconfig for
+# the JSX runtime, so both facts are pinned before the runtime starts.
+export INTENTION_WORKSPACE="${INTENTION_WORKSPACE:-$PWD}"
+cd "$app"
+
+exec "$runtime" \
+  --experimental-ffi \
+  --disable-warning=ExperimentalWarning \
+  --import "$app/node_modules/tsx/dist/loader.mjs" \
+  "$app/src/main.tsx" "$@"

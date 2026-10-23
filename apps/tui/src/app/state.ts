@@ -14,10 +14,14 @@ import type {
   SendUserTurnOutcomeDto,
   SessionId,
   SessionSnapshotDto,
+  SessionSummariesDto,
 } from "../bindings";
 import { SessionStreamState } from "../client/stream";
-import type { Action } from "./action";
+import { type Action, THEME_PREFERENCES, type ThemePreference } from "./action";
 import type { Effect } from "./effect";
+
+/** Which surface owns the keyboard. */
+export type Surface = "chat" | "sessions" | "theme";
 
 /** How far the one live channel of a session has got. */
 export type StreamStatus = "inactive" | "live" | "failed" | "ended";
@@ -46,20 +50,40 @@ export class AppState {
   reconnectsAsked = 0;
   stream: StreamStatus = "inactive";
   error: string | null = null;
+  /**
+   * The surface that owns the keyboard.
+   *
+   * Exactly one surface owns it at a time, and that ownership is what the accent
+   * border marks, so a screen a user is typing into is always the one that is
+   * painted.
+   */
+  surface: Surface = "chat";
+  /** The session list the browser shows, once the daemon has answered. */
+  sessions: SessionSummariesDto | null = null;
+  /** The failure the session browser reports instead of a list. */
+  sessionsError: string | null = null;
+  /** The index the surface that owns the keyboard has highlighted. */
+  selection = 0;
+  /** The palette preference the configuration file declares. */
+  theme: ThemePreference;
 
   /**
    * Creates the state a front end starts from.
    *
    * `initialSession` is the session the caller selected, or the session the
    * client resolved for an explicit continuation; `null` opens nothing.
+   * `initialTheme` is the preference the configuration file declared.
    */
-  constructor(initialSession: SessionId | null) {
+  constructor(initialSession: SessionId | null, initialTheme: ThemePreference = "auto") {
     this.initialSession = initialSession;
+    this.theme = initialTheme;
   }
 
   /** Applies one action and returns the client effects it asks for. */
   update(action: Action): readonly Effect[] {
     switch (action.kind) {
+      case "connect_requested":
+        return [{ kind: "connect" }];
       case "bootstrapped":
         return this.#applyBootstrapped();
       case "bootstrap_failed":
@@ -93,9 +117,57 @@ export class AppState {
         return this.#submitTurn(action.content);
       case "new_session_requested":
         return [{ kind: "create_session", firstTurn: null }];
+      case "session_open_requested":
+        // Opening a session a user named takes the keyboard back to the
+        // transcript before the read it asks for has even been sent.
+        this.surface = "chat";
+        this.selection = 0;
+        return [{ kind: "open_session", sessionId: action.sessionId }];
       case "cancel_run_requested":
         return this.#requestCancel();
+      case "sessions_requested":
+        return this.#applySessionsRequested();
+      case "sessions_listed":
+        this.sessions = action.summaries;
+        this.sessionsError = null;
+        this.selection = 0;
+        return [];
+      case "sessions_list_failed":
+        this.sessions = null;
+        this.sessionsError = `${action.error.code}: ${action.error.message}`;
+        return [];
+      case "selection_moved":
+        return this.#applySelectionMoved(action.delta);
+      case "selection_committed":
+        return this.#applySelectionCommitted();
+      case "surface_closed":
+        return this.#applySurfaceClosed();
+      case "theme_requested":
+        return this.#applyThemeRequested();
+      case "theme_selected":
+        return this.#applyThemeSelected(action.preference);
     }
+  }
+
+  /** Returns the number of entries the surface that owns the keyboard offers. */
+  get optionCount(): number {
+    if (this.surface === "sessions") {
+      return this.sessions?.sessions.length ?? 0;
+    }
+    if (this.surface === "theme") {
+      return THEME_PREFERENCES.length;
+    }
+    return 0;
+  }
+
+  /** Returns the session the browser has highlighted. */
+  get selectedSession(): SessionId | null {
+    return this.sessions?.sessions[this.selection]?.session_id ?? null;
+  }
+
+  /** Returns the theme preference the picker has highlighted. */
+  get selectedTheme(): ThemePreference | null {
+    return THEME_PREFERENCES[this.selection] ?? null;
   }
 
   /** Returns the committed transcript rows of the current session. */
@@ -296,6 +368,77 @@ export class AppState {
       return [];
     }
     return [{ kind: "cancel_run", sessionId: this.sessionId, runId: run.run_id }];
+  }
+
+  /**
+   * Opens the session browser and asks the client for the current list.
+   *
+   * The surface owns the keyboard from this moment, before the answer arrives:
+   * a screen a user can type into is always a screen that is painted.
+   */
+  #applySessionsRequested(): readonly Effect[] {
+    this.surface = "sessions";
+    this.sessions = null;
+    this.sessionsError = null;
+    this.selection = 0;
+    return [{ kind: "list_sessions" }];
+  }
+
+  /** Moves the highlight within the entries the surface offers. */
+  #applySelectionMoved(delta: number): readonly Effect[] {
+    const count = this.optionCount;
+    if (this.surface === "chat" || count === 0) {
+      return [];
+    }
+    // Wrapping keeps one key moving through every entry, so a list longer than
+    // the panel is reachable without a second gesture.
+    this.selection = (((this.selection + delta) % count) + count) % count;
+    return [];
+  }
+
+  /** Commits the highlight: open the session it names, or apply the theme it names. */
+  #applySelectionCommitted(): readonly Effect[] {
+    switch (this.surface) {
+      case "chat":
+        return [];
+      case "sessions": {
+        const sessionId = this.selectedSession;
+        if (sessionId === null) {
+          return [];
+        }
+        this.surface = "chat";
+        return [{ kind: "open_session", sessionId }];
+      }
+      case "theme": {
+        const preference = this.selectedTheme;
+        if (preference === null) {
+          return [];
+        }
+        return this.#applyThemeSelected(preference);
+      }
+    }
+  }
+
+  /** Dismisses the surface that owns the keyboard without committing anything. */
+  #applySurfaceClosed(): readonly Effect[] {
+    this.surface = "chat";
+    this.selection = 0;
+    return [];
+  }
+
+  /** Opens the theme picker on the preference in force. */
+  #applyThemeRequested(): readonly Effect[] {
+    this.surface = "theme";
+    this.selection = Math.max(0, THEME_PREFERENCES.indexOf(this.theme));
+    return [];
+  }
+
+  /** Applies one theme preference and writes it back to the configuration file. */
+  #applyThemeSelected(preference: ThemePreference): readonly Effect[] {
+    this.theme = preference;
+    this.surface = "chat";
+    this.selection = 0;
+    return [{ kind: "persist_theme", preference }];
   }
 
   /**
