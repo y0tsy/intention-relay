@@ -63,6 +63,20 @@ export function caretToEnd(draft: Draft): Draft {
   return { text: draft.text, caret: draft.text.length };
 }
 
+/** Applies one of the four caret edits the composer's keys name. */
+export function editDraft(draft: Draft, edit: "backspace" | "delete" | "left" | "right"): Draft {
+  switch (edit) {
+    case "backspace":
+      return backspace(draft);
+    case "delete":
+      return deleteForward(draft);
+    case "left":
+      return moveCaret(draft, -1);
+    case "right":
+      return moveCaret(draft, 1);
+  }
+}
+
 /** Replaces the whole draft with one line, as history navigation does. */
 export function replaceDraft(text: string): Draft {
   return { text, caret: text.length };

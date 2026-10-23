@@ -5,7 +5,7 @@
 //! is not on screen. The composer, the hint band, and the status line stay put
 //! while the transcript scrolls between them.
 
-import { decodePasteBytes, type ScrollBoxRenderable } from "@opentui/core";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ThemePreference } from "../app/action";
@@ -18,14 +18,13 @@ import { Composer } from "./Composer";
 import {
   EMPTY_DRAFT,
   type Draft,
-  backspace,
-  deleteForward,
+  editDraft,
   insertNewline,
   insertText,
-  moveCaret,
   replaceDraft,
 } from "./editor";
 import { HintBand } from "./HintBand";
+import { keyIntent, pastedText } from "./keys";
 import { SessionBrowser } from "./SessionBrowser";
 import { StatusRow, type StatusFacts } from "./StatusRow";
 import { THEME_ENTRIES, ThemePicker } from "./ThemePicker";
@@ -155,86 +154,53 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
   }, [draft, history, quit, store]);
 
   useKeyboard((event) => {
-    if (event.eventType === "release") {
-      return;
-    }
-    if (state.surface !== "chat") {
-      switch (event.name) {
-        case "up":
-        case "k":
-          store.dispatch({ kind: "selection_moved", delta: -1 });
-          return;
-        case "down":
-        case "j":
-          store.dispatch({ kind: "selection_moved", delta: 1 });
-          return;
-        case "return":
-          store.dispatch({ kind: "selection_committed" });
-          return;
-        case "escape":
-          store.dispatch({ kind: "surface_closed" });
-          return;
-        default:
-          return;
-      }
-    }
-
-    if (event.ctrl && event.name === "d") {
-      quit();
-      return;
-    }
-    if (event.name === "return") {
-      // A modified return is a line break: a prompt may be several lines, and
-      // the unmodified key is what submits one.
-      if (event.shift || event.ctrl) {
+    const intent = keyIntent(event, {
+      surface: state.surface,
+      live: state.liveRun !== null,
+      height,
+    });
+    switch (intent.kind) {
+      case "ignore":
+        return;
+      case "quit":
+        quit();
+        return;
+      case "submit":
+        submit();
+        return;
+      case "newline":
         setDraft((current) => insertNewline(current));
         return;
-      }
-      submit();
-      return;
-    }
-    if (event.ctrl && event.name === "j") {
-      setDraft((current) => insertNewline(current));
-      return;
-    }
-    if (event.name === "escape") {
-      if (state.liveRun !== null) {
+      case "stop_run":
         store.dispatch({ kind: "cancel_run_requested" });
         return;
+      case "clear_draft":
+        setDraft(EMPTY_DRAFT);
+        setNoticeText(null);
+        return;
+      case "edit":
+        setDraft((current) => editDraft(current, intent.edit));
+        return;
+      case "recall": {
+        const recalled = history.navigate(intent.delta);
+        setDraft(recalled === null ? EMPTY_DRAFT : replaceDraft(recalled));
+        return;
       }
-      setDraft(EMPTY_DRAFT);
-      setNoticeText(null);
-      return;
-    }
-    if (event.name === "backspace") {
-      setDraft((current) => backspace(current));
-      return;
-    }
-    if (event.name === "delete") {
-      setDraft((current) => deleteForward(current));
-      return;
-    }
-    if (event.name === "left") {
-      setDraft((current) => moveCaret(current, -1));
-      return;
-    }
-    if (event.name === "right") {
-      setDraft((current) => moveCaret(current, 1));
-      return;
-    }
-    if (event.name === "up" || event.name === "down") {
-      const recalled = history.navigate(event.name === "up" ? -1 : 1);
-      setDraft(recalled === null ? EMPTY_DRAFT : replaceDraft(recalled));
-      return;
-    }
-    if (event.name === "pageup" || event.name === "pagedown") {
-      const step = Math.max(1, Math.floor(height / 2));
-      scroll.current?.scrollBy({ x: 0, y: event.name === "pageup" ? -step : step });
-      return;
-    }
-    const text = typed(event);
-    if (text !== null) {
-      setDraft((current) => insertText(current, text));
+      case "scroll":
+        scroll.current?.scrollBy({ x: 0, y: intent.delta });
+        return;
+      case "insert":
+        setDraft((current) => insertText(current, intent.text));
+        return;
+      case "move_selection":
+        store.dispatch({ kind: "selection_moved", delta: intent.delta });
+        return;
+      case "commit_selection":
+        store.dispatch({ kind: "selection_committed" });
+        return;
+      case "close_surface":
+        store.dispatch({ kind: "surface_closed" });
+        return;
     }
   });
 
@@ -244,7 +210,7 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
     }
     // A paste is data, never a gesture: it lands in the draft whole, and its
     // newlines are the prompt's own.
-    setDraft((current) => insertText(current, decodePasteBytes(event.bytes)));
+    setDraft((current) => insertText(current, pastedText(event.bytes)));
   });
 
   const inner = width - 2;
@@ -335,20 +301,4 @@ export function App({ store, onQuit }: { store: AppStore; onQuit: () => void }) 
       )}
     </box>
   );
-}
-
-/**
- * Returns the text one key press types, or `null` for a key that is a gesture.
- *
- * A named key carries a multi-character name and never reaches the draft; a
- * single character is what a user typed, whatever the layout maps it to.
- */
-export function typed(event: { name: string; ctrl: boolean; meta: boolean }): string | null {
-  if (event.ctrl || event.meta) {
-    return null;
-  }
-  if (event.name === "space") {
-    return " ";
-  }
-  return [...event.name].length === 1 ? event.name : null;
 }
