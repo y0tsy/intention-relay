@@ -179,38 +179,42 @@ dependency releasing a patch would fail the build without any change to this rep
 work rather than a blocking check.
 
 Duplicate versions are reviewed, not eliminated. Every duplicate family in the graph belongs to one of the two
-provider SDKs, to the HTTP/TLS stacks they pull, or to one WASM-target-only dependency of the bundled SQLite chain, and
-no release collapses one: `async-openai` 0.42.2 requires `reqwest` 0.13, `base64` 0.22, and `getrandom` 0.3, while
+provider SDKs, to the HTTP/TLS stacks they pull, to one WASM-target-only dependency of the bundled SQLite chain, or to
+the widget stack the terminal front end draws with, and no release collapses one: `async-openai` 0.42.2 requires
+`reqwest` 0.13, `base64` 0.22, and `getrandom` 0.3, while
 `openrouter-rs` 0.19.0 requires `reqwest` 0.12 with `thiserror` 1 and `dotenvy`, whose macro brings `syn` 1;
-`futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4, and `hyper-util` brings `base64` 0.23. `deny.toml`'s
+`futures-macro` brings `syn` 3, `uuid` brings `getrandom` 0.4, and `hyper-util` brings `base64` 0.23. The widget stack
+adds two: `ratatui` 0.30.2 -> `instability` uses `darling` 0.24 while both SDKs' `derive_builder` uses `darling` 0.20,
+and `tui-markdown` 0.3.12 requires `itertools` 0.15 while `ratatui-core` 0.1.2 requires 0.14. `deny.toml`'s
 `[bans] skip` list carries each one with its owning chain, and `cargo deny` fails on any duplicate that list does not
 name, so a new family is a blocking finding rather than an accretion. The diagnostic needs `--workspace`: the root
 `Cargo.toml` declares `default-members`, so a bare `cargo tree -d` inspects only `intention-proto` and
 `intention-config` and reports nothing.
 
-That `deny.toml`'s `advisories.ignore` set is exactly the five reviewed `rust-unic` entries is a review
-responsibility, not a gate: `cargo deny` reads the file as written, so a newly added entry passes silently. Adding one
-is a decision to review, and the accompanying `reason` is what makes it reviewable.
+That `deny.toml`'s `advisories.ignore` set stays empty is a review responsibility, not a gate: `cargo deny` reads
+the file as written, so a newly added entry passes silently. Adding one is a decision to review, and the accompanying
+`reason` is what makes it reviewable.
 
-`revue` is an ordinary crates.io dependency of `intention-tui`, pinned at `3.10.0`. Two of its properties are visible
-here. Its event loop quits on Ctrl+C after the handler returns, while Ctrl+C is the shared core's layered action, so
-`handle_event` calls `App::prevent_default` for the press the core consumes. It also depends on `unic-emoji-char`,
-whose whole `rust-unic` family is archived: five `unmaintained` advisories with no safe upgrade
-(RUSTSEC-2025-0075, -0080, -0081, -0090, -0098) reachable only through that probe. Those five are the complete
-`advisories.ignore` set in `deny.toml`; every other advisory is resolved by upgrading the graph, and entries there
-carry the reason the acknowledgement is allowed to stand. Upstream plans to replace the probe's source
-(hawk90/revue#950); the acknowledgement goes away with that release.
+The terminal front end draws with `ratatui` 0.30.2, taken with `default-features = false` and only the `crossterm`,
+`std`, and `layout-cache` features; `tui-markdown` 0.3.12 renders the answers, `tui-scrollview` 0.6.8 holds the
+transcript's row buffer, and `unicode-width` measures display columns. `ratatui` 0.30 is a facade over `ratatui-core`,
+`ratatui-widgets`, `ratatui-crossterm`, and `ratatui-macros`, and it re-exports the `crossterm` 0.29 backend, so this
+crate names no crossterm version of its own. The framework owns no keys: every press, Ctrl+C and Ctrl+Q included,
+reaches the shared core's own handler, so no `prevent_default` layer stands between the two. None of the four brings an
+advisory, which is why `advisories.ignore` is empty; the five `unmaintained` `rust-unic` entries
+(RUSTSEC-2025-0075, -0080, -0081, -0090, -0098) were reachable only through the previous front end's `unic-emoji-char`
+probe and left with it.
 
 The terminal binary takes `mimalloc` as its process-wide global allocator, because a terminal frame allocates many
 short-lived small strings; it is an ordinary crates.io dependency under the MIT license.
 
-The terminal's local theme resolution adds three direct dependencies, and none of them adds a package to the locked
-graph: `toml` parses and writes the local `tui.toml` (whose `theme` key stores `auto`, `light`, or `dark`), and the
-`cfg(unix)` pair `crossterm` (raw mode) and `mio`
-(readiness on the terminal's own input) serve the `OSC 11` background probe, bounded at 15 ms, skipped when standard
-input or output is not a terminal, and never run at all when the terminal exports `COLORFGBG`. `crossterm` and `mio` were already
-locked as the backend and event source of `revue 3.10.0`, and `toml` was already locked through the same graph, so the
-declared set changed without a new package, license, or advisory entering it.
+The terminal's local theme resolution adds two direct dependencies: `toml` parses and writes the local `tui.toml`
+(whose `theme` key stores `auto`, `light`, or `dark`), and the `cfg(unix)` `mio` provides readiness on the terminal's
+own input for the `OSC 11` background probe, bounded at 15 ms, skipped when standard input or output is not a terminal,
+and never run at all when the terminal exports `COLORFGBG`. The probe switches raw mode through the `crossterm` that
+`ratatui` re-exports, so it declares no crossterm version of its own; `mio` was already locked, `crossterm` stays in the
+graph as the backend's own dependency, and `toml` was already locked through the same graph, so the declared set
+changed without a new package, license, or advisory entering it.
 
 ## Test-first integration
 

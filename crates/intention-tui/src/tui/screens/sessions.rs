@@ -19,12 +19,14 @@
 
 use std::ops::Range;
 
-use revue::layout::Rect;
-use revue::style::Color;
-use revue::text::char_width;
-use revue::widget::{Border, Card, RichText, Span, Style, Text, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::{AppState, BrowserRow, BrowserTab};
+use crate::tui::layout::{char_width, frame_title};
 use crate::tui::palette::{self, Palette};
 
 /// The blank canvas row the chat container keeps above the docked panel.
@@ -176,9 +178,9 @@ pub(super) struct Geometry {
 /// rows_needed, 6, window_height / 2)`. A window too small to keep the chat
 /// and the panel apart returns `None`, and the chat keeps the whole window
 /// instead of a broken frame.
-// @todo(revue): revue has no constraint layout, so a content-sized, bounded
-// split cannot be expressed: the panel's height is a stack of magic minimums
-// (frame, chrome, footer, data rows) and a half-window clamp instead.
+// @todo(hack): a content-sized, bounded split is not expressed declaratively
+// here: the panel's height is a sum of named minimums (frame, chrome, footer,
+// data rows) and a half-window clamp instead.
 pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
     if window.width <= PANEL_FRAME {
         return None;
@@ -202,78 +204,89 @@ pub(super) fn geometry(state: &AppState, window: Rect) -> Option<Geometry> {
     })
 }
 
-/// Returns the panel: the titled frame around the browser's own container.
+/// Paints the panel: the titled frame around the browser's own container.
 ///
-/// `Card` draws its title as a row inside its frame, and the `Sessions` title
-/// belongs in the top border, so the frame is a `Border` that embeds it. The
-/// `Card` inside draws no border of its own and owns the padding, the
-/// background fill, and the footer legend, so the two read as one container
-/// with the title embedded in its top border. The caller places the panel in
-/// the window's last [`Geometry::rows`] rows.
-///
-/// The theme is resolved here, once per frame, and handed to every row the
-/// panel draws.
-pub(super) fn panel(state: &AppState, now: i64, geometry: Geometry) -> Border {
+/// `area` is the window's last [`Geometry::rows`] rows. The frame's top border
+/// carries the `Sessions` title, and its content runs from a leading gap row
+/// through the tab radio row, the search bar, the table, and the divider to the
+/// legend, which is the panel's own last inner row. The theme is resolved here,
+/// once per frame, and handed to every row the panel draws.
+pub(super) fn panel(state: &AppState, now: i64, geometry: Geometry, area: Rect, frame: &mut Frame) {
     let palette = palette::of(state.effective_theme());
-    let width = geometry.content_columns;
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(frame_title("Sessions"))
+        .border_style(Style::new().fg(palette.accent))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+    let content = Rect::new(
+        inner.x.saturating_add(PANEL_PADDING),
+        inner.y,
+        inner.width.saturating_sub(PANEL_PADDING * 2),
+        inner.height,
+    );
+    let width = usize::from(content.width);
     let columns = columns(width);
-    let mut body = vstack()
-        .child_sized(Text::new(""), 1)
-        .child_sized(tabs_row(state, width, palette), 1)
-        .child_sized(search_bar(state, width, palette), 1)
-        .child_sized(divider(width, palette), 1)
-        .child_sized(table_header(&columns, width, palette), 1);
+    let mut y = content.y;
+    y = paint_row(frame, content, y, Line::from(""));
+    y = paint_row(frame, content, y, tabs_row(state, width, palette));
+    y = paint_row(frame, content, y, search_bar(state, width, palette));
+    y = paint_row(frame, content, y, divider(width, palette));
+    y = paint_row(frame, content, y, table_header(&columns, width, palette));
     let rows = state.browser_rows();
     if rows.is_empty() {
-        let reason = state.browser_empty_reason();
-        if let Some(reason) = reason {
-            body = body.child_sized(empty_state(reason, width, palette), 1);
-        }
-        let filler = geometry
-            .data_rows
-            .saturating_sub(usize::from(reason.is_some()));
-        if filler > 0 {
-            let filler = u16::try_from(filler).unwrap_or(u16::MAX);
-            body = body.child_sized(Text::new(""), filler);
+        if let Some(reason) = state.browser_empty_reason() {
+            paint_row(frame, content, y, empty_state(reason, width, palette));
         }
     } else {
         let cursor = state.browser_cursor();
         for index in visible_window(rows.len(), cursor, geometry.data_rows) {
-            let selected = index == cursor;
-            body = body.child_sized(
+            if y >= content.bottom().saturating_sub(2) {
+                break;
+            }
+            y = paint_row(
+                frame,
+                content,
+                y,
                 data_row(
                     &rows[index],
-                    selected,
+                    index == cursor,
                     index % 2 == 1,
                     &columns,
                     now,
                     width,
                     palette,
                 ),
-                1,
             );
         }
     }
-    body = body.child_sized(divider(width, palette), 1);
+    let divider_y = content.bottom().saturating_sub(2);
+    paint_row(frame, content, divider_y, divider(width, palette));
+    paint_row(
+        frame,
+        content,
+        content.bottom().saturating_sub(1),
+        footer(state, geometry.data_rows, width, palette),
+    );
+}
 
-    Border::rounded()
-        .min_size(geometry.columns, geometry.rows)
-        .max_size(geometry.columns, geometry.rows)
-        .fg(palette.accent)
-        .bg(palette.panel)
-        .title(" Sessions ")
-        .child(
-            Card::new()
-                .flat()
-                .padding(PANEL_PADDING)
-                .background(palette.panel)
-                .body(body)
-                .footer(footer(state, geometry.data_rows, width, palette)),
-        )
+/// Paints one row at `y` and returns the row below it.
+fn paint_row(frame: &mut Frame, content: Rect, y: u16, line: Line<'static>) -> u16 {
+    if y < content.bottom() {
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(content.x, y, content.width, 1),
+        );
+    }
+    y.saturating_add(1)
 }
 
 /// Returns the tab radio row: `⦿` on the active tab, `◦` on every other one.
-fn tabs_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
+fn tabs_row(state: &AppState, width: usize, palette: &'static Palette) -> Line<'static> {
     let mut runs = vec![Run {
         text: " ".to_owned(),
         ink: palette.ink_muted,
@@ -327,23 +340,28 @@ fn tabs_row(state: &AppState, width: usize, palette: &'static Palette) -> RichTe
 /// squeezed proportionally when it overflows, which shreds every word into a
 /// stump, while rich text keeps each run whole and clips the row at the card's
 /// edge.
-// @todo(revue): rows collapse into one `RichText` because revue squeezes
-// overflowing children proportionally instead of clipping them, and the footer
-// below drops legend hints that do not fit for the same reason; proper overflow
-// handling would let a row and the legend keep their structure.
-fn runs_text(runs: Vec<Run>) -> RichText {
-    let mut text = RichText::new();
-    for run in runs {
-        let style = run_style(&run);
-        text = text.span(Span::styled(run.text, style));
-    }
-    text
+// @todo(hack): every row is one `Line` clipped at the card's edge, and the
+// footer drops legend hints that do not fit for the same reason; a row layout
+// that clipped per cell would let the legend keep its structure.
+fn runs_text(runs: Vec<Run>) -> Line<'static> {
+    Line::from(
+        runs.into_iter()
+            .map(|run| {
+                let style = run_style(&run);
+                Span::styled(run.text, style)
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 /// Returns the style one run is painted with.
 fn run_style(run: &Run) -> Style {
     let style = Style::new().fg(run.ink).bg(run.wash);
-    if run.bold { style.bold() } else { style }
+    if run.bold {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
 }
 
 /// Returns the display width of every run of one row.
@@ -352,26 +370,28 @@ fn run_widths(runs: &[Run]) -> usize {
 }
 
 /// Returns the search row: the filter text, or its placeholder while empty.
-fn search_bar(state: &AppState, width: usize, palette: &'static Palette) -> Text {
+fn search_bar(state: &AppState, width: usize, palette: &'static Palette) -> Line<'static> {
     let (text, ink) = if state.browser_filter().is_empty() {
         (SEARCH_PLACEHOLDER.to_owned(), palette.ink_faint)
     } else {
         (state.browser_filter().to_owned(), palette.ink)
     };
-    Text::new(pad(&truncate(&text, width), width))
-        .fg(ink)
-        .bg(palette.input_bg)
+    Line::from(Span::styled(
+        pad(&truncate(&text, width), width),
+        Style::new().fg(ink).bg(palette.input_bg),
+    ))
 }
 
 /// Returns one divider band across the card's content.
-fn divider(width: usize, palette: &'static Palette) -> Text {
-    Text::new("─".repeat(width))
-        .fg(palette.ink_faint)
-        .bg(palette.divider_tint)
+fn divider(width: usize, palette: &'static Palette) -> Line<'static> {
+    Line::from(Span::styled(
+        "─".repeat(width),
+        Style::new().fg(palette.ink_faint).bg(palette.divider_tint),
+    ))
 }
 
 /// Returns the table's column header row.
-fn table_header(columns: &Columns, width: usize, palette: &'static Palette) -> Text {
+fn table_header(columns: &Columns, width: usize, palette: &'static Palette) -> Line<'static> {
     let cells = Cells {
         marker: ROW_MARKER,
         modified: "Modified",
@@ -380,10 +400,13 @@ fn table_header(columns: &Columns, width: usize, palette: &'static Palette) -> T
         title: "Title",
         path: "Path",
     };
-    Text::new(row_text(columns, &cells, width))
-        .fg(palette.ink_muted)
-        .bg(palette.header_bg)
-        .bold()
+    Line::from(Span::styled(
+        row_text(columns, &cells, width),
+        Style::new()
+            .fg(palette.ink_muted)
+            .bg(palette.header_bg)
+            .add_modifier(Modifier::BOLD),
+    ))
 }
 
 /// Returns one session row, washed and inked by its state.
@@ -395,7 +418,7 @@ fn data_row(
     now: i64,
     width: usize,
     palette: &'static Palette,
-) -> Text {
+) -> Line<'static> {
     let modified = relative_time(row.updated_at(), now);
     let created = relative_time(row.created_at(), now);
     let size = row.message_count().to_string();
@@ -409,29 +432,41 @@ fn data_row(
     };
     let line = row_text(columns, &cells, width);
     if selected {
-        Text::new(line)
-            .fg(palette.accent_deep)
-            .bg(palette.row_selected_bg)
-            .bold()
+        Line::from(Span::styled(
+            line,
+            Style::new()
+                .fg(palette.accent_deep)
+                .bg(palette.row_selected_bg)
+                .add_modifier(Modifier::BOLD),
+        ))
     } else if zebra {
-        Text::new(line).fg(palette.ink).bg(palette.row_alt_bg)
+        Line::from(Span::styled(
+            line,
+            Style::new().fg(palette.ink).bg(palette.row_alt_bg),
+        ))
     } else {
-        Text::new(line).fg(palette.ink)
+        Line::from(Span::styled(line, Style::new().fg(palette.ink)))
     }
 }
 
 /// Returns the explanatory row of an empty table.
-fn empty_state(reason: &str, width: usize, palette: &'static Palette) -> Text {
-    Text::new(pad(&truncate(reason, width), width))
-        .fg(palette.accent_deep)
-        .bg(palette.stub_bg)
+fn empty_state(reason: &str, width: usize, palette: &'static Palette) -> Line<'static> {
+    Line::from(Span::styled(
+        pad(&truncate(reason, width), width),
+        Style::new().fg(palette.accent_deep).bg(palette.stub_bg),
+    ))
 }
 
 /// Returns the footer: the notice or the hotkey legend, then the row counter.
 ///
 /// The legend gives way before the counter does: hints that do not fit beside
 /// the counter are dropped whole, so the row never ends in half a key name.
-fn footer(state: &AppState, data_rows: usize, width: usize, palette: &'static Palette) -> RichText {
+fn footer(
+    state: &AppState,
+    data_rows: usize,
+    width: usize,
+    palette: &'static Palette,
+) -> Line<'static> {
     let counter = counter(state, data_rows);
     let counter_width = display_width(&counter);
     let mut runs = state.notice().map_or_else(
@@ -459,7 +494,7 @@ fn footer(state: &AppState, data_rows: usize, width: usize, palette: &'static Pa
 }
 
 /// Returns the legend runs that fit in `limit` columns.
-// @todo(revue): revue cannot wrap or clip a row, so the legend is measured run
+// @todo(hack): a row wraps and clips as a whole, so the legend is measured run
 // by run and every hint that does not fit is dropped whole - a hand-written
 // `flex-wrap: nowrap; overflow: hidden`.
 fn legend_runs(limit: usize, palette: &'static Palette) -> Vec<Run> {

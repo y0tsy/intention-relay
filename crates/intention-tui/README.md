@@ -1,7 +1,7 @@
 # intention-tui
 
 The terminal application over the shared `intention-client`: one binary with
-the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
+the ratatui fullscreen UI (`tui`), the interactive `repl`, and the headless
 `run <PROMPT>` mode over one render-free state machine and the same client calls.
 
 ## Module map
@@ -21,9 +21,11 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
   cache the front end owns, keyed by pane width, theme, and transcript
   epochs), `palette.rs` (the one
   colour system, resolved per frame from the active theme), `screens/`
-  (`RevueView`, one file per surface: `chat.rs`, which also draws the theme
+  (`TerminalView`, one file per surface: `chat.rs`, which also draws the theme
   picker in the band region, and the `sessions.rs` docked
-  browser panel), `keymap.rs` (one mapping per state), `driver.rs` (thread,
+  browser panel), `surface.rs` (the transcript's scroll surface and the bar it
+  paints), `testing.rs` (the `TestBackend` screen the render tests draw into),
+  `keymap.rs` (one mapping per state), `driver.rs` (thread,
   runtime, select loop), and `panes/` (one file per chat pane: `transcript.rs`,
   `welcome.rs`, `input.rs`, `status.rs`, the `commands.rs` hint band, the
   `theme.rs` picker panel, the `markdown.rs` content layout, and the `tools.rs`
@@ -248,7 +250,7 @@ business, and the crate carries no clipboard path at all.
 
 Rules the panes keep:
 
-- User and assistant text both go through revue's `markdown` feature: a user row
+- User and assistant text both go through `tui-markdown`: a user row
   is a framed, padded card labelled `❯ you`, an assistant row is its reasoning
   block plus the markdown answer when the step answered, and a reasoning-only
   row - a step that reasoned and called a tool without answering - is its
@@ -374,10 +376,11 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 ### A new pane
 
 1. Chat pane: create `src/tui/panes/<name>.rs` with a `pub(in crate::tui)`
-   builder plus private helpers, declare `pub(super) mod <name>;` in
-   `src/tui/panes/mod.rs`, and add it to the pane list in
-   `src/tui/screens/chat.rs::chat_screen`, sizing its rows in that panel's
-   budget so the transcript takes what is left.
+   paint function - the pane's `Rect`, the `Frame`, and the resolved palette -
+   plus private helpers that return the `Line`s it draws, declare
+   `pub(super) mod <name>;` in `src/tui/panes/mod.rs`, and add it to the pane
+   list in `src/tui/screens/chat.rs::chat_screen`, sizing its rows in that
+   panel's budget so the transcript takes what is left.
 2. Band-region panel: a panel that owns a screen but must not move the input
    block - the theme picker's shape - also lives in `src/tui/panes/<name>.rs`
    and is claimed by `src/tui/screens/chat.rs::hint_rows` and `hint_block` for
@@ -386,14 +389,15 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    block and the detail line keep their rows.
 3. Docked surface: add the variant to `Screen` in `src/app/mod.rs` and the
    transition that selects it, then create `src/tui/screens/<name>.rs` with a
-   pure geometry function and a builder; `RevueView::render` shrinks the chat
+   pure geometry function and a builder; `TerminalView::render` shrinks the chat
    into the rows the docked surface does not use and places that surface in the
    window's bottom rows, so the window never changes and no surface paints over
    another. A surface that shows relative times takes the `now` the view
    received instead of reading a clock.
 4. Geometry in one place: compute the surface's columns and rows from the window
-   once, clamp the frame with `min_size`/`max_size`, and hand every block the
-   inner width, so the table and the legend agree on their edges.
+   once, derive the inner area from the block's own border and padding, and hand
+   every block that inner width, so the table and the legend agree on their
+   edges.
 
 ### A new browser tab or column
 
@@ -417,10 +421,11 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    where it is used; add it to the `roles` list in the palette tests so
    opacity, distinctness, the `error`/`scarlet` alias, and the cross-theme rule
    keep covering it.
-2. Use it through `Text::fg`/`bg`, `Border::fg`/`bg`, or `Card::background`,
-   reading it from the resolved `&'static Palette` the frame handed down, and
-   pair it with a glyph or a modifier whenever it carries a state.
-3. Never construct a colour outside the palette: `Color::rgb` is palette-only
+2. Use it through a `Line`'s or `Span`'s `Style::fg`/`bg`, a block's
+   `border_style`, or a buffer cell's style, reading it from the resolved
+   `&'static Palette` the frame handed down, and pair it with a glyph or a
+   `Modifier` whenever it carries a state.
+3. Never construct a colour outside the palette: `Color::Rgb` is palette-only
    apart from the sixteen-colour `COLORFGBG` table the background probe reads,
    and the views read roles, not values.
 
@@ -488,9 +493,10 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 - The local theme file, the launch precedence, and the terminal probe: inline
   `#[cfg(test)]` modules in `src/tui/theme.rs`.
 - Rendering and geometry: `tests/tui_render.rs` over
-  `intention_tui::tui::RevueView`. The assertions read characters, cells, and
-  rows, never colours; `Pilot::find_text` reports a byte offset, so a test that
-  needs a column converts it through the line (see `find_text` there).
+  `intention_tui::tui::testing::Screen`, which draws a view into a ratatui
+  `TestBackend` and reads the cells back. The assertions read characters, cells,
+  and rows, never colours; `Screen::find_text` reports the cell a substring
+  starts at, converting the byte offset through the line.
 - View, keymap, palette, and picker helpers: inline `#[cfg(test)]` modules in
   the screen, keymap, palette, and picker files
   (`src/tui/screens/sessions.rs`, `src/tui/keymap.rs`, `src/tui/palette.rs`,

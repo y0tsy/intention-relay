@@ -49,7 +49,7 @@ the root `Makefile`'s `COVERAGE_FLOORS` declares the line floor of every measure
 | `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |
 | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
 | `intention-daemon` | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
-| `intention-tui` | The terminal application: one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared client, and the owner of its own terminal theme, which it stores locally ([architecture 03](03-daemon-transport-and-adapters.md)). |
+| `intention-tui` | The terminal application: one binary with a fullscreen ratatui UI, an interactive REPL, and a headless prompt mode over the shared client, and the owner of its own terminal theme, which it stores locally ([architecture 03](03-daemon-transport-and-adapters.md)). |
 | `intention-test-support` | Non-production fixtures: credential-free fixture configuration, native temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded fixture listener orchestration. |
 | `intention-tauri` (M6) | Tauri bootstrap and the minimal native bridge over `intention-client`. |
 | `intention-plans` (M5+ Slice 3) | Plan artifacts, plan lifecycle records, and Plan/Build policy. |
@@ -133,7 +133,7 @@ No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter i
 Binaries are thin:
 
 - `intention-daemon`: starts a configured daemon host.
-- `intention-tui`: the terminal application; one command line selects the fullscreen revue UI (the bare command or
+- `intention-tui`: the terminal application; one command line selects the fullscreen ratatui UI (the bare command or
   `tui`), the interactive `repl`, or the headless `run <PROMPT>` mode, every mode reaches the daemon only through
   `intention-client`, and the process ends with one of the closed typed exit statuses.
 - a future administrative CLI may use `intention-client`, not daemon internals.

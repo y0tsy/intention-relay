@@ -1,4 +1,4 @@
-//! The blocking client task one revue front end drives.
+//! The blocking client task one terminal front end drives.
 //!
 //! The task owns the connection: it performs the request effects the core
 //! returns through the shared [`client_task`], and it owns the one live run
@@ -148,7 +148,7 @@ enum Step {
     Frame(Box<DtoResult<StreamStep>>),
 }
 
-/// The client task one revue front end drives through [`Effect`] values.
+/// The client task one terminal front end drives through [`Effect`] values.
 pub(super) struct Driver {
     effects: mpsc::UnboundedSender<Effect>,
     actions: mpsc::UnboundedReceiver<Action>,

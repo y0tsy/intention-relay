@@ -25,8 +25,8 @@
 //! than a fabricated number.
 
 use intention_proto::{RunProjectionDto, RunStatusDto, UsageDto};
-use revue::style::Color;
-use revue::widget::{RichText, Span, Style, Text};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 
 use crate::app::{AppState, ConnectionStatus, RunPhase, short_identifier};
 use crate::tui::palette::Palette;
@@ -99,27 +99,28 @@ fn committed_seconds(run: RunProjectionDto) -> Option<i64> {
 }
 
 /// Returns the status row under the input: the human state of the session.
-pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) -> RichText {
-    let mut text = RichText::new();
+pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) -> Line<'static> {
+    let mut spans = Vec::new();
     let (connection, ink) = match state.connection() {
         ConnectionStatus::Connecting => (CONNECTING, palette.warning),
         ConnectionStatus::Ready => (READY, palette.success),
         ConnectionStatus::Failed => (OFFLINE, palette.error),
     };
-    text = run(text, connection, ink, palette);
-    text = run(text, SEPARATOR, palette.ink_faint, palette);
-    text = match state.session_id() {
-        Some(session_id) => run(
-            text,
-            &format!("session {}", short_identifier(session_id)),
-            palette.ink_muted,
-            palette,
-        ),
-        None => run(text, "no session", palette.ink_faint, palette),
-    };
+    spans.push(span(connection, ink, palette));
+    spans.push(span(SEPARATOR, palette.ink_faint, palette));
+    spans.push(state.session_id().map_or_else(
+        || span("no session", palette.ink_faint, palette),
+        |session_id| {
+            span(
+                &format!("session {}", short_identifier(session_id)),
+                palette.ink_muted,
+                palette,
+            )
+        },
+    ));
     if let Some(mode) = state.session_mode() {
-        text = run(text, SEPARATOR, palette.ink_faint, palette);
-        text = run(text, mode.as_str(), palette.ink_muted, palette);
+        spans.push(span(SEPARATOR, palette.ink_faint, palette));
+        spans.push(span(mode.as_str(), palette.ink_muted, palette));
     }
     let phase = state.run_phase();
     let status = state.run_status();
@@ -127,44 +128,42 @@ pub(in crate::tui) fn status_row(state: &AppState, palette: &'static Palette) ->
     // A live phase names the run even before a refreshed projection arrives;
     // the status word covers every other run, terminal ones included.
     if phase.is_some() || status.is_some() {
-        text = run(text, SEPARATOR, palette.ink_faint, palette);
-        text = run_phrase(
-            text,
+        spans.push(span(SEPARATOR, palette.ink_faint, palette));
+        spans.extend(phrase_spans(
             phase,
             status,
             state.elapsed_millis(),
             projection,
             palette,
-        );
+        ));
     }
     // The committed usage is a run fact; a run that has not committed one yet
     // shows no segment at all instead of a placeholder.
     if let Some(usage) = usage_segment(projection) {
-        text = run(text, SEPARATOR, palette.ink_faint, palette);
-        text = run(text, &usage, palette.ink_muted, palette);
+        spans.push(span(SEPARATOR, palette.ink_faint, palette));
+        spans.push(span(&usage, palette.ink_muted, palette));
     }
-    text
+    Line::from(spans)
 }
 
 /// Returns the detail line: the failure, the notice, or the idle hint.
-pub(in crate::tui) fn status_detail(state: &AppState, palette: &'static Palette) -> Text {
+pub(in crate::tui) fn status_detail(state: &AppState, palette: &'static Palette) -> Line<'static> {
     match (state.error(), state.notice()) {
-        (Some(error), _) => Text::new(error.to_owned()).fg(palette.error).bold(),
-        (None, Some(notice)) => Text::new(notice.to_owned()).fg(palette.ink_muted),
-        (None, None) => Text::new(DEFAULT_HINT).fg(palette.ink_faint).dim(),
+        (Some(error), _) => Line::from(span(error, palette.error, palette))
+            .style(Style::new().add_modifier(Modifier::BOLD)),
+        (None, Some(notice)) => Line::from(span(notice, palette.ink_muted, palette)),
+        (None, None) => Line::from(span(DEFAULT_HINT, palette.ink_faint, palette))
+            .style(Style::new().add_modifier(Modifier::DIM)),
     }
 }
 
-/// Appends one styled run to the status row.
-fn run(text: RichText, content: &str, ink: Color, palette: &'static Palette) -> RichText {
-    text.span(Span::styled(
-        content.to_owned(),
-        Style::new().fg(ink).bg(palette.panel),
-    ))
+/// Returns one styled span on the panel's wash.
+fn span(content: &str, ink: Color, palette: &'static Palette) -> Span<'static> {
+    Span::styled(content.to_owned(), Style::new().fg(ink).bg(palette.panel))
 }
 
-/// Appends the phrase one run reads as, with its live elapsed value or its
-/// committed duration.
+/// Returns the spans the phrase one run reads as, with its live elapsed value or
+/// its committed duration.
 ///
 /// A live phase reads `Waiting… 0.4s`, `Thinking… 3.2s`, `Answering… 4.1s`, or
 /// `Working… 6.2s`; a completed run reads `Answered in 13s` from the committed
@@ -172,44 +171,42 @@ fn run(text: RichText, content: &str, ink: Color, palette: &'static Palette) -> 
 /// line), and an interrupted one `Interrupted`. A live value reads in tenths of
 /// a second, and a run whose live value the front end never reported keeps the
 /// word without a number instead of showing a fabricated one.
-fn run_phrase(
-    text: RichText,
+fn phrase_spans(
     phase: Option<RunPhase>,
     status: Option<RunStatusDto>,
     elapsed: Option<u64>,
     projection: Option<RunProjectionDto>,
     palette: &'static Palette,
-) -> RichText {
+) -> Vec<Span<'static>> {
     if let Some(phase) = phase {
-        let mut text = run(text, phase_word(phase), palette.scarlet, palette);
+        let mut spans = vec![span(phase_word(phase), palette.scarlet, palette)];
         if let Some(millis) = elapsed {
-            text = run(
-                text,
+            spans.push(span(
                 &format!(" {}", elapsed_tenths(millis)),
                 palette.timer_ink,
                 palette,
-            );
+            ));
         }
-        return text;
+        return spans;
     }
     match status {
         Some(RunStatusDto::Completed) => {
-            let mut text = run(text, ANSWERED, palette.success, palette);
+            let mut spans = vec![span(ANSWERED, palette.success, palette)];
             if let Some(seconds) = projection.and_then(committed_seconds) {
-                text = run(text, " in ", palette.success, palette);
-                text = run(text, &format!("{seconds}s"), palette.timer_ink, palette);
+                spans.push(span(" in ", palette.success, palette));
+                spans.push(span(&format!("{seconds}s"), palette.timer_ink, palette));
             }
-            text
+            spans
         }
-        Some(RunStatusDto::Interrupted) => run(text, INTERRUPTED, palette.warning, palette),
-        Some(RunStatusDto::Failed) => run(text, FAILED, palette.error, palette),
+        Some(RunStatusDto::Interrupted) => vec![span(INTERRUPTED, palette.warning, palette)],
+        Some(RunStatusDto::Failed) => vec![span(FAILED, palette.error, palette)],
         // A live run the state carries no phase for is one this front end is
         // waiting on its first token; the state names a phase for every run it
         // mirrors, so this arm only keeps the view total.
         Some(RunStatusDto::Starting | RunStatusDto::Running) => {
-            run(text, WAITING, palette.scarlet, palette)
+            vec![span(WAITING, palette.scarlet, palette)]
         }
-        None => text,
+        None => Vec::new(),
     }
 }
 

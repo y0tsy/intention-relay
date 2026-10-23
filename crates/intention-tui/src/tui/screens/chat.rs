@@ -3,15 +3,16 @@
 //! and the notice or error line, inside the framed panel the whole window is
 //! built from.
 
-use std::cell::RefCell;
-
-use revue::layout::Rect;
-use revue::widget::{Border, Card, Stack, Text, hstack, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::{AppState, Screen};
 use crate::tui::layout::TranscriptLayoutCache;
 use crate::tui::palette::{self, Palette};
 use crate::tui::panes::{commands, input, status, theme, transcript, welcome};
+use crate::tui::surface::TranscriptSurface;
 
 /// The columns and rows the window keeps around the chat panel.
 const PANEL_MARGIN: u16 = 1;
@@ -41,17 +42,6 @@ const INPUT_LINE_SHARE: u16 = 3;
 /// lines than this: the cap yields to the floor, and the transcript lives with
 /// what is left.
 const INPUT_MIN_LINES: u16 = 3;
-
-/// The rows above the transcript pane's first content row: the window's own
-/// margin, the panel's top frame row, the card's padding, and the transcript
-/// pane's own top frame row.
-///
-/// The transcript publishes this row with the rest of its window, so a mouse
-/// event hit-tests exactly the display rows the frame painted.
-// @todo(revue): revue does not report where a child landed, so this screen row
-// is recomputed from layout constants and the panel's body rows are divided by
-// hand; a child-geometry report would let the hit-test read the real origin.
-const TRANSCRIPT_TOP_ROWS: u16 = PANEL_MARGIN + 1 + PANEL_PADDING + 1;
 
 /// The geometry of the chat panel in one window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,11 +127,6 @@ const fn panel(window: Rect, wanted_input_rows: u16, wanted_hint_rows: u16) -> P
     }
 }
 
-/// Returns the screen row the transcript pane's first content row sits on.
-const fn transcript_top(window: Rect) -> u16 {
-    window.y.saturating_add(TRANSCRIPT_TOP_ROWS)
-}
-
 /// Returns the rows the region above the input block requests.
 ///
 /// The theme picker's screen claims its own panel there, and every other screen
@@ -156,14 +141,14 @@ fn hint_rows(state: &AppState) -> u16 {
 
 /// Returns the region above the input block: the theme picker's panel while its
 /// screen owns the window, the command hint band otherwise.
-fn hint_block(state: &AppState, width: u16, rows: u16, palette: &'static Palette) -> Stack {
+fn hint_block(state: &AppState, area: Rect, frame: &mut Frame, palette: &'static Palette) {
     match state.screen() {
-        Screen::Chat | Screen::Sessions => commands::menu_block(state, width, rows, palette),
-        Screen::Theme => theme::picker_panel(state, width, rows, palette),
+        Screen::Chat | Screen::Sessions => commands::menu_block(state, area, frame, palette),
+        Screen::Theme => theme::picker_panel(state, area, frame, palette),
     }
 }
 
-/// Returns the chat screen: the framed panel that holds the transcript, the
+/// Paints the chat screen: the framed panel that holds the transcript, the
 /// input block, and the notice or error line, placed on the canvas the window
 /// fills.
 ///
@@ -175,100 +160,70 @@ fn hint_block(state: &AppState, width: u16, rows: u16, palette: &'static Palette
 pub(super) fn chat_screen(
     state: &AppState,
     window: Rect,
-    cache: &RefCell<TranscriptLayoutCache>,
-) -> Stack {
+    cache: &mut TranscriptLayoutCache,
+    surface: &mut TranscriptSurface,
+    frame: &mut Frame,
+) {
     let palette = palette::of(state.effective_theme());
     let panel = panel(window, input::block_rows(state), hint_rows(state));
-    let bottom = window
-        .height
-        .saturating_sub(PANEL_MARGIN + panel.rows + PANEL_MARGIN);
-    vstack()
-        .child_sized(Text::new(""), PANEL_MARGIN)
-        .child_sized(
-            hstack()
-                .child_sized(Text::new(""), PANEL_MARGIN)
-                .child_sized(
-                    panel_widget(state, panel, transcript_top(window), cache, palette),
-                    panel.columns,
-                ),
-            panel.rows,
-        )
-        .child_sized(Text::new(""), bottom)
-}
-
-/// Returns the framed panel: one rounded frame whose card carries the chat.
-///
-/// The card draws no border of its own, so the frame reads as a single
-/// container with the panel's padding inside it: the transcript - or the
-/// welcome pane while no session is open - on top, the hint region directly
-/// under it and directly above the input block, the input block under that, and
-/// the notice or error line last. The hint region is a band of this panel,
-/// never a surface painted over another: while it holds the command band or the
-/// theme picker's panel the transcript gives up exactly its rows, so the panel's
-/// four children still sum to its body. The welcome keeps the same region, so
-/// the input block and the detail line never move between the states.
-///
-/// `top` is the screen row the transcript pane's content starts at, which the
-/// pane publishes with the rest of its window for the next mouse event.
-fn panel_widget(
-    state: &AppState,
-    panel: Panel,
-    top: u16,
-    cache: &RefCell<TranscriptLayoutCache>,
-    palette: &'static Palette,
-) -> Border {
-    let mut content = vstack();
-    content = if welcome::is_welcome(state) {
-        content.child_sized(
-            welcome::welcome_pane(panel.transcript_rows, panel.content_columns, palette),
-            panel.transcript_rows,
-        )
+    let outer = Rect::new(
+        window.x.saturating_add(PANEL_MARGIN),
+        window.y.saturating_add(PANEL_MARGIN),
+        panel.columns,
+        panel.rows,
+    );
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(palette.border))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(outer);
+    frame.render_widget(block, outer);
+    if inner.is_empty() {
+        return;
+    }
+    let content = Rect::new(
+        inner.x.saturating_add(PANEL_PADDING),
+        inner.y,
+        inner.width.saturating_sub(PANEL_PADDING * 2),
+        inner.height,
+    );
+    let transcript_area = Rect::new(content.x, content.y, content.width, panel.transcript_rows);
+    if welcome::is_welcome(state) {
+        welcome::welcome_pane(transcript_area, frame, palette);
     } else {
-        content.child_sized(
-            transcript::transcript_pane(
-                state,
-                top,
-                panel.transcript_rows,
-                panel.content_columns,
-                cache,
-                palette,
-            ),
-            panel.transcript_rows,
-        )
-    };
-    Border::rounded()
-        .min_size(panel.columns, panel.rows)
-        .max_size(panel.columns, panel.rows)
-        .fg(palette.border)
-        .bg(palette.panel)
-        .child(
-            Card::new()
-                .flat()
-                .padding(PANEL_PADDING)
-                .background(palette.panel)
-                .body(
-                    content
-                        .child_sized(
-                            hint_block(state, panel.content_columns, panel.hint_rows, palette),
-                            panel.hint_rows,
-                        )
-                        .child_sized(
-                            input::input_block(
-                                state,
-                                panel.content_columns,
-                                panel.input_rows,
-                                palette,
-                            ),
-                            panel.input_rows,
-                        )
-                        .child_sized(status::status_detail(state, palette), panel.detail_rows),
-                ),
-        )
+        transcript::transcript_pane(state, transcript_area, cache, surface, frame, palette);
+    }
+    let hint_area = Rect::new(
+        content.x,
+        content.y.saturating_add(panel.transcript_rows),
+        content.width,
+        panel.hint_rows,
+    );
+    hint_block(state, hint_area, frame, palette);
+    let input_area = Rect::new(
+        content.x,
+        hint_area.y.saturating_add(panel.hint_rows),
+        content.width,
+        panel.input_rows,
+    );
+    input::input_block(state, input_area, frame, palette);
+    let detail_area = Rect::new(
+        content.x,
+        input_area.y.saturating_add(panel.input_rows),
+        content.width,
+        panel.detail_rows,
+    );
+    if !detail_area.is_empty() {
+        frame.render_widget(
+            Paragraph::new(status::status_detail(state, palette)),
+            detail_area,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use revue::layout::Rect;
+    use ratatui::layout::Rect;
 
     use super::{DETAIL_ROWS, PANEL_FRAME, panel};
     use crate::tui::panes::theme;

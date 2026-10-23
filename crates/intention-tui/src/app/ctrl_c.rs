@@ -18,14 +18,14 @@
 //! The run the arms read is the one [`AppState::live_run`] observes: a run
 //! whose subscription died is no longer live, so the same presses reach the
 //! clear and exit arms instead of stopping a run nobody runs any more.
-// @todo(hack): this layered gesture is a workaround for revue's quit key (see
-// `tui/mod.rs`), and its arming rule has two sharp edges a redesign should
-// settle: the two-press semantics is non-standard, so the first press only
-// shows a notice, and an arm outlives the state it was armed for - a run that
-// ends between the two presses leaves the second press arming the exit instead
-// of stopping, which the tests pin deliberately. The arm also survives every
-// client report, so it is the only user gesture whose sequence spans unrelated
-// state changes.
+// @todo(hack): this layered gesture is the front end's own, because Ctrl+C
+// means three things at once, and its arming rule has two sharp edges a
+// redesign should settle: the two-press semantics is non-standard, so the first
+// press only shows a notice, and an arm outlives the state it was armed for - a
+// run that ends between the two presses leaves the second press arming the exit
+// instead of stopping, which the tests pin deliberately. The arm also survives
+// every client report, so it is the only user gesture whose sequence spans
+// unrelated state changes.
 
 use super::arm::Arm;
 use super::{AppState, Effect, short_identifier};

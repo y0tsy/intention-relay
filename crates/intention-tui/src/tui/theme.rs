@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use intention_proto::{DtoResult, ErrorDto};
-use revue::style::Color;
+use ratatui::style::Color;
 
 use crate::app::{Theme, ThemePreference};
 
@@ -91,22 +91,22 @@ const LIGHT_BACKGROUND_MIN_BRIGHTNESS: u32 = 128;
 /// The xterm defaults: the first eight are the normal colours and the second
 /// eight their bright variants.
 static ANSI_16: [Color; 16] = [
-    Color::rgb(0x00, 0x00, 0x00),
-    Color::rgb(0xCD, 0x00, 0x00),
-    Color::rgb(0x00, 0xCD, 0x00),
-    Color::rgb(0xCD, 0xCD, 0x00),
-    Color::rgb(0x00, 0x00, 0xEE),
-    Color::rgb(0xCD, 0x00, 0xCD),
-    Color::rgb(0x00, 0xCD, 0xCD),
-    Color::rgb(0xE5, 0xE5, 0xE5),
-    Color::rgb(0x7F, 0x7F, 0x7F),
-    Color::rgb(0xFF, 0x00, 0x00),
-    Color::rgb(0x00, 0xFF, 0x00),
-    Color::rgb(0xFF, 0xFF, 0x00),
-    Color::rgb(0x5C, 0x5C, 0xFF),
-    Color::rgb(0xFF, 0x00, 0xFF),
-    Color::rgb(0x00, 0xFF, 0xFF),
-    Color::rgb(0xFF, 0xFF, 0xFF),
+    Color::Rgb(0x00, 0x00, 0x00),
+    Color::Rgb(0xCD, 0x00, 0x00),
+    Color::Rgb(0x00, 0xCD, 0x00),
+    Color::Rgb(0xCD, 0xCD, 0x00),
+    Color::Rgb(0x00, 0x00, 0xEE),
+    Color::Rgb(0xCD, 0x00, 0xCD),
+    Color::Rgb(0x00, 0xCD, 0xCD),
+    Color::Rgb(0xE5, 0xE5, 0xE5),
+    Color::Rgb(0x7F, 0x7F, 0x7F),
+    Color::Rgb(0xFF, 0x00, 0x00),
+    Color::Rgb(0x00, 0xFF, 0x00),
+    Color::Rgb(0xFF, 0xFF, 0x00),
+    Color::Rgb(0x5C, 0x5C, 0xFF),
+    Color::Rgb(0xFF, 0x00, 0xFF),
+    Color::Rgb(0x00, 0xFF, 0xFF),
+    Color::Rgb(0xFF, 0xFF, 0xFF),
 ];
 
 /// The theme one launch resolved: the preference in force and the palette the
@@ -394,8 +394,12 @@ fn colorfgbg_theme(value: &str) -> Option<Theme> {
 /// The rule is the one the terminal probe and `COLORFGBG` share: a background
 /// at or above the perceived-brightness midpoint is a light one.
 fn theme_of_background(color: Color) -> Theme {
-    let brightness =
-        (u32::from(color.r) * 299 + u32::from(color.g) * 587 + u32::from(color.b) * 114) / 1000;
+    // The parser answers an RGB value only, so any other colour is no
+    // evidence about the background.
+    let Color::Rgb(red, green, blue) = color else {
+        return Theme::Dark;
+    };
+    let brightness = (u32::from(red) * 299 + u32::from(green) * 587 + u32::from(blue) * 114) / 1000;
     if brightness >= LIGHT_BACKGROUND_MIN_BRIGHTNESS {
         Theme::Light
     } else {
@@ -416,13 +420,13 @@ fn terminal_probe() -> Option<Theme> {
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
         return None;
     }
-    if crossterm::terminal::enable_raw_mode().is_err() {
+    if ratatui::crossterm::terminal::enable_raw_mode().is_err() {
         return None;
     }
     let reply = probe_reply();
     // The fullscreen loop enables raw mode for itself; the probe leaves the
     // terminal as it found it.
-    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = ratatui::crossterm::terminal::disable_raw_mode();
     reply
         .as_deref()
         .and_then(parse_osc11_background)
@@ -535,7 +539,7 @@ fn parse_color(spec: &str) -> Option<Color> {
         if hex.len() != 6 {
             return None;
         }
-        return Some(Color::rgb(
+        return Some(Color::Rgb(
             component(hex.get(0..2)?)?,
             component(hex.get(2..4)?)?,
             component(hex.get(4..6)?)?,
@@ -545,7 +549,7 @@ fn parse_color(spec: &str) -> Option<Color> {
     if components.len() != 3 {
         return None;
     }
-    Some(Color::rgb(
+    Some(Color::Rgb(
         component(components[0])?,
         component(components[1])?,
         component(components[2])?,
@@ -576,7 +580,7 @@ mod tests {
     #[cfg(unix)]
     use std::time::Duration;
 
-    use revue::style::Color;
+    use ratatui::style::Color;
     use tempfile::TempDir;
 
     use crate::app::{Theme, ThemePreference};
@@ -696,23 +700,23 @@ mod tests {
     #[test]
     fn the_backgrounds_brightness_selects_the_theme() {
         assert_eq!(
-            theme_of_background(Color::rgb(0x0A, 0x0A, 0x0C)),
+            theme_of_background(Color::Rgb(0x0A, 0x0A, 0x0C)),
             Theme::Dark
         );
         assert_eq!(
-            theme_of_background(Color::rgb(0xFF, 0xFF, 0xFF)),
+            theme_of_background(Color::Rgb(0xFF, 0xFF, 0xFF)),
             Theme::Light
         );
         assert_eq!(
-            theme_of_background(Color::rgb(0xF7, 0xF2, 0xE9)),
+            theme_of_background(Color::Rgb(0xF7, 0xF2, 0xE9)),
             Theme::Light
         );
         assert_eq!(
-            theme_of_background(Color::rgb(0x7F, 0x7F, 0x7F)),
+            theme_of_background(Color::Rgb(0x7F, 0x7F, 0x7F)),
             Theme::Dark
         );
         assert_eq!(
-            theme_of_background(Color::rgb(0x80, 0x80, 0x80)),
+            theme_of_background(Color::Rgb(0x80, 0x80, 0x80)),
             Theme::Light
         );
     }
@@ -723,19 +727,19 @@ mod tests {
         for (reply, expected) in [
             (
                 b"\x1b]11;rgb:0000/0000/0000\x1b\\".as_slice(),
-                Color::rgb(0x00, 0x00, 0x00),
+                Color::Rgb(0x00, 0x00, 0x00),
             ),
             (
                 b"\x1b]11;rgb:ffff/ffff/ffff\x07".as_slice(),
-                Color::rgb(0xFF, 0xFF, 0xFF),
+                Color::Rgb(0xFF, 0xFF, 0xFF),
             ),
             (
                 b"\x1b]11;#1e1e1e\x1b\\".as_slice(),
-                Color::rgb(0x1E, 0x1E, 0x1E),
+                Color::Rgb(0x1E, 0x1E, 0x1E),
             ),
             (
                 b"\x1b]11;rgb:0a/0a/0c\x1b\\".as_slice(),
-                Color::rgb(0x0A, 0x0A, 0x0C),
+                Color::Rgb(0x0A, 0x0A, 0x0C),
             ),
         ] {
             assert_eq!(

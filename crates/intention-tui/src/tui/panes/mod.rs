@@ -1,4 +1,4 @@
-//! One file per pane of the revue view.
+//! One file per pane of the terminal view.
 //!
 //! Each pane module owns its pure builder and the title, line, or detail
 //! helpers only that pane reads. The single pane list lives in the chat

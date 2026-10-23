@@ -1,11 +1,11 @@
 //! Render tests for the terminal front end.
 //!
-//! They render one fixture [`AppState`] through revue's own test app and assert
+//! They render one fixture [`AppState`] through the crate's test screen and assert
 //! the panes, the container, and the geometry the front end is contracted to
 //! show - the border a value sits in, the row a legend sits on, the column a
 //! value is aligned to. The assertions name characters and cells rather than a
 //! snapshot, so they survive layout changes, and they stay colour-agnostic:
-//! revue's pilot exposes cells and characters, not styles, and the palette's
+//! the test screen exposes cells and characters, not styles, and the palette's
 //! own unit tests guard the colour values.
 
 use intention_client::SessionStreamState;
@@ -25,9 +25,8 @@ use intention_tui::app::{
     Action, AppState, BrowserCursorMove, Effect, InputCursorMove, MenuMove, Screen, Theme,
     ThemePreference, TranscriptScroll, short_identifier,
 };
-use intention_tui::tui::RevueView;
-use revue::runtime::render::Modifier;
-use revue::testing::{Pilot, TestApp};
+use intention_tui::tui::testing::Screen as TestScreen;
+use ratatui::style::Modifier;
 
 /// The terminal size the transcript window test renders into.
 ///
@@ -59,26 +58,35 @@ const CURSOR_HEIGHT: u16 = 40;
 /// on one display row at the full window width.
 const FULL_WIDTH_ROW: &str = "alpha000 alpha001 alpha002 alpha003 alpha004 alpha005";
 
-/// Returns the column a byte offset into one rendered line starts at.
-///
-/// [`TestApp::find_text`] reports the byte offset of the match, and a border
-/// cell is three bytes wide, so its offset is not the column a cell assertion
-/// takes. This turns the offset into a column through the line itself.
-fn column(line: &str, offset: u16) -> u16 {
-    line.get(..usize::from(offset)).map_or(offset, |prefix| {
-        u16::try_from(prefix.chars().count()).unwrap_or(offset)
-    })
-}
-
 /// Returns the column and row of the first `text` on the screen.
-fn find_text(app: &TestApp<RevueView<'_>>, text: &str) -> (u16, u16) {
-    let (offset, row) = app.find_text(text).expect("the text is rendered");
-    (column(&app.get_line(row), offset), row)
+fn find_text(app: &TestScreen, text: &str) -> (u16, u16) {
+    let position = app.find_text(text).expect("the text is rendered");
+    (position.x, position.y)
 }
 
 /// Returns the row of the first `text` on the screen.
-fn find_row(app: &TestApp<RevueView<'_>>, text: &str) -> u16 {
+fn find_row(app: &TestScreen, text: &str) -> u16 {
     find_text(app, text).1
+}
+
+/// Returns the content rows of one screen, with the pane's chrome removed.
+///
+/// A row is compared on the text between the pane's borders, so the scrollbar
+/// gutter - which reports the content's own height - never decides whether two
+/// frames show the same rows.
+fn visible_rows(screen: &str) -> Vec<String> {
+    screen
+        .lines()
+        .map(|line| {
+            let mut cells: Vec<char> = line.chars().collect();
+            for cell in cells.iter_mut() {
+                if matches!(*cell, '▐' | '│' | '▲' | '▼' | '║') {
+                    *cell = ' ';
+                }
+            }
+            cells.into_iter().collect::<String>().trim().to_owned()
+        })
+        .collect()
 }
 
 /// Returns whether one row of a framed pane paints only its frame and spaces.
@@ -314,109 +322,73 @@ fn frame_session(frame: &SessionFrameDto) -> SessionId {
 #[test]
 fn the_browser_panel_shows_its_frame_and_embedded_title() {
     let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
     let (title_x, title_row) = find_text(&app, "Sessions");
     assert_eq!(
         title_x, 3,
         "the docked panel starts at the window's first column"
     );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_cell(0, title_row, '╭');
-    pilot.assert_cell(1, title_row, '─');
-    pilot.assert_cell(title_x - 1, title_row, ' ');
-    pilot.assert_line_contains(title_row + 2, "◦ Current Folder");
+    app.assert_cell(0, title_row, '╭');
+    app.assert_cell(1, title_row, '─');
+    app.assert_cell(title_x - 1, title_row, ' ');
+    app.assert_line_contains(title_row + 2, "◦ Current Folder");
 }
 
 #[test]
 fn the_browser_tabs_show_the_radio_glyphs_and_separators() {
     let mut state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
     {
-        let mut app = TestApp::with_size(
-            RevueView::with_now(&state, NOW),
-            BROWSER_WIDTH,
-            BROWSER_HEIGHT,
-        );
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("◦ Current Folder  |  ⦿ All");
-        pilot.assert_not_contains("Favorites");
+        let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
+        app.assert_contains("◦ Current Folder  |  ⦿ All");
+        app.assert_not_contains("Favorites");
     }
     state.update(Action::BrowserTabNext);
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("⦿ Current Folder");
-    pilot.assert_not_contains("⦿ All");
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
+    app.assert_contains("⦿ Current Folder");
+    app.assert_not_contains("⦿ All");
 }
 
 #[test]
 fn the_browser_search_bar_shows_its_placeholder() {
     let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Type to filter sessions...");
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
+    app.assert_contains("Type to filter sessions...");
 }
 
 #[test]
 fn the_browser_shows_the_table_header() {
     let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 0);
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
     let header_row = find_row(&app, "Modified");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(header_row, "Created");
-    pilot.assert_line_contains(header_row, "Size");
-    pilot.assert_line_contains(header_row, "Title");
-    pilot.assert_line_contains(header_row, "Path");
-    pilot.assert_line_contains(header_row + 1, "session 11111111");
+    app.assert_line_contains(header_row, "Created");
+    app.assert_line_contains(header_row, "Size");
+    app.assert_line_contains(header_row, "Title");
+    app.assert_line_contains(header_row, "Path");
+    app.assert_line_contains(header_row + 1, "session 11111111");
 }
 
 #[test]
 fn the_browser_shows_modified_values_from_the_view_clock() {
     let state = two_session_state();
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("23m ago");
-    pilot.assert_contains("2h ago");
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
+    app.assert_contains("23m ago");
+    app.assert_contains("2h ago");
 }
 
 #[test]
 fn the_browser_marks_the_cursor_row_bold() {
     let state = two_session_state();
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
     let (marker_x, marker_row) = find_text(&app, "> 23m ago");
     let marker = app
-        .buffer()
-        .get(marker_x, marker_row)
+        .cell(marker_x, marker_row)
         .expect("the cursor marker cell is rendered");
     assert!(
         marker.modifier.contains(Modifier::BOLD),
         "the cursor row renders bold"
     );
     {
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_line_contains(marker_row, "session 11111111");
+        app.assert_line_contains(marker_row, "session 11111111");
     }
 }
 
@@ -424,31 +396,26 @@ fn the_browser_marks_the_cursor_row_bold() {
 fn the_browser_moves_the_cursor_marker_to_the_selected_row() {
     let mut state = two_session_state();
     state.update(Action::BrowserCursorMove(BrowserCursorMove::Down));
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    let (_, selected_row) = pilot
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
+    let selected_row = app
         .find_text("session 22222222")
-        .expect("the second row is shown");
-    pilot.assert_line_contains(selected_row, "> 2h ago");
-    pilot.assert_not_contains("> 23m ago");
+        .expect("the second row is shown")
+        .y;
+    app.assert_line_contains(selected_row, "> 2h ago");
+    app.assert_not_contains("> 23m ago");
 }
 
 #[test]
 fn the_browser_panel_keeps_its_legend_on_its_own_last_row() {
     let state = two_session_state();
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, 40);
-    let pilot = Pilot::new(&mut app);
-    let (_, legend_row) = pilot.find_text("select").expect("the legend is shown");
+    let app = TestScreen::with_now(&state, NOW, 150, 40);
+    let legend_row = app.find_text("select").expect("the legend is shown").y;
     assert_eq!(
         legend_row + 1,
         39,
         "the legend is the panel's own last inner row"
     );
-    let bottom = pilot.line(39);
+    let bottom = app.line(39);
     assert!(
         bottom.starts_with('╰') && bottom.trim_end().ends_with('╯'),
         "the panel's bottom edge is the window's last row: {bottom:?}"
@@ -458,34 +425,29 @@ fn the_browser_panel_keeps_its_legend_on_its_own_last_row() {
 #[test]
 fn the_browser_footer_shows_the_legend_and_the_row_counter() {
     let state = two_session_state();
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, BROWSER_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Enter select");
-    pilot.assert_contains("Tab switch tab");
-    pilot.assert_contains("Esc close");
+    let app = TestScreen::with_now(&state, NOW, 150, BROWSER_HEIGHT);
+    app.assert_contains("Enter select");
+    app.assert_contains("Tab switch tab");
+    app.assert_contains("Esc close");
     // The legend advertises only keys the browser acts on: rename, archive,
     // and the tree read have no command behind them yet.
-    pilot.assert_not_contains("Ctrl+R");
-    pilot.assert_not_contains("Ctrl+X");
-    pilot.assert_not_contains("Ctrl+F");
-    pilot.assert_contains("1-2 of 2");
-    pilot.assert_not_contains("↑↓");
-    pilot.assert_not_contains("navigate");
+    app.assert_not_contains("Ctrl+R");
+    app.assert_not_contains("Ctrl+X");
+    app.assert_not_contains("Ctrl+F");
+    app.assert_contains("1-2 of 2");
+    app.assert_not_contains("↑↓");
+    app.assert_not_contains("navigate");
 }
 
 #[test]
 fn the_browser_footer_styles_a_key_distinctly_from_its_action() {
     let state = two_session_state();
-    let app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, BROWSER_HEIGHT);
+    let app = TestScreen::with_now(&state, NOW, 150, BROWSER_HEIGHT);
     let (key_x, key_row) = find_text(&app, "Enter");
     let (action_x, action_row) = find_text(&app, "select");
-    let key = app
-        .buffer()
-        .get(key_x, key_row)
-        .expect("the key cell is rendered");
+    let key = app.cell(key_x, key_row).expect("the key cell is rendered");
     let action = app
-        .buffer()
-        .get(action_x, action_row)
+        .cell(action_x, action_row)
         .expect("the action cell is rendered");
     assert!(
         key.modifier.contains(Modifier::BOLD),
@@ -500,30 +462,28 @@ fn the_browser_footer_styles_a_key_distinctly_from_its_action() {
 #[test]
 fn the_browser_counter_reports_sessions_beyond_the_list_window() {
     let state = browser_state(vec![summary(fixture_session(FIRST_SESSION), NOW)], 3);
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 150, BROWSER_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("1-1 of 1 +3 omitted (core: paged list @todo)");
+    let app = TestScreen::with_now(&state, NOW, 150, BROWSER_HEIGHT);
+    app.assert_contains("1-1 of 1 +3 omitted (core: paged list @todo)");
 }
 
 #[test]
 fn the_browser_table_shows_a_right_aligned_trailing_column() {
     let root = workspace_root();
     let state = two_session_state();
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 130, BROWSER_HEIGHT);
+    let app = TestScreen::with_now(&state, NOW, 130, BROWSER_HEIGHT);
     let (path_x, header_row) = find_text(&app, "Path");
     let trailing = app
-        .buffer()
-        .get(path_x + 3, header_row + 1)
+        .cell(path_x + 3, header_row + 1)
         .expect("the trailing column's last cell is rendered");
     assert_ne!(
-        trailing.symbol, ' ',
+        trailing.symbol(),
+        " ",
         "the path ends at the column's last cell instead of leaving a gap"
     );
     let shown: String = root.as_str().chars().take(4).collect();
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_cell(path_x + 4, header_row, ' ');
-    pilot.assert_cell(path_x + 6, header_row, '│');
-    pilot.assert_line_contains(header_row + 1, &shown);
+    app.assert_cell(path_x + 4, header_row, ' ');
+    app.assert_cell(path_x + 6, header_row, '│');
+    app.assert_line_contains(header_row + 1, &shown);
 }
 
 #[test]
@@ -534,20 +494,15 @@ fn the_browser_shows_the_created_size_and_path_columns_from_the_summary() {
         vec![summary_of(session_id, NOW - 8 * 86_400, NOW - 23 * 60, 42)],
         0,
     );
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        BROWSER_WIDTH,
-        BROWSER_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, BROWSER_WIDTH, BROWSER_HEIGHT);
     let (size_x, header_row) = find_text(&app, "Size");
     let row = header_row + 1;
     let shown: String = root.as_str().chars().take(4).collect();
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(row, "Sep 19");
-    pilot.assert_line_contains(row, "23m ago");
-    pilot.assert_cell(size_x, row, '4');
-    pilot.assert_cell(size_x + 1, row, '2');
-    pilot.assert_line_contains(row, &shown);
+    app.assert_line_contains(row, "Sep 19");
+    app.assert_line_contains(row, "23m ago");
+    app.assert_cell(size_x, row, '4');
+    app.assert_cell(size_x + 1, row, '2');
+    app.assert_line_contains(row, &shown);
 }
 
 #[test]
@@ -556,10 +511,9 @@ fn the_browser_truncates_a_long_title_with_an_ellipsis() {
         vec![summary(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
         0,
     );
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 52, BROWSER_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("session 111111…");
-    pilot.assert_not_contains("session 11111111");
+    let app = TestScreen::with_now(&state, NOW, 52, BROWSER_HEIGHT);
+    app.assert_contains("session 111111…");
+    app.assert_not_contains("session 11111111");
 }
 
 #[test]
@@ -568,20 +522,18 @@ fn the_browser_table_reflows_when_the_window_resizes() {
         vec![summary(fixture_session(FIRST_SESSION), NOW - 23 * 60)],
         0,
     );
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 52, BROWSER_HEIGHT);
-    let mut pilot = Pilot::new(&mut app);
-    pilot.assert_contains("session 111111…");
-    let (narrow_offset, narrow_row) = pilot.find_text("Path").expect("the column is named");
-    let narrow_path = column(&pilot.line(narrow_row), narrow_offset);
-    pilot.resize(130, BROWSER_HEIGHT);
-    let (offset, header_row) = pilot.find_text("Path").expect("the column is named");
-    let wide_path = column(&pilot.line(header_row), offset);
+    let mut app = TestScreen::with_now(&state, NOW, 52, BROWSER_HEIGHT);
+    app.assert_contains("session 111111…");
+    let narrow_path = app.find_text("Path").expect("the column is named").x;
+    app.resize(&state, 130, BROWSER_HEIGHT);
+    let header = app.find_text("Path").expect("the column is named");
+    let (wide_path, header_row) = (header.x, header.y);
     assert!(
         wide_path > narrow_path,
         "the trailing column moves with the window"
     );
-    pilot.assert_contains("session 11111111");
-    pilot.assert_cell(wide_path + 6, header_row, '│');
+    app.assert_contains("session 11111111");
+    app.assert_cell(wide_path + 6, header_row, '│');
 }
 
 #[test]
@@ -591,21 +543,19 @@ fn the_browser_window_follows_the_cursor() {
         .collect();
     let mut state = browser_state(sessions, 0);
     {
-        let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 100, CURSOR_HEIGHT);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("session 00000000");
-        pilot.assert_contains("1-10 of 30");
+        let app = TestScreen::with_now(&state, NOW, 100, CURSOR_HEIGHT);
+        app.assert_contains("session 00000000");
+        app.assert_contains("1-10 of 30");
     }
     for _ in 0..12 {
         state.update(Action::BrowserCursorMove(BrowserCursorMove::Down));
     }
-    let mut app = TestApp::with_size(RevueView::with_now(&state, NOW), 100, CURSOR_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("session 00000012");
-    pilot.assert_contains("session 00000003");
-    pilot.assert_not_contains("session 00000002");
-    pilot.assert_not_contains("session 00000000");
-    pilot.assert_contains("4-13 of 30");
+    let app = TestScreen::with_now(&state, NOW, 100, CURSOR_HEIGHT);
+    app.assert_contains("session 00000012");
+    app.assert_contains("session 00000003");
+    app.assert_not_contains("session 00000002");
+    app.assert_not_contains("session 00000000");
+    app.assert_contains("4-13 of 30");
 }
 
 #[test]
@@ -624,23 +574,20 @@ fn the_browser_panel_docks_below_the_chat_and_shrinks_the_transcript() {
         .collect::<Vec<_>>();
     let closed = open_state(session_id, rows);
     {
-        let mut app =
-            TestApp::with_size(RevueView::with_now(&closed, NOW), DOCK_WIDTH, DOCK_HEIGHT);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("row 25");
-        pilot.assert_contains("row 29");
-        pilot.assert_not_contains("user>");
-        pilot.assert_not_contains("╭─ Sessions");
+        let app = TestScreen::with_now(&closed, NOW, DOCK_WIDTH, DOCK_HEIGHT);
+        app.assert_contains("row 25");
+        app.assert_contains("row 29");
+        app.assert_not_contains("user>");
+        app.assert_not_contains("╭─ Sessions");
     }
 
     let mut opened = closed;
     opened.update(Action::SessionsBrowserRequested);
-    let mut app = TestApp::with_size(RevueView::with_now(&opened, NOW), DOCK_WIDTH, DOCK_HEIGHT);
+    let app = TestScreen::with_now(&opened, NOW, DOCK_WIDTH, DOCK_HEIGHT);
     let (_, panel_row) = find_text(&app, "╭─ Sessions");
     let (_, transcript_row) = find_text(&app, "transcript");
     let (_, detail_row) = find_text(&app, "enter sends");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_cell(0, panel_row, '╭');
+    app.assert_cell(0, panel_row, '╭');
     assert!(
         panel_row > transcript_row,
         "the panel sits below the chat's transcript"
@@ -650,22 +597,22 @@ fn the_browser_panel_docks_below_the_chat_and_shrinks_the_transcript() {
         "the panel sits below the chat's detail line"
     );
     assert!(
-        pilot.line(panel_row - 1).trim().is_empty(),
+        app.line(panel_row - 1).trim().is_empty(),
         "exactly one blank gap row separates the chat container from the panel"
     );
     assert!(
-        pilot.line(panel_row - 2).contains('╰'),
+        app.line(panel_row - 2).contains('╰'),
         "the chat container's frame ends above the gap: {:?}",
-        pilot.line(panel_row - 2)
+        app.line(panel_row - 2)
     );
-    let bottom = pilot.line(DOCK_HEIGHT - 1);
+    let bottom = app.line(DOCK_HEIGHT - 1);
     assert!(
         bottom.starts_with('╰') && bottom.trim_end().ends_with('╯'),
         "the panel's bottom edge is the window's last row: {bottom:?}"
     );
-    pilot.assert_contains("row 28");
-    pilot.assert_contains("row 29");
-    pilot.assert_not_contains("row 25");
+    app.assert_contains("row 28");
+    app.assert_contains("row 29");
+    app.assert_not_contains("row 25");
 }
 
 #[test]
@@ -681,26 +628,20 @@ fn the_chat_screen_shows_no_sessions_pane() {
             FULL_WIDTH_ROW,
         )],
     );
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains(FULL_WIDTH_ROW);
-    pilot.assert_not_contains("assistant>");
-    pilot.assert_not_contains("╭─ Sessions");
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_contains(FULL_WIDTH_ROW);
+    app.assert_not_contains("assistant>");
+    app.assert_not_contains("╭─ Sessions");
 }
 
 #[test]
 fn the_transcript_shows_a_committed_row() {
     let state = streaming_state(None);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("transcript");
-    pilot.assert_contains("the committed row");
-    pilot.assert_not_contains("assistant> the committed row");
-    pilot.assert_not_contains("(provisional)");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("transcript");
+    app.assert_contains("the committed row");
+    app.assert_not_contains("assistant> the committed row");
+    app.assert_not_contains("(provisional)");
 }
 
 #[test]
@@ -723,13 +664,12 @@ fn a_read_tool_exchange_draws_its_path_and_a_bounded_content_preview() {
     );
     // The window is tall enough for the badge, the bounded preview, and its
     // marker: the block's own header stays visible.
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("▸ read · src/lib.rs");
-    pilot.assert_contains("line 0");
-    pilot.assert_contains("… 18 more rows");
-    pilot.assert_not_contains("line 29");
-    pilot.assert_not_contains(r#"{"path":"src/lib.rs"}"#);
+    let app = TestScreen::view(&state, WINDOW_WIDTH, 40);
+    app.assert_contains("▸ read · src/lib.rs");
+    app.assert_contains("line 0");
+    app.assert_contains("… 18 more rows");
+    app.assert_not_contains("line 29");
+    app.assert_not_contains(r#"{"path":"src/lib.rs"}"#);
 }
 
 #[test]
@@ -762,13 +702,12 @@ fn a_glob_or_grep_exchange_draws_its_typed_matches() {
         }),
     ));
     let state = open_state(session_id, messages);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("╭─ ▸ glob · \"**/*.rs\"");
-    pilot.assert_contains("│ ‣ src/lib.rs");
-    pilot.assert_contains("│ ‣ src/main.rs");
-    pilot.assert_contains("╭─ ▸ grep · \"needle\" · directory · src");
-    pilot.assert_contains("src/lib.rs:3:5 · needle");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("╭─ ▸ glob · \"**/*.rs\"");
+    app.assert_contains("│ ‣ src/lib.rs");
+    app.assert_contains("│ ‣ src/main.rs");
+    app.assert_contains("╭─ ▸ grep · \"needle\" · directory · src");
+    app.assert_contains("src/lib.rs:3:5 · needle");
 }
 
 #[test]
@@ -806,17 +745,16 @@ fn a_mutation_or_execute_exchange_draws_its_typed_outcome_without_the_output() {
     let state = open_state(session_id, messages);
     // The window is tall enough for all three framed blocks: each one is a
     // badge border, its typed outcome, and a bottom border.
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
-    let pilot = Pilot::new(&mut app);
+    let app = TestScreen::view(&state, WINDOW_WIDTH, 40);
     for tool_id in ["write", "edit"] {
-        pilot.assert_contains(&format!("╭─ ▸ {tool_id} · src/lib.rs"));
+        app.assert_contains(&format!("╭─ ▸ {tool_id} · src/lib.rs"));
     }
-    pilot.assert_contains("╭─ ▸ execute · cargo test");
-    pilot.assert_contains("wrote 3 bytes");
-    pilot.assert_contains("edited 1 byte");
-    pilot.assert_contains("the program exited with code 101");
-    pilot.assert_not_contains("SECRET COMMAND OUTPUT");
-    pilot.assert_not_contains("\"content\":\"new\"");
+    app.assert_contains("╭─ ▸ execute · cargo test");
+    app.assert_contains("wrote 3 bytes");
+    app.assert_contains("edited 1 byte");
+    app.assert_contains("the program exited with code 101");
+    app.assert_not_contains("SECRET COMMAND OUTPUT");
+    app.assert_not_contains("\"content\":\"new\"");
 }
 
 #[test]
@@ -833,10 +771,9 @@ fn a_call_without_a_result_row_draws_its_call_alone() {
             ToolCallId::new(),
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("▸ read · src/lib.rs");
-    pilot.assert_contains("no tool_result row is committed");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("▸ read · src/lib.rs");
+    app.assert_contains("no tool_result row is committed");
 }
 
 #[test]
@@ -860,10 +797,9 @@ fn a_notice_row_streamed_from_the_run_renders_as_its_own_block() {
         MessageKindDto::Notice,
         "the streamed notice row reaches the committed transcript"
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("※ [The call was stopped before a final result.]");
-    pilot.assert_not_contains("notice>");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("※ [The call was stopped before a final result.]");
+    app.assert_not_contains("notice>");
 }
 
 #[test]
@@ -878,10 +814,9 @@ fn a_notice_row_restored_by_a_session_snapshot_renders_as_a_notice_block_too() {
             "the session carried this notice",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("※ the session carried this notice");
-    pilot.assert_not_contains("notice>");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("※ the session carried this notice");
+    app.assert_not_contains("notice>");
 }
 
 #[test]
@@ -898,11 +833,10 @@ fn an_undeclared_tool_row_names_its_absent_typed_kind() {
             ToolCallId::new(),
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("╭─ ▸ mystery");
-    pilot.assert_contains("the row names a tool outside the declared set");
-    pilot.assert_not_contains("not one json object");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("╭─ ▸ mystery");
+    app.assert_contains("the row names a tool outside the declared set");
+    app.assert_not_contains("not one json object");
 }
 
 #[test]
@@ -918,35 +852,31 @@ fn activating_a_collapsed_reasoning_block_reveals_one_chunk_of_rows_at_a_time() 
         vec![reasoning_row(session_id, run_id, "the answer", &reasoning)],
     );
     {
-        let mut app = TestApp::new(RevueView::new(&state));
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("step 014");
-        pilot.assert_not_contains("step 015");
-        pilot.assert_contains("… 285 more reasoning lines hidden");
+        let app = TestScreen::view(&state, 80, 24);
+        app.assert_contains("step 014");
+        app.assert_not_contains("step 015");
+        app.assert_contains("… 285 more reasoning lines hidden");
     }
     state.update(Action::ExpandReasoning { row: Some(0) });
     {
-        let mut app = TestApp::new(RevueView::new(&state));
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("step 114");
-        pilot.assert_not_contains("step 115");
-        pilot.assert_contains("… 185 more reasoning lines hidden");
+        let app = TestScreen::view(&state, 80, 24);
+        app.assert_contains("step 114");
+        app.assert_not_contains("step 115");
+        app.assert_contains("… 185 more reasoning lines hidden");
     }
     state.update(Action::ExpandReasoning { row: Some(0) });
     {
-        let mut app = TestApp::new(RevueView::new(&state));
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("step 214");
-        pilot.assert_not_contains("step 215");
-        pilot.assert_contains("… 85 more reasoning lines hidden");
+        let app = TestScreen::view(&state, 80, 24);
+        app.assert_contains("step 214");
+        app.assert_not_contains("step 215");
+        app.assert_contains("… 85 more reasoning lines hidden");
     }
     state.update(Action::ExpandReasoning { row: Some(0) });
     {
-        let mut app = TestApp::new(RevueView::new(&state));
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("step 299");
-        pilot.assert_not_contains("more reasoning lines hidden");
-        pilot.assert_not_contains("step 300");
+        let app = TestScreen::view(&state, 80, 24);
+        app.assert_contains("step 299");
+        app.assert_not_contains("more reasoning lines hidden");
+        app.assert_not_contains("step 300");
     }
 }
 
@@ -969,22 +899,14 @@ fn expanding_a_reasoning_block_above_the_window_keeps_the_visible_rows() {
     }
     let mut state = open_state(session_id, messages);
     let before = {
-        let app = TestApp::with_size(
-            RevueView::with_now(&state, NOW),
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-        );
+        let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
         (app.screen_text(), state.scroll())
     };
     // The reasoning block sits above the window, so the hundred rows the
     // activation reveals are inserted above its first visible row.
     state.update(Action::ExpandReasoning { row: Some(0) });
     let after = {
-        let app = TestApp::with_size(
-            RevueView::with_now(&state, NOW),
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-        );
+        let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
         (app.screen_text(), state.scroll())
     };
     assert_eq!(
@@ -996,8 +918,11 @@ fn expanding_a_reasoning_block_above_the_window_keeps_the_visible_rows() {
         "the newest rows stay visible: {}",
         after.0
     );
+    // The scrollbar's own thumb is the one cell the insertion changes - it
+    // reports the taller content - so the rows are compared on their content.
     assert_eq!(
-        after.0, before.0,
+        visible_rows(&after.0),
+        visible_rows(&before.0),
         "an insertion above the window keeps the visible rows in place"
     );
 }
@@ -1010,10 +935,9 @@ fn a_reasoning_only_step_draws_its_reasoning_without_an_answer_line() {
         session_id,
         vec![reasoning_row(session_id, run_id, "", "weighing the call")],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("weighing the call");
-    pilot.assert_not_contains("∷");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("weighing the call");
+    app.assert_not_contains("∷");
 }
 
 #[test]
@@ -1029,39 +953,38 @@ fn a_reasoned_tool_round_draws_its_reasoning_above_the_tool_exchange() {
         payload(ToolId::Read, "file contents"),
     ));
     let state = open_state(session_id, messages);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    let screen = pilot.screen();
-    let reasoning = screen
-        .find("weighing the call")
-        .expect("the step's reasoning renders");
-    let badge = screen
-        .find("▸ read · src/lib.rs")
-        .expect("the tool badge renders");
+    let app = TestScreen::view(&state, 80, 24);
+    let reasoning = app
+        .find_text("weighing the call")
+        .expect("the step's reasoning renders")
+        .y;
+    let badge = app
+        .find_text("▸ read · src/lib.rs")
+        .expect("the tool badge renders")
+        .y;
     assert!(
         reasoning < badge,
-        "the reasoning paints above the tool exchange it precedes: {screen}"
+        "the reasoning paints above the tool exchange it precedes: {}",
+        app.screen_text()
     );
 }
 
 #[test]
 fn the_streaming_tail_renders_as_the_answer_row_it_becomes() {
     let state = streaming_state(Some("partial answer"));
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("∷ partial answer");
-    pilot.assert_not_contains("(provisional)");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("∷ partial answer");
+    app.assert_not_contains("(provisional)");
 }
 
 #[test]
 fn the_live_reasoning_segment_renders_as_the_committed_block_it_becomes() {
     let state = streaming_reasoning_state("weighing the options", "partial answer");
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("∴ reasoning");
-    pilot.assert_contains("weighing the options");
-    pilot.assert_contains("∷ partial answer");
-    pilot.assert_not_contains("(provisional)");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("∴ reasoning");
+    app.assert_contains("weighing the options");
+    app.assert_contains("∷ partial answer");
+    app.assert_not_contains("(provisional)");
 
     // A step that thinks longer than the collapsed block shows carries the
     // committed block's own collapse: the same affordance, the same count, and
@@ -1071,10 +994,9 @@ fn the_live_reasoning_segment_renders_as_the_committed_block_it_becomes() {
         .collect::<Vec<_>>()
         .join("\n");
     let state = streaming_reasoning_state(&long, "partial answer");
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("more reasoning lines hidden — click or Ctrl+E to reveal more");
-    pilot.assert_contains("∷ partial answer");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("more reasoning lines hidden — click or Ctrl+E to reveal more");
+    app.assert_contains("∷ partial answer");
 }
 
 #[test]
@@ -1090,15 +1012,14 @@ fn a_user_row_renders_as_a_labelled_card() {
             "the question",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (_, label_row) = find_text(&app, "❯ you");
     let (_, question_row) = find_text(&app, "the question");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(label_row, "╭─ ❯ you");
-    pilot.assert_line_contains(label_row, "╮");
-    pilot.assert_line_contains(question_row, "the question");
-    pilot.assert_line_contains(question_row + 1, "╰");
-    pilot.assert_not_contains("user>");
+    app.assert_line_contains(label_row, "╭─ ❯ you");
+    app.assert_line_contains(label_row, "╮");
+    app.assert_line_contains(question_row, "the question");
+    app.assert_line_contains(question_row + 1, "╰");
+    app.assert_not_contains("user>");
 }
 
 #[test]
@@ -1114,20 +1035,18 @@ fn markdown_inside_a_user_card_renders() {
             "use **care** here\n\n```\nlet x = 1;\n```",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (strong_x, strong_row) = find_text(&app, "care");
     let strong = app
-        .buffer()
-        .get(strong_x, strong_row)
+        .cell(strong_x, strong_row)
         .expect("the bold cell is rendered");
     assert!(
         strong.modifier.contains(Modifier::BOLD),
         "**care** renders bold inside the user card"
     );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("╭─ ❯ you");
-    pilot.assert_contains("let x = 1;");
-    pilot.assert_contains("│");
+    app.assert_contains("╭─ ❯ you");
+    app.assert_contains("let x = 1;");
+    app.assert_contains("│");
 }
 
 /// Returns the chat state of one committed answer with `typed` in the input.
@@ -1153,8 +1072,8 @@ fn typed_state(typed: &str) -> AppState {
 fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
     let without = typed_state("");
     let with = typed_state("/");
-    let closed = TestApp::with_size(RevueView::new(&without), WINDOW_WIDTH, WINDOW_HEIGHT);
-    let mut opened = TestApp::with_size(RevueView::new(&with), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let closed = TestScreen::view(&without, WINDOW_WIDTH, WINDOW_HEIGHT);
+    let opened = TestScreen::view(&with, WINDOW_WIDTH, WINDOW_HEIGHT);
 
     let (band_x, band_row) = find_text(&opened, "╭─ commands");
     let (_, cursor_row) = find_text(&opened, "█");
@@ -1167,30 +1086,29 @@ fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
         "the transcript keeps the rows above the band: {band_row}"
     );
 
-    let pilot = Pilot::new(&mut opened);
-    pilot.assert_line_contains(band_row, "commands");
-    pilot.assert_line_contains(band_row + 1, "> /new");
-    pilot.assert_line_contains(band_row + 1, "create a new session in this workspace");
-    pilot.assert_line_contains(band_row + 1, "Session");
-    pilot.assert_line_contains(band_row + 2, "/sessions");
-    pilot.assert_line_contains(band_row + 2, "browse, filter, and switch sessions");
-    pilot.assert_line_contains(band_row + 2, "Navigation");
-    pilot.assert_line_contains(band_row + 3, "/theme");
-    pilot.assert_line_contains(
+    opened.assert_line_contains(band_row, "commands");
+    opened.assert_line_contains(band_row + 1, "> /new");
+    opened.assert_line_contains(band_row + 1, "create a new session in this workspace");
+    opened.assert_line_contains(band_row + 1, "Session");
+    opened.assert_line_contains(band_row + 2, "/sessions");
+    opened.assert_line_contains(band_row + 2, "browse, filter, and switch sessions");
+    opened.assert_line_contains(band_row + 2, "Navigation");
+    opened.assert_line_contains(band_row + 3, "/theme");
+    opened.assert_line_contains(
         band_row + 3,
         "pick the colour theme the terminal paints with",
     );
-    pilot.assert_line_contains(band_row + 3, "Appearance");
-    pilot.assert_line_contains(band_row + 4, "/session");
-    pilot.assert_line_contains(band_row + 4, "open the session one identifier names");
-    pilot.assert_line_contains(band_row + 5, "/quit");
-    pilot.assert_line_contains(band_row + 5, "leave the front end");
-    pilot.assert_cell(band_x, band_row + 6, '╰');
-    pilot.assert_cell(band_x, band_row + 7, '╭');
+    opened.assert_line_contains(band_row + 3, "Appearance");
+    opened.assert_line_contains(band_row + 4, "/session");
+    opened.assert_line_contains(band_row + 4, "open the session one identifier names");
+    opened.assert_line_contains(band_row + 5, "/quit");
+    opened.assert_line_contains(band_row + 5, "leave the front end");
+    opened.assert_cell(band_x, band_row + 6, '╰');
+    opened.assert_cell(band_x, band_row + 7, '╭');
 
     // The band takes its rows out of the transcript: the committed answer is
     // still shown, and the input block and the detail line keep their rows.
-    pilot.assert_contains("the committed answer");
+    opened.assert_contains("the committed answer");
     let (_, closed_cursor) = find_text(&closed, "█");
     let (_, closed_detail) = find_text(&closed, "enter sends");
     let (_, opened_detail) = find_text(&opened, "enter sends");
@@ -1204,17 +1122,16 @@ fn the_hint_menu_renders_its_three_columns_above_the_input_block() {
 #[test]
 fn the_hint_menu_narrows_and_moves_its_highlight() {
     let state = typed_state("/s");
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (_, band_row) = find_text(&app, "╭─ commands");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(band_row + 1, "> /sessions");
+    app.assert_line_contains(band_row + 1, "> /sessions");
     assert!(
-        !pilot.line(band_row + 1).contains("/new"),
+        !app.line(band_row + 1).contains("/new"),
         "the filter hides every command it does not select: {}",
-        pilot.line(band_row + 1)
+        app.line(band_row + 1)
     );
-    pilot.assert_line_contains(band_row + 2, "/session");
-    pilot.assert_line_contains(band_row + 3, "╰");
+    app.assert_line_contains(band_row + 2, "/session");
+    app.assert_line_contains(band_row + 3, "╰");
     let (_, badge_row) = find_text(&app, "build");
     assert_eq!(
         badge_row,
@@ -1224,15 +1141,14 @@ fn the_hint_menu_narrows_and_moves_its_highlight() {
 
     let mut state = typed_state("/");
     let first_row = {
-        let app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+        let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
         find_text(&app, "/new").1
     };
     state.update(Action::MenuMove(MenuMove::Down));
     let second_row = {
-        let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("> /sessions");
-        pilot.assert_not_contains("> /new");
+        let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
+        app.assert_contains("> /sessions");
+        app.assert_not_contains("> /new");
         find_text(&app, "/new").1
     };
     assert_eq!(
@@ -1241,30 +1157,27 @@ fn the_hint_menu_narrows_and_moves_its_highlight() {
     );
 
     state.update(Action::MenuMove(MenuMove::Up));
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("> /new");
-    pilot.assert_not_contains("> /sessions");
+    let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_contains("> /new");
+    app.assert_not_contains("> /sessions");
 }
 
 #[test]
 fn a_slash_that_is_not_the_first_character_opens_no_menu() {
     let state = typed_state("read /new");
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_not_contains("╭─ commands");
-    pilot.assert_not_contains("create a new session in this workspace");
-    pilot.assert_contains("read /new");
+    let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_not_contains("╭─ commands");
+    app.assert_not_contains("create a new session in this workspace");
+    app.assert_contains("read /new");
 }
 
 #[test]
 fn a_window_too_short_for_the_band_keeps_the_input_and_shows_no_band() {
     let state = typed_state("/");
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 12);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_not_contains("╭─ commands");
-    pilot.assert_contains("> /█");
-    pilot.assert_contains("enter sends | /new session | /sessions switch");
+    let app = TestScreen::view(&state, WINDOW_WIDTH, 12);
+    app.assert_not_contains("╭─ commands");
+    app.assert_contains("> /█");
+    app.assert_contains("enter sends | /new session | /sessions switch");
 }
 
 /// Returns the chat state whose theme picker is open.
@@ -1283,21 +1196,20 @@ fn picker_state() -> AppState {
 #[test]
 fn the_band_lists_an_arguments_values_in_its_own_three_cells() {
     let state = typed_state("/theme ");
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let app = TestScreen::view(&state, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (band_x, band_row) = find_text(&app, "╭─ arguments");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(band_row + 1, "> auto");
-    pilot.assert_line_contains(band_row + 1, ThemePreference::Auto.description());
-    pilot.assert_line_contains(band_row + 1, "theme");
-    pilot.assert_line_contains(band_row + 2, "light");
-    pilot.assert_line_contains(band_row + 2, ThemePreference::Light.description());
-    pilot.assert_line_contains(band_row + 2, "theme");
-    pilot.assert_line_contains(band_row + 3, "dark");
-    pilot.assert_line_contains(band_row + 3, ThemePreference::Dark.description());
-    pilot.assert_line_contains(band_row + 3, "theme");
-    pilot.assert_cell(band_x, band_row + 4, '╰');
-    pilot.assert_contains("the committed answer");
-    pilot.assert_contains("enter sends");
+    app.assert_line_contains(band_row + 1, "> auto");
+    app.assert_line_contains(band_row + 1, ThemePreference::Auto.description());
+    app.assert_line_contains(band_row + 1, "theme");
+    app.assert_line_contains(band_row + 2, "light");
+    app.assert_line_contains(band_row + 2, ThemePreference::Light.description());
+    app.assert_line_contains(band_row + 2, "theme");
+    app.assert_line_contains(band_row + 3, "dark");
+    app.assert_line_contains(band_row + 3, ThemePreference::Dark.description());
+    app.assert_line_contains(band_row + 3, "theme");
+    app.assert_cell(band_x, band_row + 4, '╰');
+    app.assert_contains("the committed answer");
+    app.assert_contains("enter sends");
 }
 
 #[test]
@@ -1305,27 +1217,26 @@ fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
     let closed = typed_state("");
     let mut opened = picker_state();
     opened.update(Action::ThemePreviewed(ThemePreference::Dark));
-    let mut app = TestApp::with_size(RevueView::new(&opened), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let app = TestScreen::view(&opened, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (panel_x, panel_row) = find_text(&app, "╭─ Theme");
     let (_, cursor_row) = find_text(&app, "█");
     assert!(
         panel_row < cursor_row,
         "the picker sits above the input block, not over it: {panel_row} < {cursor_row}"
     );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_cell(panel_x, panel_row + 5, '╰');
-    pilot.assert_line_contains(panel_row + 1, "Auto");
-    pilot.assert_line_contains(panel_row + 1, ThemePreference::Auto.description());
-    pilot.assert_line_contains(panel_row + 2, "Light");
-    pilot.assert_line_contains(panel_row + 2, ThemePreference::Light.description());
-    pilot.assert_line_contains(panel_row + 3, "> Dark");
-    pilot.assert_line_contains(panel_row + 3, ThemePreference::Dark.description());
-    pilot.assert_line_contains(panel_row + 4, "enter apply | esc revert");
-    pilot.assert_contains("the committed answer");
+    app.assert_cell(panel_x, panel_row + 5, '╰');
+    app.assert_line_contains(panel_row + 1, "Auto");
+    app.assert_line_contains(panel_row + 1, ThemePreference::Auto.description());
+    app.assert_line_contains(panel_row + 2, "Light");
+    app.assert_line_contains(panel_row + 2, ThemePreference::Light.description());
+    app.assert_line_contains(panel_row + 3, "> Dark");
+    app.assert_line_contains(panel_row + 3, ThemePreference::Dark.description());
+    app.assert_line_contains(panel_row + 4, "enter apply | esc revert");
+    app.assert_contains("the committed answer");
 
     // The panel spends the transcript's rows and no other's: the input block
     // and the detail line stay exactly where the closed state puts them.
-    let closed = TestApp::with_size(RevueView::new(&closed), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let closed = TestScreen::view(&closed, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (_, closed_cursor) = find_text(&closed, "█");
     let (_, closed_detail) = find_text(&closed, "enter sends");
     let (_, opened_detail) = find_text(&app, "enter sends");
@@ -1339,10 +1250,9 @@ fn the_theme_picker_renders_its_rows_and_legend_above_the_input_block() {
 #[test]
 fn the_theme_picker_marks_the_committed_row_until_the_preview_moves_it() {
     let committed = picker_state();
-    let mut app = TestApp::with_size(RevueView::new(&committed), WINDOW_WIDTH, WINDOW_HEIGHT);
+    let app = TestScreen::view(&committed, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (_, row) = find_text(&app, "> Auto");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_not_contains("> Dark");
+    app.assert_not_contains("> Dark");
     assert!(
         row > 0,
         "the committed preference's row is inside the panel: {row}"
@@ -1355,21 +1265,19 @@ fn the_theme_picker_marks_the_committed_row_until_the_preview_moves_it() {
         ThemePreference::Auto,
         "a preview never commits the preference it shows"
     );
-    let mut app = TestApp::with_size(RevueView::new(&previewed), WINDOW_WIDTH, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("> Dark");
-    pilot.assert_not_contains("> Auto");
+    let app = TestScreen::view(&previewed, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_contains("> Dark");
+    app.assert_not_contains("> Auto");
 }
 
 #[test]
 fn a_window_too_short_for_the_theme_picker_keeps_the_input_and_shows_no_panel() {
     let state = picker_state();
-    let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 12);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_not_contains("╭─ Theme");
-    pilot.assert_not_contains("enter apply | esc revert");
-    pilot.assert_contains("> █");
-    pilot.assert_contains("enter sends | /new session | /sessions switch");
+    let app = TestScreen::view(&state, WINDOW_WIDTH, 12);
+    app.assert_not_contains("╭─ Theme");
+    app.assert_not_contains("enter apply | esc revert");
+    app.assert_contains("> █");
+    app.assert_contains("enter sends | /new session | /sessions switch");
 }
 
 #[test]
@@ -1388,37 +1296,37 @@ fn a_blank_row_separates_the_user_card_from_the_reasoning_and_the_answer() {
             reasoning_row(session_id, run_id, "the answer", "the thinking"),
         ],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (_, header_row) = find_text(&app, "∴ reasoning");
     let (_, reasoning_row) = find_text(&app, "the thinking");
     let (_, answer_row) = find_text(&app, "the answer");
-    let pilot = Pilot::new(&mut app);
     assert!(
         header_row < reasoning_row && reasoning_row < answer_row,
         "the reasoning block sits between the user card and the answer"
     );
-    pilot.assert_line_contains(header_row - 2, "╰");
+    app.assert_line_contains(header_row - 2, "╰");
     assert!(
-        is_blank_pane_row(&pilot.line(header_row - 1)),
-        "one blank row separates the user card from the reasoning"
+        is_blank_pane_row(&app.line(header_row - 1)),
+        "one blank row separates the user card from the reasoning: {:?}",
+        app.line(header_row - 1)
     );
-    pilot.assert_line_contains(answer_row - 2, "────────");
+    app.assert_line_contains(answer_row - 2, "────────");
     assert!(
-        is_blank_pane_row(&pilot.line(answer_row - 1)),
-        "one blank row separates the reasoning from the answer"
+        is_blank_pane_row(&app.line(answer_row - 1)),
+        "one blank row separates the reasoning from the answer: {:?}",
+        app.line(answer_row - 1)
     );
-    pilot.assert_line_contains(answer_row, "∷ the answer");
+    app.assert_line_contains(answer_row, "∷ the answer");
 }
 
 #[test]
 fn the_session_notice_is_gone_and_the_status_row_names_the_session() {
     let session_id = fixture_session(FIRST_SESSION);
     let state = open_state(session_id, Vec::new());
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_not_contains(" open");
-    pilot.assert_not_contains("11111111 open");
-    pilot.assert_contains("Ready · session 11111111");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_not_contains(" open");
+    app.assert_not_contains("11111111 open");
+    app.assert_contains("Ready · session 11111111");
 }
 
 #[test]
@@ -1436,10 +1344,9 @@ fn a_long_committed_row_wraps_and_shows_its_tail() {
     );
     // A 56-column terminal leaves a 48-column transcript, so the answer wraps
     // into two display rows at the last word that fits.
-    let mut app = TestApp::with_size(RevueView::new(&state), 56, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("alpha beta gamma delta epsilon zeta eta theta");
-    pilot.assert_contains("  iota kappa");
+    let app = TestScreen::view(&state, 56, WINDOW_HEIGHT);
+    app.assert_contains("alpha beta gamma delta epsilon zeta eta theta");
+    app.assert_contains("  iota kappa");
 }
 
 #[test]
@@ -1462,15 +1369,13 @@ fn a_wrapped_row_consumes_its_display_rows_in_the_window() {
     let mut state = open_state(session_id, rows);
     state.update(Action::ScrollTranscript(TranscriptScroll::Older));
     {
-        let mut app = TestApp::with_size(RevueView::new(&state), 52, WINDOW_HEIGHT);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_not_contains("word07xx");
+        let app = TestScreen::view(&state, 52, WINDOW_HEIGHT);
+        app.assert_not_contains("word07xx");
     }
     state.update(Action::ScrollTranscript(TranscriptScroll::Newer));
     {
-        let mut app = TestApp::with_size(RevueView::new(&state), 52, WINDOW_HEIGHT);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("word07xx");
+        let app = TestScreen::view(&state, 52, WINDOW_HEIGHT);
+        app.assert_contains("word07xx");
     }
 }
 
@@ -1487,19 +1392,17 @@ fn an_assistant_heading_reads_as_a_heading() {
             "# Answer\n\nbody text",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (heading_x, heading_row) = find_text(&app, "Answer");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_line_contains(heading_row, "Answer");
-    pilot.assert_contains("body text");
+    app.assert_line_contains(heading_row, "Answer");
+    app.assert_contains("body text");
     assert!(
-        !app.get_line(heading_row).contains('#'),
+        !app.line(heading_row).contains('#'),
         "a heading paints its text without the parser's marker: {}",
-        app.get_line(heading_row)
+        app.line(heading_row)
     );
     let heading = app
-        .buffer()
-        .get(heading_x, heading_row)
+        .cell(heading_x, heading_row)
         .expect("the heading cell is rendered");
     assert!(
         heading.modifier.contains(Modifier::BOLD),
@@ -1520,16 +1423,14 @@ fn a_bold_phrase_in_an_answer_is_bold() {
             "plain **strong** tail",
         )],
     );
-    let app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (strong_x, strong_row) = find_text(&app, "strong");
     let (plain_x, plain_row) = find_text(&app, "plain");
     let strong = app
-        .buffer()
-        .get(strong_x, strong_row)
+        .cell(strong_x, strong_row)
         .expect("the strong cell is rendered");
     let plain = app
-        .buffer()
-        .get(plain_x, plain_row)
+        .cell(plain_x, plain_row)
         .expect("the plain cell is rendered");
     assert!(
         strong.modifier.contains(Modifier::BOLD),
@@ -1554,14 +1455,13 @@ fn a_markdown_table_renders_as_an_aligned_grid() {
             "| cell | count |\n|---|---|\n| alpha | 347 |\n| beta | 829 |",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (alpha_x, _) = find_text(&app, "alpha");
     let (beta_x, _) = find_text(&app, "beta");
     let (first_x, _) = find_text(&app, "347");
     let (second_x, _) = find_text(&app, "829");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("┌");
-    pilot.assert_contains("└");
+    app.assert_contains("┌");
+    app.assert_contains("└");
     assert_eq!(alpha_x, beta_x, "the first table column aligns");
     assert_eq!(first_x, second_x, "the second table column aligns");
 }
@@ -1579,21 +1479,20 @@ fn a_committed_reasoning_block_renders_above_the_answer_with_a_separator() {
             "short reasoning",
         )],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (_, header_row) = find_text(&app, "∴ reasoning");
     let (_, reasoning_row) = find_text(&app, "short reasoning");
     let (_, answer_row) = find_text(&app, "the answer");
-    let pilot = Pilot::new(&mut app);
     assert!(
         header_row < reasoning_row && reasoning_row < answer_row,
         "the reasoning block sits above the answer"
     );
-    pilot.assert_line_contains(answer_row - 2, "────────");
+    app.assert_line_contains(answer_row - 2, "────────");
     assert!(
-        is_blank_pane_row(&pilot.line(answer_row - 1)),
+        is_blank_pane_row(&app.line(answer_row - 1)),
         "one blank row separates the reasoning block from the answer"
     );
-    pilot.assert_line_contains(answer_row, "∷ the answer");
+    app.assert_line_contains(answer_row, "∷ the answer");
 }
 
 #[test]
@@ -1608,13 +1507,12 @@ fn a_long_reasoning_block_collapses_with_a_hidden_line_marker() {
         session_id,
         vec![reasoning_row(session_id, run_id, "the answer", &reasoning)],
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("… 25 more reasoning lines hidden");
-    pilot.assert_contains("step 14");
-    pilot.assert_not_contains("step 15");
-    pilot.assert_not_contains("step 39");
-    pilot.assert_contains("the answer");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("… 25 more reasoning lines hidden");
+    app.assert_contains("step 14");
+    app.assert_not_contains("step 15");
+    app.assert_not_contains("step 39");
+    app.assert_contains("the answer");
 }
 
 #[test]
@@ -1626,11 +1524,10 @@ fn the_input_line_marks_the_cursor_position() {
     }
     state.update(Action::MoveInputCursor(InputCursorMove::Left));
     state.update(Action::InputChar('b'));
-    let mut app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     let (cursor_x, cursor_row) = find_text(&app, "█");
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("> ab█c");
-    pilot.assert_cell(cursor_x, cursor_row, '█');
+    app.assert_contains("> ab█c");
+    app.assert_cell(cursor_x, cursor_row, '█');
 }
 
 #[test]
@@ -1641,15 +1538,10 @@ fn a_long_input_line_windows_around_the_cursor() {
     for character in line.chars() {
         state.update(Action::InputChar(character));
     }
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("TAIL█");
-    pilot.assert_not_contains("HEAD");
-    pilot.assert_not_contains(&format!("> {line}"));
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_contains("TAIL█");
+    app.assert_not_contains("HEAD");
+    app.assert_not_contains(&format!("> {line}"));
 }
 
 #[test]
@@ -1663,18 +1555,17 @@ fn the_input_badge_renders_the_projection_model() {
         None,
         Vec::new(),
     )));
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains(" plan ");
-    pilot.assert_contains("openrouter/fixture-model");
-    pilot.assert_not_contains("model @todo(core)");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains(" plan ");
+    app.assert_contains("openrouter/fixture-model");
+    app.assert_not_contains("model @todo(core)");
 }
 
 #[test]
 fn the_input_badges_wait_for_a_session_to_name_its_mode_and_model() {
     let mut state = AppState::new(None);
     state.update(Action::Bootstrapped(DaemonHealthDto::ready()));
-    let app = TestApp::new(RevueView::new(&state));
+    let app = TestScreen::view(&state, 80, 24);
     assert!(
         app.find_text("build").is_none() && app.find_text("model").is_none(),
         "a session no snapshot has named shows no badge"
@@ -1685,21 +1576,19 @@ fn the_input_badges_wait_for_a_session_to_name_its_mode_and_model() {
 fn the_status_row_reads_ready_session_and_mode() {
     let session_id = fixture_session(FIRST_SESSION);
     let state = open_state(session_id, Vec::new());
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Ready · session 11111111 · build");
-    pilot.assert_not_contains("ctx @todo(core)");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Ready · session 11111111 · build");
+    app.assert_not_contains("ctx @todo(core)");
 }
 
 #[test]
 fn the_chat_hint_no_longer_advertises_the_history_keys() {
     let session_id = fixture_session(FIRST_SESSION);
     let state = open_state(session_id, Vec::new());
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("enter sends | /new session | /sessions switch");
-    pilot.assert_not_contains("up/down");
-    pilot.assert_not_contains("history");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("enter sends | /new session | /sessions switch");
+    app.assert_not_contains("up/down");
+    app.assert_not_contains("history");
 }
 
 #[test]
@@ -1710,13 +1599,12 @@ fn the_armed_interrupt_notice_names_the_run_a_second_press_stops() {
         .expect("the streaming state carries its live run")
         .run_id();
     state.update(Action::CtrlCPressed);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
+    let app = TestScreen::view(&state, 80, 24);
     let expected = format!(
         "press Ctrl+C again to stop run {}",
         short_identifier(run_id)
     );
-    pilot.assert_contains(&expected);
+    app.assert_contains(&expected);
 }
 
 #[test]
@@ -1724,9 +1612,8 @@ fn the_armed_exit_notice_asks_for_a_second_ctrl_c() {
     let session_id = SessionId::new();
     let mut state = open_state(session_id, Vec::new());
     state.update(Action::CtrlCPressed);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("press Ctrl+C again to exit");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("press Ctrl+C again to exit");
 }
 
 #[test]
@@ -1737,10 +1624,9 @@ fn a_ctrl_c_press_clears_the_typed_input_line() {
         state.update(Action::InputChar(character));
     }
     state.update(Action::CtrlCPressed);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("> █");
-    pilot.assert_not_contains("abandoned");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("> █");
+    app.assert_not_contains("abandoned");
 }
 
 #[test]
@@ -1751,10 +1637,9 @@ fn the_armed_esc_clear_asks_for_a_second_press() {
         state.update(Action::InputChar(character));
     }
     state.update(Action::EscapePressed);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("press Esc again to clear the input");
-    pilot.assert_contains("> typed");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("press Esc again to clear the input");
+    app.assert_contains("> typed");
 }
 
 #[test]
@@ -1775,11 +1660,7 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
         )],
     )));
     let (single_badge, single_hint) = {
-        let single = TestApp::with_size(
-            RevueView::with_now(&state, NOW),
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-        );
+        let single = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
         let (_, badge) = find_text(&single, "fixture-model");
         let (_, hint) = find_text(&single, "enter sends | /new session | /sessions switch");
         (badge, hint)
@@ -1795,11 +1676,7 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
     }
     assert_eq!(state.input(), "line one\nline two");
 
-    let double = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
+    let double = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
     let (_, first_line) = find_text(&double, "> line one");
     let (_, second_line) = find_text(&double, "line two█");
     assert_eq!(
@@ -1825,9 +1702,8 @@ fn a_two_line_buffer_grows_the_input_block_and_shrinks_the_transcript() {
 fn a_waiting_turn_shows_the_waiting_word_and_its_measured_time() {
     let mut state = streaming_state(None);
     state.update(Action::ElapsedReported { millis: 400 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Waiting… 0.4s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Waiting… 0.4s");
 }
 
 #[test]
@@ -1839,9 +1715,8 @@ fn a_dispatched_turn_waits_before_any_run_projection_arrives() {
     }
     state.update(Action::InputSubmitted);
     state.update(Action::ElapsedReported { millis: 200 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Waiting… 0.2s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Waiting… 0.2s");
 }
 
 #[test]
@@ -1855,18 +1730,16 @@ fn a_thinking_turn_shows_the_thinking_word() {
         "weighing",
     );
     state.update(Action::ElapsedReported { millis: 3_200 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Thinking… 3.2s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Thinking… 3.2s");
 }
 
 #[test]
 fn an_answering_turn_shows_the_answering_word() {
     let mut state = streaming_state(Some("the answer"));
     state.update(Action::ElapsedReported { millis: 4_100 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answering… 4.1s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Answering… 4.1s");
 }
 
 #[test]
@@ -1892,9 +1765,8 @@ fn a_tool_call_in_flight_past_half_a_second_shows_the_working_word() {
     );
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_600 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Working… 2.6s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Working… 2.6s");
 }
 
 #[test]
@@ -1920,9 +1792,8 @@ fn a_tool_call_under_half_a_second_keeps_the_answering_word() {
     );
     publish_open_calls(&mut state, session_id, run_id, 1);
     state.update(Action::ElapsedReported { millis: 2_400 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answering… 2.4s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Answering… 2.4s");
 }
 
 #[test]
@@ -1955,9 +1826,8 @@ fn a_finished_tool_call_returns_the_row_to_the_answering_word() {
         )),
     );
     publish_open_calls(&mut state, session_id, run_id, 0);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answering… 2.7s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Answering… 2.7s");
 }
 
 #[test]
@@ -1970,10 +1840,9 @@ fn a_run_whose_elapsed_was_never_reported_keeps_the_word_alone() {
         TextDeltaChannelDto::Reasoning,
         "weighing",
     );
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Thinking…");
-    pilot.assert_not_contains("ctx");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Thinking…");
+    app.assert_not_contains("ctx");
 }
 
 #[test]
@@ -1999,11 +1868,10 @@ fn the_status_row_renders_the_committed_duration_and_usage() {
         SessionStreamState::from_snapshot(snapshot(session_id, Some(committed), Vec::new())),
     ));
     state.update(Action::ElapsedReported { millis: 13_400 });
-    let mut app = TestApp::with_size(RevueView::new(&state), 120, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answered in 13s");
-    pilot.assert_contains("ctx in 1200 out 300");
-    pilot.assert_not_contains("13.4s");
+    let app = TestScreen::view(&state, 120, WINDOW_HEIGHT);
+    app.assert_contains("Answered in 13s");
+    app.assert_contains("ctx in 1200 out 300");
+    app.assert_not_contains("13.4s");
 
     // A run whose usage was never reported says so instead of showing a zero.
     let session_id = SessionId::new();
@@ -2021,20 +1889,18 @@ fn the_status_row_renders_the_committed_duration_and_usage() {
     state.update(Action::SessionStreamOpened(
         SessionStreamState::from_snapshot(snapshot(session_id, Some(committed), Vec::new())),
     ));
-    let mut app = TestApp::with_size(RevueView::new(&state), 120, WINDOW_HEIGHT);
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answered in 13s");
-    pilot.assert_contains("ctx not reported");
+    let app = TestScreen::view(&state, 120, WINDOW_HEIGHT);
+    app.assert_contains("Answered in 13s");
+    app.assert_contains("ctx not reported");
 }
 
 #[test]
 fn the_status_row_never_shows_whole_seconds() {
     let mut state = streaming_state(Some("the answer"));
     state.update(Action::ElapsedReported { millis: 3_200 });
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Answering… 3.2s");
-    pilot.assert_not_contains("3s");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Answering… 3.2s");
+    app.assert_not_contains("3s");
 }
 
 #[test]
@@ -2043,10 +1909,9 @@ fn the_status_row_never_shows_the_debug_vocabulary() {
     let run_id = RunId::new();
     let mut state = open_state(session_id, Vec::new());
     subscribe(&mut state, session_id, run_id, RunStatusDto::Running);
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
+    let app = TestScreen::view(&state, 80, 24);
     for vocabulary in ["stream idle", "run none", "connected", "stream closed"] {
-        pilot.assert_not_contains(vocabulary);
+        app.assert_not_contains(vocabulary);
     }
 }
 
@@ -2060,10 +1925,9 @@ fn a_failed_run_reports_its_status_and_the_error_line() {
         "session_stream_failed",
         "the run stream failed",
     )));
-    let mut app = TestApp::new(RevueView::new(&state));
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("Failed");
-    pilot.assert_contains("session_stream_failed: the run stream failed");
+    let app = TestScreen::view(&state, 80, 24);
+    app.assert_contains("Failed");
+    app.assert_contains("session_stream_failed: the run stream failed");
 }
 
 #[test]
@@ -2087,36 +1951,22 @@ fn scrolling_the_transcript_reveals_older_rows_and_cuts_the_newest() {
     // and one notch moves the window one answer and a half back.
     state.update(Action::ScrollTranscript(TranscriptScroll::Older));
     {
-        let mut app = TestApp::with_size(
-            RevueView::with_now(&state, NOW),
-            WINDOW_WIDTH,
-            WINDOW_HEIGHT,
-        );
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("row 24");
-        pilot.assert_not_contains("row 20");
-        pilot.assert_not_contains("row 28");
-        pilot.assert_not_contains("row 29");
+        let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
+        app.assert_contains("row 24");
+        app.assert_not_contains("row 20");
+        app.assert_not_contains("row 28");
+        app.assert_not_contains("row 29");
     }
     state.update(Action::ScrollTranscript(TranscriptScroll::Newer));
-    let mut app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
-    let pilot = Pilot::new(&mut app);
-    pilot.assert_contains("row 29");
-    pilot.assert_not_contains("row 24");
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
+    app.assert_contains("row 29");
+    app.assert_not_contains("row 24");
 }
 
 #[test]
 fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open() {
     let state = welcome_state();
-    let app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
     find_text(&app, "INTENTION");
     find_text(&app, "R E L A Y");
     let version_chip = format!("Version {}", env!("CARGO_PKG_VERSION"));
@@ -2142,16 +1992,14 @@ fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open(
         "the trailing word follows INTENTION and the documented two-column gap"
     );
     let product = app
-        .buffer()
-        .get(product_x, product_row)
+        .cell(product_x, product_row)
         .expect("the product word paints a cell");
     assert!(
         product.modifier.contains(Modifier::BOLD),
         "the product word is the bold half of the lockup"
     );
     let trailing = app
-        .buffer()
-        .get(trailing_x, trailing_row)
+        .cell(trailing_x, trailing_row)
         .expect("the trailing word paints a cell");
     assert!(
         !trailing.modifier.contains(Modifier::BOLD),
@@ -2175,11 +2023,7 @@ fn the_welcome_state_shows_the_lockup_and_the_overview_while_no_session_is_open(
 #[test]
 fn the_welcome_state_is_gone_once_a_session_is_open() {
     let state = open_state(fixture_session(FIRST_SESSION), Vec::new());
-    let app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
     assert!(
         app.find_text("INTENTION").is_none(),
         "an open session keeps the transcript pane"
@@ -2215,11 +2059,7 @@ fn the_welcome_state_never_covers_a_row_the_core_reports() {
     assert_eq!(state.session_id(), Some(session_id));
     assert_eq!(state.transcript().len(), 1, "one committed row is present");
 
-    let app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
     find_text(&app, "the committed row");
     assert!(
         app.find_text("INTENTION").is_none(),
@@ -2245,11 +2085,7 @@ fn a_launch_that_lists_sessions_shows_the_welcome_until_a_session_is_asked_for()
         "the session exists and is listed"
     );
 
-    let app = TestApp::with_size(
-        RevueView::with_now(&state, NOW),
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-    );
+    let app = TestScreen::with_now(&state, NOW, WINDOW_WIDTH, WINDOW_HEIGHT);
     find_text(&app, "INTENTION");
     find_text(&app, &format!("Version {}", env!("CARGO_PKG_VERSION")));
     assert!(
@@ -2270,7 +2106,7 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
         // The welcome surface: its lockup and its overview are the two
         // theme-sensitive blocks it carries.
         let welcome = welcome_state().with_theme(preference, Theme::Light);
-        let welcome_app = TestApp::with_size(RevueView::new(&welcome), WINDOW_WIDTH, WINDOW_HEIGHT);
+        let welcome_app = TestScreen::view(&welcome, WINDOW_WIDTH, WINDOW_HEIGHT);
         let welcome_text = welcome_app.screen_text();
         assert!(
             welcome_text.contains("INTENTION") && welcome_text.contains("R E L A Y"),
@@ -2308,13 +2144,12 @@ fn the_same_screen_paints_its_characters_under_both_themes() {
         for character in "/se".chars() {
             state.update(Action::InputChar(character));
         }
-        let mut app = TestApp::with_size(RevueView::new(&state), WINDOW_WIDTH, 40);
-        let pilot = Pilot::new(&mut app);
-        pilot.assert_contains("❯ you");
-        pilot.assert_contains("▸ read · src/lib.rs");
-        pilot.assert_contains("line one");
-        pilot.assert_contains("the committed answer");
-        pilot.assert_contains("╭─ commands");
-        pilot.assert_contains("> /sessions");
+        let app = TestScreen::view(&state, WINDOW_WIDTH, 40);
+        app.assert_contains("❯ you");
+        app.assert_contains("▸ read · src/lib.rs");
+        app.assert_contains("line one");
+        app.assert_contains("the committed answer");
+        app.assert_contains("╭─ commands");
+        app.assert_contains("> /sessions");
     }
 }

@@ -37,22 +37,23 @@
 //! ([`TranscriptWindow`], live reasoning marker included) so the next mouse
 //! event can hit-test it.
 
-use std::cell::RefCell;
 use std::ops::Range;
 
 use intention_proto::{MessageKindDto, MessageProjectionDto};
-use revue::style::Color;
-use revue::text::{TextWrapper, WrapMode};
-use revue::widget::{Border, ScrollView, hstack, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::widgets::{Block, BorderType};
 
 use crate::app::AppState;
 use crate::tui::layout::{
-    CONTINUATION_INDENT, LaidOutRow, MARKER_GAP, MessageBlocks, RowBuilder, RowStyleId,
-    TranscriptLayoutCache, TranscriptWindow, append_blocks, box_bottom, box_content, box_top,
-    display_width, marker_text,
+    LaidOutRow, MARKER_GAP, MessageBlocks, RowBuilder, RowStyleId, TranscriptLayoutCache,
+    TranscriptWindow, append_blocks, box_bottom, box_content, box_top, display_width, frame_title,
+    marker_text, wrap_segments,
 };
 use crate::tui::palette::Palette;
 use crate::tui::panes::{markdown, tools};
+use crate::tui::surface::TranscriptSurface;
 
 /// The glyph and label a user card's frame carries.
 const USER_GLYPH: &str = "❯";
@@ -93,44 +94,45 @@ const REASONING_EXPAND: &str = "▸";
 /// of any emoji presentation, and spent nowhere else in the interface.
 const NOTICE_GLYPH: &str = "※";
 
-/// The columns the transcript pane's own frame takes.
-const TRANSCRIPT_FRAME_ROWS: u16 = 2;
-
 /// The columns the transcript keeps for its native scrollbar.
 ///
 /// The gutter is always reserved, whether or not the transcript is taller than
 /// the window: the wrap width then never changes when the transcript crosses
-/// the window's height, and revue's own scrollbar paints the column only while
-/// there is content beyond the window.
-// @todo(hack): revue's `ScrollView` is stateless - the core owns the transcript
-// offset - so the pane reserves this gutter permanently and repaints a
-// scrollbar the widget only draws; a scrollbar bound to the core's offset would
-// remove both the reservation and the stateless use.
+/// the window's height, and the scrollbar paints its column only while there is
+/// content beyond the window.
 const SCROLLBAR_COLUMNS: usize = 1;
 
 /// Returns the transcript pane: the committed blocks, then the provisional tail.
 ///
 /// Every block is laid out at the content width the pane actually has, and the
 /// window counts those display rows rather than logical blocks: it shows the
-/// newest `height - 2` rows and moves `state.scroll()` rows towards the older
-/// ones. `top` is the screen row the window's first display row sits on, which
-/// the pane publishes with the rest of its geometry. The committed rows come
-/// from `cache`; only the window's rows become widgets. `palette` is the
-/// resolved palette of the frame, and every row - committed or provisional -
-/// paints its roles.
+/// newest rows and moves `state.scroll()` rows towards the older ones. The
+/// committed rows come from `cache`; only the window's rows are painted, and
+/// `surface` is the scroll view they are painted into. `palette` is the resolved
+/// palette of the frame, and every row - committed or provisional - paints its
+/// roles.
 pub(in crate::tui) fn transcript_pane(
     state: &AppState,
-    top: u16,
-    height: u16,
-    width: u16,
-    cache: &RefCell<TranscriptLayoutCache>,
+    area: Rect,
+    cache: &mut TranscriptLayoutCache,
+    surface: &mut TranscriptSurface,
+    frame: &mut Frame,
     palette: &'static Palette,
-) -> Border {
-    let content_width = usize::from(width.saturating_sub(2));
+) {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(frame_title("transcript"))
+        .border_style(Style::new().fg(palette.border))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+    let content_width = usize::from(inner.width);
     let gutter = content_width > SCROLLBAR_COLUMNS;
     let text_width = content_width.saturating_sub(usize::from(gutter));
     let provisional = provisional_rows(state, text_width, palette);
-    let mut cache = cache.borrow_mut();
     let committed_len = cache
         .rows(state, text_width, palette, |range, width| {
             committed_blocks(state, range, width, palette)
@@ -145,7 +147,7 @@ pub(in crate::tui) fn transcript_pane(
     // row-vector path would let the window count a single list.
     let tail_offset = committed_len + usize::from(committed_len > 0 && !provisional.is_empty());
     let total = tail_offset + provisional.len();
-    let visible = usize::from(height.saturating_sub(TRANSCRIPT_FRAME_ROWS));
+    let visible = usize::from(inner.height);
     let newest = total.saturating_sub(visible);
     let start = newest.saturating_sub(usize::from(state.scroll()));
     // The live tail's expand marker is not in the cache, so the pane publishes
@@ -156,7 +158,7 @@ pub(in crate::tui) fn transcript_pane(
         .position(LaidOutRow::is_reasoning_marker)
         .map(|offset| as_row(tail_offset + offset));
     cache.publish_window(TranscriptWindow {
-        top,
+        top: inner.y,
         visible: as_row(visible),
         start: as_row(start),
         total: as_row(total),
@@ -164,50 +166,39 @@ pub(in crate::tui) fn transcript_pane(
     });
     let committed = cache.laid_out();
     let selection = state.transcript_selection();
-    let mut rows = vstack();
-    for index in start..total.min(start.saturating_add(visible)) {
+    let end = total.min(start.saturating_add(visible));
+    let mut lines = Vec::with_capacity(end.saturating_sub(start));
+    for index in start..end {
         let selected = selection.is_some_and(|range| range.contains(as_row(index)));
-        let surface = if selected {
+        let wash = if selected {
             palette.selection_bg
         } else {
             palette.panel
         };
         let row = window_row(committed, &provisional, tail_offset, index);
-        rows = rows.child(row.map_or_else(
-            || LaidOutRow::blank(surface).rich_text(palette),
-            |row| row.rich_text_on(surface, palette),
+        lines.push(row.map_or_else(
+            || LaidOutRow::blank(wash).line(palette),
+            |row| row.line_on(wash, palette),
         ));
     }
-    // The scrollbar is revue's own widget and carries no state: the core owns
-    // the window's offset, so every frame hands it the transcript's height and
-    // the first visible display row.
-    let body = if gutter {
-        hstack()
-            .child_sized(rows, u16::try_from(text_width).unwrap_or(u16::MAX))
-            .child_sized(
-                scrollbar(total, start, palette),
-                u16::try_from(SCROLLBAR_COLUMNS).unwrap_or(u16::MAX),
-            )
-    } else {
-        rows
-    };
-    Border::rounded()
-        .title("transcript")
-        .fg(palette.border)
-        .bg(palette.panel)
-        .child(body)
-}
-
-/// Returns revue's native scrollbar for one transcript window.
-///
-/// The widget paints its track and thumb only while the content is taller than
-/// the window, which is exactly while there is content above or below the
-/// visible rows; a transcript that fits shows the gutter's blank column.
-fn scrollbar(total: usize, start: usize, palette: &'static Palette) -> ScrollView {
-    ScrollView::new()
-        .content_height(as_row(total))
-        .scroll_offset(as_row(start))
-        .scrollbar_style(palette.scroll_thumb, palette.scroll_track)
+    let text_area = Rect::new(
+        inner.x,
+        inner.y,
+        u16::try_from(text_width).unwrap_or(u16::MAX),
+        inner.height,
+    );
+    surface.show(frame, text_area, &lines, as_row(start), as_row(total));
+    // The bar paints only while there is content beyond the window, exactly as
+    // the gutter's reserved column stays blank for a transcript that fits.
+    if gutter && total > visible {
+        let bar = Rect::new(
+            inner.right().saturating_sub(1),
+            inner.y,
+            u16::try_from(SCROLLBAR_COLUMNS).unwrap_or(u16::MAX),
+            inner.height,
+        );
+        crate::tui::surface::scrollbar(frame, bar, as_row(total), as_row(start), palette);
+    }
 }
 
 /// Returns one display-row count as the terminal's row type.
@@ -538,19 +529,26 @@ fn reasoning_block(
 ///
 /// The tool blocks lay their preview content out through the same wrapper, so
 /// one wrap rule covers the whole transcript.
+///
+/// A text of several lines is laid out one line at a time, and a line that
+/// carries nothing - an empty one included - stays one blank display row, so
+/// the block keeps the row count its text names.
 pub(in crate::tui) fn plain_rows(
     line: &str,
     width: usize,
     ink: RowStyleId,
     palette: &'static Palette,
 ) -> Vec<LaidOutRow> {
-    TextWrapper::new(width.max(1))
-        .mode(WrapMode::Word)
-        .subsequent_indent(CONTINUATION_INDENT)
-        .wrap(line)
-        .into_iter()
-        .map(|row| text_row(&row, ink, palette))
-        .collect()
+    let mut rows = Vec::new();
+    for segment in line.split('\n') {
+        let wrapped = wrap_segments(&[(segment, ink)], width.max(1), palette.panel);
+        if wrapped.is_empty() {
+            rows.push(LaidOutRow::blank(palette.panel));
+        } else {
+            rows.extend(wrapped);
+        }
+    }
+    rows
 }
 
 /// Returns one text row in one ink id, on the panel's wash.
@@ -563,7 +561,6 @@ fn text_row(text: &str, ink: RowStyleId, palette: &'static Palette) -> LaidOutRo
 #[cfg(test)]
 mod tests {
 
-    use std::cell::RefCell;
     use std::ops::Range;
 
     use intention_client::SessionStreamState;
@@ -575,13 +572,15 @@ mod tests {
         assistant_row, full_transcript, reasoning_row, snapshot, stream_state, tool_call_row,
         tool_result_row, user_row,
     };
-    use revue::render::Modifier;
+    use ratatui::layout::Rect;
+    use ratatui::style::Modifier;
 
     use crate::app::{Action, AppState, Effect, Theme, ThemePreference};
     use crate::tui::layout::{
         LaidOutRow, MARKER_GAP, RowStyleId, TranscriptLayoutCache, append_blocks, append_messages,
     };
     use crate::tui::palette::{self, Palette};
+    use crate::tui::testing::Screen;
 
     /// The light palette every fixture renders with.
     const LIGHT: &Palette = &palette::LIGHT;
@@ -1354,10 +1353,19 @@ mod tests {
         let run_id = RunId::new();
         let mut state = opened_stream(session_id, run_id);
         stream_reasoning(&mut state, session_id, run_id, &long_reasoning());
-        let cache = RefCell::new(TranscriptLayoutCache::new());
-        let _pane = transcript_pane(&state, 0, 40, 50, &cache, LIGHT);
-        let window = cache.borrow().window();
-        let committed_len = cache.borrow().laid_out().len();
+        let mut app = Screen::new(50, 40);
+        app.pane(|frame, cache, surface| {
+            transcript_pane(
+                &state,
+                Rect::new(0, 0, 50, 40),
+                cache,
+                surface,
+                frame,
+                LIGHT,
+            );
+        });
+        let window = app.window();
+        let committed_len = app.committed_rows();
         let marker = window
             .live_reasoning_marker
             .map(usize::from)
@@ -1375,9 +1383,18 @@ mod tests {
         // every frame, so a stale one can never expand a block that is gone.
         let mut short = opened_stream(session_id, run_id);
         stream_reasoning(&mut short, session_id, run_id, "a thought");
-        let cache = RefCell::new(TranscriptLayoutCache::new());
-        let _pane = transcript_pane(&short, 0, 40, 50, &cache, LIGHT);
-        assert_eq!(cache.borrow().window().live_reasoning_marker, None);
+        let mut app = Screen::new(50, 40);
+        app.pane(|frame, cache, surface| {
+            transcript_pane(
+                &short,
+                Rect::new(0, 0, 50, 40),
+                cache,
+                surface,
+                frame,
+                LIGHT,
+            );
+        });
+        assert_eq!(app.window().live_reasoning_marker, None);
     }
 
     #[test]
@@ -1408,14 +1425,25 @@ mod tests {
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let state = fixture_state(session_id, run_id);
-        let cache = RefCell::new(TranscriptLayoutCache::new());
-        let pane = transcript_pane(&state, 3, 20, 50, &cache, LIGHT);
-        assert!(
-            matches!(pane, revue::widget::Border { .. }),
+        let mut app = Screen::new(50, 20);
+        app.pane(|frame, cache, surface| {
+            transcript_pane(
+                &state,
+                Rect::new(0, 3, 50, 17),
+                cache,
+                surface,
+                frame,
+                LIGHT,
+            );
+        });
+        assert_eq!(
+            app.glyph(0, 3),
+            Some('╭'),
             "the pane stays the framed transcript"
         );
+        app.assert_contains("transcript");
         assert_eq!(
-            cache.borrow().layout_count(),
+            app.layout_count(),
             1,
             "the pane lays the committed rows out through the cache it is given"
         );
@@ -1496,25 +1524,25 @@ mod tests {
             anchor: 2,
             extent: 3,
         });
-        let cache = RefCell::new(TranscriptLayoutCache::new());
-        let pane = transcript_pane(&state, 0, 12, 48, &cache, LIGHT);
-        let app = revue::testing::TestApp::with_size(pane, 48, 12);
-        let selected = app
-            .buffer()
-            .get(1, 3)
-            .expect("the selected row paints a cell");
+        let mut app = Screen::new(48, 12);
+        app.pane(|frame, cache, surface| {
+            transcript_pane(
+                &state,
+                Rect::new(0, 0, 48, 12),
+                cache,
+                surface,
+                frame,
+                LIGHT,
+            );
+        });
+        let selected = app.cell(1, 3).expect("the selected row paints a cell");
         assert_eq!(
-            selected.bg,
-            Some(LIGHT.selection_bg),
+            selected.bg, LIGHT.selection_bg,
             "the selected display row is painted on the selection fill"
         );
-        let plain = app
-            .buffer()
-            .get(1, 5)
-            .expect("an unselected row paints a cell");
+        let plain = app.cell(1, 5).expect("an unselected row paints a cell");
         assert_eq!(
-            plain.bg,
-            Some(LIGHT.panel),
+            plain.bg, LIGHT.panel,
             "a row outside the selection keeps the panel wash"
         );
     }
@@ -1524,9 +1552,18 @@ mod tests {
         let session_id = SessionId::new();
         let run_id = RunId::new();
         let state = fixture_state(session_id, run_id);
-        let cache = RefCell::new(TranscriptLayoutCache::new());
-        transcript_pane(&state, 7, 20, 50, &cache, LIGHT);
-        let window = cache.borrow().window();
+        let mut app = Screen::new(50, 26);
+        app.pane(|frame, cache, surface| {
+            transcript_pane(
+                &state,
+                Rect::new(0, 6, 50, 20),
+                cache,
+                surface,
+                frame,
+                LIGHT,
+            );
+        });
+        let window = app.window();
         assert_eq!(window.top, 7, "the window publishes its first screen row");
         assert_eq!(window.visible, 18, "the pane's own frame takes two rows");
         assert!(

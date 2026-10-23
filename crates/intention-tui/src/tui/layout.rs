@@ -26,22 +26,18 @@
 //!
 //! A run resolves to a [`Style`] once when a visible row is materialised; the
 //! per-character `Style` clone the glyph model used is gone.
-// @todo(revue): revue offers no clippable container (a nested `Border` cannot be
-// windowed mid-block), no fixed-column or table layout, no text-measure or
-// truncation helper, and no child geometry, so this module hand-draws block
-// frames as flat rows, hand-rolls wrapping and truncation, and computes the
-// screen rows a pointer hit-tests from the window the pane published; the
-// pane's scroll arithmetic is duplicated here for drag-scrolling. One shared
-// container, measurement, and geometry surface in revue would delete this
-// whole class.
+// @todo(hack): the transcript is laid out as flat display rows rather than as
+// nested widgets, because the window can start and end anywhere inside a block
+// and every row the frame paints must be counted exactly once: a block frame is
+// therefore drawn here as a top row, content rows, and a bottom row. The pane's
+// scroll arithmetic is duplicated here for drag-scrolling.
 
 use std::ops::Range;
 
 use intention_proto::MessageKindDto;
-use revue::render::Modifier;
-use revue::style::Color;
-use revue::text::char_width;
-use revue::widget::{RichText, Span, Style, theme};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{AppState, Theme, TranscriptScroll};
 use crate::tui::palette::Palette;
@@ -65,10 +61,6 @@ pub(in crate::tui) fn marker_text(glyph: &str, text: &str) -> String {
 
 /// How many blank rows separate two consecutive transcript blocks.
 const BLOCK_GAP: usize = 1;
-
-/// The widget's own neutral inks, mapped onto the palette's divider ink.
-pub(in crate::tui) const WIDGET_NEUTRALS: [Color; 3] =
-    [theme::DISABLED_FG, theme::DARK_GRAY, theme::PLACEHOLDER_FG];
 
 /// One transcript display row in the neutral layout.
 ///
@@ -97,7 +89,7 @@ pub(in crate::tui) struct Run {
 /// run's segment; [`RowStyleId::style`] resolves the pair plus the surface the
 /// row sits on into one [`Style`]. A visible row therefore builds one `Style`
 /// per run, never one per character, and a colour is never invented here: every
-/// ink is a [`crate::tui::palette`] role or the parser's own callout banner.
+/// ink is a [`crate::tui::palette`] role.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::tui) enum RowStyleId {
     /// Ordinary body text in the palette's body ink.
@@ -110,13 +102,6 @@ pub(in crate::tui) enum RowStyleId {
     Link(Modifier),
     /// The parser's neutral grid, rule, and quote tone: the divider ink.
     Divider(Modifier),
-    /// A parsed segment colour this module does not configure: revue's callout
-    /// banner, kept exactly as the parser carries it.
-    // @todo(revue): the markdown parser hands this module raw colours instead of
-    // role ids, so one segment cannot be expressed as a palette role and this
-    // variant is the only colour the view carries unresolved; a parser that
-    // reports roles would keep the palette the single source of colour.
-    Callout(Color, Modifier),
     /// A committed reasoning block's body row.
     Reasoning,
     /// The reasoning block's glyph and header text.
@@ -146,11 +131,11 @@ pub(in crate::tui) enum RowStyleId {
 impl RowStyleId {
     /// Returns the id of one parsed markdown segment.
     ///
-    /// A segment with no colour is body text. The widget's own neutrals (its
-    /// grid and rule tones, and the tone it writes a marker the pane drops in)
-    /// become the palette's divider ink; every other colour the parser
-    /// carries is compared against the resolved palette, because the parser was
-    /// configured from those very roles.
+    /// The style sheet the markdown pane renders through configures every ink
+    /// from the resolved palette, so a segment's colour is compared against
+    /// those very roles: a heading, a code span, a link, and the grid tone each
+    /// map onto their role, and a segment with no colour - or one this module
+    /// does not configure - is body text.
     pub(in crate::tui) fn of_parsed(
         fg: Option<Color>,
         modifier: Modifier,
@@ -159,17 +144,16 @@ impl RowStyleId {
         let Some(fg) = fg else {
             return Self::Body(modifier);
         };
-        if WIDGET_NEUTRALS.contains(&fg) {
-            return Self::Divider(modifier);
-        }
         if fg == palette.markdown_heading {
             Self::Heading(modifier)
         } else if fg == palette.markdown_code {
             Self::Code(modifier)
         } else if fg == palette.markdown_link {
             Self::Link(modifier)
+        } else if fg == palette.ink_faint {
+            Self::Divider(modifier)
         } else {
-            Self::Callout(fg, modifier)
+            Self::Body(modifier)
         }
     }
 
@@ -178,14 +162,13 @@ impl RowStyleId {
     /// Every ink comes from the resolved `palette`, and the `bg` is the wash
     /// the row named; the parser's modifier bits are carried over so bold
     /// really is bold.
-    pub(in crate::tui) const fn style(self, surface: Color, palette: &'static Palette) -> Style {
+    pub(in crate::tui) fn style(self, surface: Color, palette: &'static Palette) -> Style {
         match self {
             Self::Body(modifier) => ink(palette.ink, surface, modifier),
             Self::Heading(modifier) => ink(palette.markdown_heading, surface, modifier),
             Self::Code(modifier) => ink(palette.markdown_code, surface, modifier),
             Self::Link(modifier) => ink(palette.markdown_link, surface, modifier),
             Self::Divider(modifier) => ink(palette.ink_faint, surface, modifier),
-            Self::Callout(callout, modifier) => ink(callout, surface, modifier),
             Self::Reasoning => ink(palette.reasoning_body, surface, Modifier::empty()),
             Self::ReasoningHeader => ink(palette.reasoning_header, surface, Modifier::empty()),
             Self::ReasoningMarker => ink(palette.reasoning_marker, surface, Modifier::BOLD),
@@ -203,17 +186,8 @@ impl RowStyleId {
 }
 
 /// Returns one ink on one wash with the parser's modifier bits.
-const fn ink(fg: Color, bg: Color, modifier: Modifier) -> Style {
-    Style {
-        fg: Some(fg),
-        bg: Some(bg),
-        bold: modifier.contains(Modifier::BOLD),
-        italic: modifier.contains(Modifier::ITALIC),
-        underline: modifier.contains(Modifier::UNDERLINE),
-        dim: modifier.contains(Modifier::DIM),
-        strikethrough: modifier.contains(Modifier::CROSSED_OUT),
-        reverse: false,
-    }
+fn ink(fg: Color, bg: Color, modifier: Modifier) -> Style {
+    Style::new().fg(fg).bg(bg).add_modifier(modifier)
 }
 
 impl LaidOutRow {
@@ -271,9 +245,9 @@ impl LaidOutRow {
         self.runs.iter().map(|run| run.style).collect()
     }
 
-    /// Materialises the row as one widget, resolving one style per run.
-    pub(in crate::tui) fn rich_text(&self, palette: &'static Palette) -> RichText {
-        self.rich_text_on(self.surface, palette)
+    /// Materialises the row as one line, resolving one style per run.
+    pub(in crate::tui) fn line(&self, palette: &'static Palette) -> Line<'static> {
+        self.line_on(self.surface, palette)
     }
 
     /// Materialises the row on `surface` instead of its own wash.
@@ -281,20 +255,25 @@ impl LaidOutRow {
     /// The transcript paints its selected display rows this way: the runs
     /// resolve their ink against the surface the row is painted on, so a
     /// selection repaints a row without touching a single run.
-    pub(in crate::tui) fn rich_text_on(
+    pub(in crate::tui) fn line_on(
         &self,
         surface: Color,
         palette: &'static Palette,
-    ) -> RichText {
+    ) -> Line<'static> {
+        let wash = Style::new().bg(surface);
         if self.runs.is_empty() {
-            return RichText::plain(self.text.clone()).default_style(Style::new().bg(surface));
+            return Line::from(Span::styled(self.text.clone(), wash));
         }
-        let mut text = RichText::new();
-        for run in &self.runs {
-            let slice = self.text[run.range.clone()].to_owned();
-            text = text.span(Span::styled(slice, run.style.style(surface, palette)));
-        }
-        text
+        Line::from(
+            self.runs
+                .iter()
+                .map(|run| {
+                    let slice = self.text[run.range.clone()].to_owned();
+                    Span::styled(slice, wash.patch(run.style.style(surface, palette)))
+                })
+                .collect::<Vec<_>>(),
+        )
+        .style(wash)
     }
 }
 
@@ -457,9 +436,9 @@ impl RowBuilder {
 ///
 /// Returns the runs before the dropped byte and the runs after it, the latter
 /// re-based so they index the text that moves to the next row.
-// @todo(revue): revue carries styled runs but no width-aware text engine, so
-// the wrap splits a run list at the dropped space and re-bases every tail
-// run's byte range here; a wrapping text engine would own this.
+// @todo(hack): the wrap splits a run list at the dropped space and re-bases
+// every tail run's byte range here, because the row is a flat run list rather
+// than a widget the terminal wraps.
 fn split_runs(runs: Vec<Run>, space: usize) -> (Vec<Run>, Vec<Run>) {
     let mut head = Vec::new();
     let mut tail = Vec::new();
@@ -560,6 +539,16 @@ pub(in crate::tui) fn append_messages(
             }
         })
         .collect()
+}
+
+/// Returns the title one framed pane's top border carries.
+///
+/// Every frame in this interface opens `╭─ label ───╮`, so the label is handed
+/// to a block's title with the border run that precedes it: the widget draws
+/// the corners and the rest of the rule, and the title sits one cell in from
+/// the corner exactly as the hand-drawn blocks beside it do.
+pub(in crate::tui) fn frame_title(label: &str) -> String {
+    format!("─ {label} ")
 }
 
 /// Returns the top row of one framed transcript block.
@@ -702,11 +691,105 @@ impl TranscriptWindow {
     }
 }
 
+/// Returns the display rows of one logical line laid out at `width`.
+///
+/// `segments` are the styled slices of the line in paint order. The first row
+/// takes the whole `width` and every row after it keeps
+/// [`CONTINUATION_INDENT`], so a wrapped paragraph reads as one indented block.
+/// A row breaks at its last space, and the character that broke it opens the
+/// next row unconditionally, so a word wider than the pane keeps a row of its
+/// own instead of wrapping forever.
+pub(in crate::tui) fn wrap_segments(
+    segments: &[(&str, RowStyleId)],
+    width: usize,
+    surface: Color,
+) -> Vec<LaidOutRow> {
+    let mut wrapped: Vec<RowBuilder> = Vec::new();
+    let mut row = RowBuilder::new();
+    for (text, ink) in segments {
+        let ink = *ink;
+        let mut rest = *text;
+        while !rest.is_empty() {
+            if row.is_empty() {
+                // A space never starts a row; runs of spaces collapse at a break.
+                rest = rest.trim_start_matches(' ');
+                if rest.is_empty() {
+                    break;
+                }
+            }
+            let limit = if wrapped.is_empty() {
+                width
+            } else {
+                width.saturating_sub(CONTINUATION_INDENT.len()).max(1)
+            };
+            let taken = fitting_prefix(&row, rest, limit);
+            let (accepted, remainder) = rest.split_at(taken);
+            row.push(accepted, ink);
+            rest = remainder;
+            let Some(breaking) = rest.chars().next() else {
+                break;
+            };
+            // The next character is the one that breaks the row: the row splits
+            // at its last space, the part after that space opens the next row,
+            // and the breaking character joins that row unconditionally. A row
+            // therefore overflows only by the character that broke it, and a
+            // word wider than the pane keeps a row of its own.
+            let tail = row.split_at_last_space();
+            let head = std::mem::replace(&mut row, tail);
+            wrapped.push(head);
+            row.push(&rest[..breaking.len_utf8()], ink);
+            rest = &rest[breaking.len_utf8()..];
+        }
+    }
+    if !row.is_empty() {
+        wrapped.push(row);
+    }
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(index, mut row)| {
+            if index > 0 {
+                row.prepend_indent();
+            }
+            row.finish(surface)
+        })
+        .collect()
+}
+
+/// Returns the byte length of the longest prefix of `rest` the row can take.
+///
+/// The first character of an empty row always fits, so a word wider than the
+/// pane keeps its own row instead of wrapping forever; a space fits wherever it
+/// follows a character, so a break only ever drops the space it breaks at; and
+/// every other character must fit the `limit` the row has left.
+fn fitting_prefix(row: &RowBuilder, rest: &str, limit: usize) -> usize {
+    let mut width = row.width();
+    let mut first = row.is_empty();
+    let mut taken = 0;
+    for (offset, character) in rest.char_indices() {
+        let character_width = usize::from(char_width(character));
+        if !first && character != ' ' && width + character_width > limit {
+            break;
+        }
+        width += character_width;
+        taken = offset + character.len_utf8();
+        first = false;
+    }
+    taken
+}
+
 /// Returns the display width of one piece of text, in columns.
 pub(in crate::tui) fn display_width(text: &str) -> usize {
-    text.chars()
-        .map(|character| usize::from(char_width(character)))
-        .sum()
+    UnicodeWidthStr::width(text)
+}
+
+/// Returns the display width of one character, in columns.
+///
+/// A character no terminal can draw - a combining mark, a control character -
+/// takes no column of its own, so it is measured as zero instead of failing the
+/// layout.
+pub(in crate::tui) fn char_width(character: char) -> u16 {
+    u16::try_from(UnicodeWidthChar::width(character).unwrap_or(0)).unwrap_or(0)
 }
 
 /// Returns whether the rows appended past `cached` re-pair a call block.
@@ -730,10 +813,9 @@ fn pairs_an_earlier_call(state: &AppState, cached: usize, appended: usize) -> bo
 /// The cache is what keeps a frame cheap: typing into the input line and the
 /// turn timer's ticks never touch the transcript, so the key still matches and
 /// a frame materialises the visible window without laying anything out.
-// @todo(revue): revue has no dirty tracking or virtualised rendering of its
-// own, so the invalidation is built here: the key carries the width, the theme,
-// the transcript epoch, and the reasoning-expansion epoch, and an append fast
-// path keeps the cached prefix.
+// @todo(hack): the cache is the front end's own dirty tracking: the key carries
+// the width, the theme, the transcript epoch, and the reasoning-expansion epoch,
+// and an append fast path keeps the cached prefix.
 pub(in crate::tui) struct TranscriptLayoutCache {
     /// The content width the cached rows were laid out at.
     width: usize,

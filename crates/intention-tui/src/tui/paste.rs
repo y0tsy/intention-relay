@@ -28,7 +28,7 @@
 //! This detector serves the chat's line. The sessions browser's filter and the
 //! theme picker keep their own key handling, unchanged.
 //!
-//! [`Event::Paste`]: revue::event::Event::Paste
+//! [`Event::Paste`]: crate::tui::Event::Paste
 
 use std::time::{Duration, Instant};
 

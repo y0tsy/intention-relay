@@ -15,11 +15,14 @@
 //! selected wash - so the three lists read the same way, and the first column
 //! keeps the accent ink the input line's own prompt uses.
 
-use revue::style::Color;
-use revue::text::char_width;
-use revue::widget::{RichText, Span, Stack, Style, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{AppState, ArgumentSpec, COMMANDS, MenuKind, MenuRow};
+use crate::tui::layout::char_width;
 use crate::tui::palette::Palette;
 
 /// The most rows the band shows before it reports the rest.
@@ -90,29 +93,39 @@ const fn band_rows(rows: usize) -> u16 {
 /// paints nothing at all rather than a band in the input's rows.
 pub(in crate::tui) fn menu_block(
     state: &AppState,
-    width: u16,
-    rows: u16,
+    area: Rect,
+    frame: &mut Frame,
     palette: &'static Palette,
-) -> Stack {
+) {
     let Some(menu) = state.command_menu() else {
-        return vstack();
+        return;
     };
     // @todo(hack): the band recomputes the panel's row arithmetic and refuses
-    // to paint on a mismatch because revue squeezes an oversized child instead
-    // of negotiating a height; the guard exists only to keep the two
+    // to paint on a mismatch because a widget given an area it did not ask for
+    // is clipped rather than negotiated; the guard exists only to keep the two
     // arithmetic paths in lockstep.
-    if rows != band_rows(menu.len()) {
-        return vstack();
+    if area.height != band_rows(menu.len()) {
+        return;
     }
     let band_rows = menu.rows().map(Row::of).collect::<Vec<_>>();
-    band(
+    for (offset, line) in band(
         &band_rows,
         menu.highlight(),
         menu.kind(),
-        usize::from(width),
-        rows,
+        usize::from(area.width),
         palette,
     )
+    .into_iter()
+    .enumerate()
+    {
+        let Ok(offset) = u16::try_from(offset) else {
+            break;
+        };
+        frame.render_widget(
+            Paragraph::new(line),
+            Rect::new(area.x, area.y.saturating_add(offset), area.width, 1),
+        );
+    }
 }
 
 /// One row of the band: the three cells one command or value contributes.
@@ -142,34 +155,40 @@ fn band(
     highlight: usize,
     kind: MenuKind,
     width: usize,
-    height: u16,
     palette: &'static Palette,
-) -> Stack {
+) -> Vec<Line<'static>> {
     let wash = palette.header_bg;
     let columns = Columns::of(kind, width.saturating_sub(BAND_CHROME_COLUMNS));
     let (title, noun) = match kind {
         MenuKind::Command => (COMMAND_TITLE, COMMAND_NOUN),
         MenuKind::Argument(_) => (ARGUMENT_TITLE, VALUE_NOUN),
     };
-    let mut band = vstack().child_sized(frame_row(width, wash, title, true, palette), 1);
+    let mut band = vec![frame_row(width, wash, title, true, palette)];
     for (row, entry) in rows.iter().take(MAX_COMMAND_ROWS).enumerate() {
-        band = band.child_sized(
-            command_row(entry, row == highlight, &columns, wash, palette),
-            1,
-        );
+        band.push(command_row(
+            entry,
+            row == highlight,
+            &columns,
+            wash,
+            palette,
+        ));
     }
     if rows.len() > MAX_COMMAND_ROWS {
-        band = band.child_sized(
-            overflow_row(rows.len() - MAX_COMMAND_ROWS, noun, width, wash, palette),
-            1,
-        );
+        band.push(overflow_row(
+            rows.len() - MAX_COMMAND_ROWS,
+            noun,
+            width,
+            wash,
+            palette,
+        ));
     }
     debug_assert_eq!(
         band_rows(rows.len()),
-        height,
-        "the band paints exactly the rows the panel gave it"
+        u16::try_from(band.len() + 1).unwrap_or(u16::MAX),
+        "the band paints exactly the rows it reports"
     );
-    band.child_sized(frame_row(width, wash, title, false, palette), 1)
+    band.push(frame_row(width, wash, title, false, palette));
+    band
 }
 
 /// The columns one band's rows are laid out in.
@@ -276,7 +295,7 @@ fn command_row(
     columns: &Columns,
     wash: Color,
     palette: &'static Palette,
-) -> RichText {
+) -> Line<'static> {
     let row_wash = if highlighted {
         palette.row_selected_bg
     } else {
@@ -285,40 +304,44 @@ fn command_row(
     let border = border_style(row_wash, palette);
     let label_ink = {
         let mut style = Style::new().fg(palette.accent_deep).bg(row_wash);
-        style.bold = highlighted;
+        if highlighted {
+            style = style.add_modifier(Modifier::BOLD);
+        }
         style
     };
     let marker = if highlighted {
         (
             CURSOR_MARKER,
-            Style::new().fg(palette.accent).bg(row_wash).bold(),
+            Style::new()
+                .fg(palette.accent)
+                .bg(row_wash)
+                .add_modifier(Modifier::BOLD),
         )
     } else {
         (ROW_MARKER, Style::new().bg(row_wash))
     };
     let trailing = border_style(row_wash, palette);
-    let mut line = RichText::new()
-        .default_style(Style::new().bg(row_wash))
-        .span(Span::styled("│ ", border))
-        .span(Span::styled(marker.0, marker.1))
-        .span(Span::styled(cell(&row.label, columns.label), label_ink));
+    let mut spans = vec![
+        Span::styled("│ ", border),
+        Span::styled(marker.0, marker.1),
+        Span::styled(cell(&row.label, columns.label), label_ink),
+    ];
     if columns.description > 0 {
-        line = line
-            .span(Span::styled(" ", Style::new().bg(row_wash)))
-            .span(Span::styled(
-                cell(row.description, columns.description),
-                Style::new().fg(palette.ink).bg(row_wash),
-            ));
+        spans.push(Span::styled(" ", Style::new().bg(row_wash)));
+        spans.push(Span::styled(
+            cell(row.description, columns.description),
+            Style::new().fg(palette.ink).bg(row_wash),
+        ));
     }
     if columns.trailing > 0 {
-        line = line
-            .span(Span::styled(" ", Style::new().bg(row_wash)))
-            .span(Span::styled(
-                cell(row.trailing, columns.trailing),
-                Style::new().fg(palette.ink_muted).bg(row_wash),
-            ));
+        spans.push(Span::styled(" ", Style::new().bg(row_wash)));
+        spans.push(Span::styled(
+            cell(row.trailing, columns.trailing),
+            Style::new().fg(palette.ink_muted).bg(row_wash),
+        ));
     }
-    line.span(Span::styled(" │", trailing))
+    spans.push(Span::styled(" │", trailing));
+    Line::from(spans).style(Style::new().bg(row_wash))
 }
 
 /// Returns the row that reports the rows the band does not show.
@@ -328,18 +351,19 @@ fn overflow_row(
     width: usize,
     wash: Color,
     palette: &'static Palette,
-) -> RichText {
+) -> Line<'static> {
     let report = format!("… and {hidden} more {noun}");
     let columns = width.saturating_sub(BAND_CHROME_COLUMNS + MARKER_COLUMNS);
-    RichText::new()
-        .default_style(Style::new().bg(wash))
-        .span(Span::styled("│ ", border_style(wash, palette)))
-        .span(Span::styled(ROW_MARKER, Style::new().bg(wash)))
-        .span(Span::styled(
+    Line::from(vec![
+        Span::styled("│ ", border_style(wash, palette)),
+        Span::styled(ROW_MARKER, Style::new().bg(wash)),
+        Span::styled(
             cell(&report, columns),
             Style::new().fg(palette.ink_muted).bg(wash),
-        ))
-        .span(Span::styled(" │", border_style(wash, palette)))
+        ),
+        Span::styled(" │", border_style(wash, palette)),
+    ])
+    .style(Style::new().bg(wash))
 }
 
 /// Returns the ink of the band's frame and padding on one wash.
@@ -358,39 +382,39 @@ fn frame_row(
     title: &str,
     top: bool,
     palette: &'static Palette,
-) -> RichText {
-    let mut row = RichText::new().default_style(Style::new().bg(wash));
+) -> Line<'static> {
+    let border = border_style(wash, palette);
     if !top {
-        return row
-            .span(Span::styled("╰", border_style(wash, palette)))
-            .span(Span::styled(
-                "─".repeat(width.saturating_sub(2)),
-                border_style(wash, palette),
-            ))
-            .span(Span::styled("╯", border_style(wash, palette)));
+        return Line::from(vec![
+            Span::styled("╰", border),
+            Span::styled("─".repeat(width.saturating_sub(2)), border),
+            Span::styled("╯", border),
+        ])
+        .style(Style::new().bg(wash));
     }
     let label = format!(" {title} ");
     let labelled = display_width("╭─") + display_width(&label);
     if labelled + 1 > width {
-        return row
-            .span(Span::styled("╭─", border_style(wash, palette)))
-            .span(Span::styled(
-                "─".repeat(width.saturating_sub(3)),
-                border_style(wash, palette),
-            ))
-            .span(Span::styled("╮", border_style(wash, palette)));
+        return Line::from(vec![
+            Span::styled("╭─", border),
+            Span::styled("─".repeat(width.saturating_sub(3)), border),
+            Span::styled("╮", border),
+        ])
+        .style(Style::new().bg(wash));
     }
-    row = row
-        .span(Span::styled("╭─", border_style(wash, palette)))
-        .span(Span::styled(
+    Line::from(vec![
+        Span::styled("╭─", border),
+        Span::styled(
             label,
-            Style::new().fg(palette.accent_deep).bg(wash).bold(),
-        ));
-    row.span(Span::styled(
-        "─".repeat(width - labelled - 1),
-        border_style(wash, palette),
-    ))
-    .span(Span::styled("╮", border_style(wash, palette)))
+            Style::new()
+                .fg(palette.accent_deep)
+                .bg(wash)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("─".repeat(width - labelled - 1), border),
+        Span::styled("╮", border),
+    ])
+    .style(Style::new().bg(wash))
 }
 
 /// Returns the display width of one piece of text.
@@ -434,7 +458,9 @@ fn truncate(text: &str, columns: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use revue::testing::TestApp;
+    use ratatui::layout::Rect;
+    use ratatui::text::Line;
+    use ratatui::widgets::Paragraph;
 
     use super::{
         BAND_FRAME_ROWS, Columns, MARKER_COLUMNS, MAX_COMMAND_ROWS, Row, band, band_rows,
@@ -442,6 +468,7 @@ mod tests {
     };
     use crate::app::{ArgumentSpec, MenuKind, ValueSpec};
     use crate::tui::palette::Palette;
+    use crate::tui::testing::Screen;
 
     /// The light palette every fixture renders with.
     const LIGHT: &Palette = &crate::tui::palette::LIGHT;
@@ -460,6 +487,18 @@ mod tests {
 
     /// The columns every band in these tests is drawn in.
     const BAND_WIDTH: u16 = 72;
+
+    /// Renders one band's lines into a screen of the band's own size.
+    fn render(lines: Vec<Line<'static>>, height: u16) -> Screen {
+        Screen::widget(BAND_WIDTH, height, |frame| {
+            for (offset, line) in lines.into_iter().enumerate() {
+                let Ok(offset) = u16::try_from(offset) else {
+                    break;
+                };
+                frame.render_widget(Paragraph::new(line), Rect::new(0, offset, BAND_WIDTH, 1));
+            }
+        })
+    }
 
     /// Two synthetic values for the argument-band fixture.
     static VALUES: [ValueSpec; 2] = [
@@ -585,39 +624,25 @@ mod tests {
     #[test]
     fn the_band_paints_exactly_the_rows_it_counts_and_fills_every_one() {
         let rows = &filler_rows()[..2];
-        let band = band(
-            rows,
-            0,
-            MenuKind::Command,
-            usize::from(BAND_WIDTH),
-            band_rows(rows.len()),
-            LIGHT,
-        );
-        let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
+        let lines = band(rows, 0, MenuKind::Command, usize::from(BAND_WIDTH), LIGHT);
+        let app = render(lines, band_rows(rows.len()));
         let last = BAND_WIDTH - 1;
-        assert_eq!(app.get_cell(0, 0), Some('╭'));
-        assert_eq!(app.get_cell(last, 0), Some('╮'));
-        assert_eq!(app.get_cell(0, 1), Some('│'));
-        assert_eq!(app.get_cell(last, 1), Some('│'));
-        assert_eq!(app.get_cell(0, 2), Some('│'));
-        assert_eq!(app.get_cell(last, 2), Some('│'));
-        assert_eq!(app.get_cell(0, 3), Some('╰'));
-        assert_eq!(app.get_cell(last, 3), Some('╯'));
-        assert_eq!(app.get_cell(0, 4), None, "the band paints no row below it");
+        assert_eq!(app.glyph(0, 0), Some('╭'));
+        assert_eq!(app.glyph(last, 0), Some('╮'));
+        assert_eq!(app.glyph(0, 1), Some('│'));
+        assert_eq!(app.glyph(last, 1), Some('│'));
+        assert_eq!(app.glyph(0, 2), Some('│'));
+        assert_eq!(app.glyph(last, 2), Some('│'));
+        assert_eq!(app.glyph(0, 3), Some('╰'));
+        assert_eq!(app.glyph(last, 3), Some('╯'));
+        assert_eq!(app.glyph(0, 4), None, "the band paints no row below it");
     }
 
     #[test]
     fn the_band_highlights_one_row_and_marks_the_hidden_commands() {
         let rows = filler_rows();
-        let band = band(
-            &rows,
-            1,
-            MenuKind::Command,
-            usize::from(BAND_WIDTH),
-            band_rows(rows.len()),
-            LIGHT,
-        );
-        let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
+        let lines = band(&rows, 1, MenuKind::Command, usize::from(BAND_WIDTH), LIGHT);
+        let app = render(lines, band_rows(rows.len()));
         let text = app.screen_text();
         assert!(text.contains("commands"), "the frame titles the band");
         assert!(text.contains("/alpha"), "the first command is shown");
@@ -644,11 +669,11 @@ mod tests {
             "exactly one row carries the highlight marker"
         );
         assert!(
-            app.get_line(2).contains("> /bravo"),
+            app.line(2).contains("> /bravo"),
             "the highlight follows the state"
         );
         assert!(
-            !app.get_line(1).contains("> "),
+            !app.line(1).contains("> "),
             "the other rows keep the aligned blank marker"
         );
     }
@@ -656,15 +681,14 @@ mod tests {
     #[test]
     fn a_value_band_lists_the_arguments_values_in_its_own_three_cells() {
         let rows = value_rows();
-        let band = band(
+        let lines = band(
             &rows,
             1,
             MenuKind::Argument(ARGUMENT[0]),
             usize::from(BAND_WIDTH),
-            band_rows(rows.len()),
             LIGHT,
         );
-        let app = TestApp::with_size(band, BAND_WIDTH, band_rows(rows.len()));
+        let app = render(lines, band_rows(rows.len()));
         let text = app.screen_text();
         assert!(
             text.contains("arguments"),
@@ -681,7 +705,7 @@ mod tests {
             "the trailing column names the argument"
         );
         assert!(
-            app.get_line(2).contains("> square"),
+            app.line(2).contains("> square"),
             "the highlight follows the state"
         );
     }

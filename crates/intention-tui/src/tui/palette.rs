@@ -79,7 +79,7 @@
 //! and bold, a failure carries the `failed` status word - and the render tests
 //! assert on those characters instead of on colours.
 
-use revue::style::Color;
+use ratatui::style::Color;
 
 use crate::app::Theme;
 
@@ -185,46 +185,46 @@ pub struct Palette {
 
 /// The light theme: the warm off-white canvas the terminal has always drawn.
 pub static LIGHT: Palette = Palette {
-    canvas: Color::rgb(0xF7, 0xF2, 0xE9),
-    panel: Color::rgb(0xFF, 0xFC, 0xF5),
-    header_bg: Color::rgb(0xF3, 0xE7, 0xD5),
-    tab_active_bg: Color::rgb(0xFC, 0xE2, 0xC4),
-    row_selected_bg: Color::rgb(0xFA, 0xDF, 0xC0),
-    row_alt_bg: Color::rgb(0xFB, 0xF5, 0xEC),
-    stub_bg: Color::rgb(0xFB, 0xE4, 0xDF),
-    input_bg: Color::rgb(0xFF, 0xF4, 0xE2),
-    badge_bg: Color::rgb(0xEF, 0xE0, 0xC8),
-    badge_ink: Color::rgb(0x5C, 0x46, 0x32),
-    user_surface: Color::rgb(0xED, 0xF1, 0xF5),
-    user_border: Color::rgb(0xA9, 0xBC, 0xD0),
-    user_label: Color::rgb(0x2F, 0x5D, 0x7C),
-    selection_bg: Color::rgb(0xD8, 0xE6, 0xF8),
-    tool_surface: Color::rgb(0xFB, 0xED, 0xDE),
-    tool_border: Color::rgb(0xD8, 0xA7, 0x6F),
-    tool_label: Color::rgb(0x8F, 0x4A, 0x16),
-    tool_preview: Color::rgb(0x7A, 0x53, 0x30),
-    notice_surface: Color::rgb(0xF7, 0xE8, 0xCE),
-    notice_ink: Color::rgb(0x8A, 0x5A, 0x0B),
-    scroll_track: Color::rgb(0xE7, 0xDC, 0xCB),
-    scroll_thumb: Color::rgb(0xB0, 0x89, 0x68),
-    divider_tint: Color::rgb(0xEF, 0xE6, 0xD8),
-    border: Color::rgb(0xDC, 0xCF, 0xBB),
-    accent: Color::rgb(0xF9, 0x73, 0x16),
-    accent_deep: Color::rgb(0xC2, 0x41, 0x0C),
-    scarlet: Color::rgb(0xDC, 0x26, 0x26),
-    markdown_heading: Color::rgb(0x9A, 0x34, 0x12),
-    markdown_code: Color::rgb(0x7C, 0x2D, 0x12),
-    markdown_link: Color::rgb(0x1D, 0x4E, 0xD8),
-    reasoning_body: Color::rgb(0x8A, 0x7A, 0x66),
-    reasoning_header: Color::rgb(0x6D, 0x5A, 0x44),
-    reasoning_marker: Color::rgb(0x8A, 0x5A, 0x2B),
-    timer_ink: Color::rgb(0xA1, 0x62, 0x07),
-    ink: Color::rgb(0x2A, 0x21, 0x1A),
-    ink_muted: Color::rgb(0x7A, 0x6A, 0x58),
-    ink_faint: Color::rgb(0xA8, 0x96, 0x7F),
-    success: Color::rgb(0x2F, 0x7D, 0x4F),
-    warning: Color::rgb(0xB4, 0x53, 0x09),
-    error: Color::rgb(0xDC, 0x26, 0x26),
+    canvas: Color::Rgb(0xF7, 0xF2, 0xE9),
+    panel: Color::Rgb(0xFF, 0xFC, 0xF5),
+    header_bg: Color::Rgb(0xF3, 0xE7, 0xD5),
+    tab_active_bg: Color::Rgb(0xFC, 0xE2, 0xC4),
+    row_selected_bg: Color::Rgb(0xFA, 0xDF, 0xC0),
+    row_alt_bg: Color::Rgb(0xFB, 0xF5, 0xEC),
+    stub_bg: Color::Rgb(0xFB, 0xE4, 0xDF),
+    input_bg: Color::Rgb(0xFF, 0xF4, 0xE2),
+    badge_bg: Color::Rgb(0xEF, 0xE0, 0xC8),
+    badge_ink: Color::Rgb(0x5C, 0x46, 0x32),
+    user_surface: Color::Rgb(0xED, 0xF1, 0xF5),
+    user_border: Color::Rgb(0xA9, 0xBC, 0xD0),
+    user_label: Color::Rgb(0x2F, 0x5D, 0x7C),
+    selection_bg: Color::Rgb(0xD8, 0xE6, 0xF8),
+    tool_surface: Color::Rgb(0xFB, 0xED, 0xDE),
+    tool_border: Color::Rgb(0xD8, 0xA7, 0x6F),
+    tool_label: Color::Rgb(0x8F, 0x4A, 0x16),
+    tool_preview: Color::Rgb(0x7A, 0x53, 0x30),
+    notice_surface: Color::Rgb(0xF7, 0xE8, 0xCE),
+    notice_ink: Color::Rgb(0x8A, 0x5A, 0x0B),
+    scroll_track: Color::Rgb(0xE7, 0xDC, 0xCB),
+    scroll_thumb: Color::Rgb(0xB0, 0x89, 0x68),
+    divider_tint: Color::Rgb(0xEF, 0xE6, 0xD8),
+    border: Color::Rgb(0xDC, 0xCF, 0xBB),
+    accent: Color::Rgb(0xF9, 0x73, 0x16),
+    accent_deep: Color::Rgb(0xC2, 0x41, 0x0C),
+    scarlet: Color::Rgb(0xDC, 0x26, 0x26),
+    markdown_heading: Color::Rgb(0x9A, 0x34, 0x12),
+    markdown_code: Color::Rgb(0x7C, 0x2D, 0x12),
+    markdown_link: Color::Rgb(0x1D, 0x4E, 0xD8),
+    reasoning_body: Color::Rgb(0x8A, 0x7A, 0x66),
+    reasoning_header: Color::Rgb(0x6D, 0x5A, 0x44),
+    reasoning_marker: Color::Rgb(0x8A, 0x5A, 0x2B),
+    timer_ink: Color::Rgb(0xA1, 0x62, 0x07),
+    ink: Color::Rgb(0x2A, 0x21, 0x1A),
+    ink_muted: Color::Rgb(0x7A, 0x6A, 0x58),
+    ink_faint: Color::Rgb(0xA8, 0x96, 0x7F),
+    success: Color::Rgb(0x2F, 0x7D, 0x4F),
+    warning: Color::Rgb(0xB4, 0x53, 0x09),
+    error: Color::Rgb(0xDC, 0x26, 0x26),
 };
 
 /// The dark theme: a neutral graphite ramp whose only hue is the accent pair.
@@ -240,46 +240,46 @@ pub static LIGHT: Palette = Palette {
 /// [`Palette::markdown_link`] are dimmer, so a heading, a code span, and a link
 /// each read as itself without a hue to help them.
 pub static DARK: Palette = Palette {
-    canvas: Color::rgb(0x0A, 0x0A, 0x0C),
-    panel: Color::rgb(0x10, 0x10, 0x12),
-    header_bg: Color::rgb(0x16, 0x16, 0x18),
-    tab_active_bg: Color::rgb(0x2F, 0x2F, 0x31),
-    row_selected_bg: Color::rgb(0x33, 0x33, 0x35),
-    row_alt_bg: Color::rgb(0x0D, 0x0D, 0x0F),
-    stub_bg: Color::rgb(0x1C, 0x1C, 0x1E),
-    input_bg: Color::rgb(0x13, 0x13, 0x15),
-    badge_bg: Color::rgb(0x28, 0x28, 0x2A),
-    badge_ink: Color::rgb(0xCA, 0xCA, 0xCC),
-    user_surface: Color::rgb(0x25, 0x25, 0x27),
-    user_border: Color::rgb(0x47, 0x47, 0x49),
-    user_label: Color::rgb(0x82, 0x82, 0x84),
-    selection_bg: Color::rgb(0x3A, 0x3A, 0x3C),
-    tool_surface: Color::rgb(0x1F, 0x1F, 0x21),
-    tool_border: Color::rgb(0x52, 0x52, 0x54),
-    tool_label: Color::rgb(0xC2, 0xC2, 0xC4),
-    tool_preview: Color::rgb(0x8A, 0x8A, 0x8C),
-    notice_surface: Color::rgb(0x22, 0x22, 0x24),
-    notice_ink: Color::rgb(0xBA, 0xBA, 0xBC),
-    scroll_track: Color::rgb(0x2B, 0x2B, 0x2D),
-    scroll_thumb: Color::rgb(0x4A, 0x4A, 0x4C),
-    divider_tint: Color::rgb(0x19, 0x19, 0x1B),
-    border: Color::rgb(0x41, 0x41, 0x43),
-    accent: Color::rgb(0xFB, 0x92, 0x3C),
-    accent_deep: Color::rgb(0xFD, 0xBA, 0x74),
-    scarlet: Color::rgb(0x5E, 0x5E, 0x60),
-    markdown_heading: Color::rgb(0xFA, 0xFA, 0xFC),
-    markdown_code: Color::rgb(0xB2, 0xB2, 0xB4),
-    markdown_link: Color::rgb(0xAA, 0xAA, 0xAC),
-    reasoning_body: Color::rgb(0x5A, 0x5A, 0x5C),
-    reasoning_header: Color::rgb(0x7A, 0x7A, 0x7C),
-    reasoning_marker: Color::rgb(0xA2, 0xA2, 0xA4),
-    timer_ink: Color::rgb(0x9A, 0x9A, 0x9C),
-    ink: Color::rgb(0xDA, 0xDA, 0xDC),
-    ink_muted: Color::rgb(0xA6, 0xA6, 0xA8),
-    ink_faint: Color::rgb(0x62, 0x62, 0x64),
-    success: Color::rgb(0x6A, 0x6A, 0x6C),
-    warning: Color::rgb(0x72, 0x72, 0x74),
-    error: Color::rgb(0x5E, 0x5E, 0x60),
+    canvas: Color::Rgb(0x0A, 0x0A, 0x0C),
+    panel: Color::Rgb(0x10, 0x10, 0x12),
+    header_bg: Color::Rgb(0x16, 0x16, 0x18),
+    tab_active_bg: Color::Rgb(0x2F, 0x2F, 0x31),
+    row_selected_bg: Color::Rgb(0x33, 0x33, 0x35),
+    row_alt_bg: Color::Rgb(0x0D, 0x0D, 0x0F),
+    stub_bg: Color::Rgb(0x1C, 0x1C, 0x1E),
+    input_bg: Color::Rgb(0x13, 0x13, 0x15),
+    badge_bg: Color::Rgb(0x28, 0x28, 0x2A),
+    badge_ink: Color::Rgb(0xCA, 0xCA, 0xCC),
+    user_surface: Color::Rgb(0x25, 0x25, 0x27),
+    user_border: Color::Rgb(0x47, 0x47, 0x49),
+    user_label: Color::Rgb(0x82, 0x82, 0x84),
+    selection_bg: Color::Rgb(0x3A, 0x3A, 0x3C),
+    tool_surface: Color::Rgb(0x1F, 0x1F, 0x21),
+    tool_border: Color::Rgb(0x52, 0x52, 0x54),
+    tool_label: Color::Rgb(0xC2, 0xC2, 0xC4),
+    tool_preview: Color::Rgb(0x8A, 0x8A, 0x8C),
+    notice_surface: Color::Rgb(0x22, 0x22, 0x24),
+    notice_ink: Color::Rgb(0xBA, 0xBA, 0xBC),
+    scroll_track: Color::Rgb(0x2B, 0x2B, 0x2D),
+    scroll_thumb: Color::Rgb(0x4A, 0x4A, 0x4C),
+    divider_tint: Color::Rgb(0x19, 0x19, 0x1B),
+    border: Color::Rgb(0x41, 0x41, 0x43),
+    accent: Color::Rgb(0xFB, 0x92, 0x3C),
+    accent_deep: Color::Rgb(0xFD, 0xBA, 0x74),
+    scarlet: Color::Rgb(0x5E, 0x5E, 0x60),
+    markdown_heading: Color::Rgb(0xFA, 0xFA, 0xFC),
+    markdown_code: Color::Rgb(0xB2, 0xB2, 0xB4),
+    markdown_link: Color::Rgb(0xAA, 0xAA, 0xAC),
+    reasoning_body: Color::Rgb(0x5A, 0x5A, 0x5C),
+    reasoning_header: Color::Rgb(0x7A, 0x7A, 0x7C),
+    reasoning_marker: Color::Rgb(0xA2, 0xA2, 0xA4),
+    timer_ink: Color::Rgb(0x9A, 0x9A, 0x9C),
+    ink: Color::Rgb(0xDA, 0xDA, 0xDC),
+    ink_muted: Color::Rgb(0xA6, 0xA6, 0xA8),
+    ink_faint: Color::Rgb(0x62, 0x62, 0x64),
+    success: Color::Rgb(0x6A, 0x6A, 0x6C),
+    warning: Color::Rgb(0x72, 0x72, 0x74),
+    error: Color::Rgb(0x5E, 0x5E, 0x60),
 };
 
 /// Returns the palette of one theme.
@@ -297,7 +297,7 @@ pub const fn of(theme: Theme) -> &'static Palette {
 
 #[cfg(test)]
 mod tests {
-    use revue::style::Color;
+    use ratatui::style::Color;
 
     use crate::app::Theme;
 
@@ -354,12 +354,23 @@ mod tests {
         ]
     }
 
+    /// Returns the red, green, and blue components of one palette role.
+    ///
+    /// Every role is an RGB literal, so a test that reads a component reads it
+    /// here instead of guessing at the colour's variant.
+    fn rgb(role: Color) -> (u8, u8, u8) {
+        match role {
+            Color::Rgb(red, green, blue) => (red, green, blue),
+            other => panic!("a palette role is an RGB literal, not {other:?}"),
+        }
+    }
+
     #[test]
     fn every_role_is_fully_opaque() {
         for (theme, palette) in THEMES {
             for (name, role) in roles(palette) {
                 assert!(
-                    role.is_opaque(),
+                    matches!(role, Color::Rgb(..)),
                     "{theme} {name} must be opaque: a terminal cannot show a \
                      transparent literal"
                 );
@@ -411,18 +422,16 @@ mod tests {
             if name == "accent" || name == "accent_deep" {
                 continue;
             }
+            let (red, green, blue) = rgb(role);
             assert_eq!(
-                role.r, role.g,
-                "the dark theme's {name} must be a neutral grey: red {} and \
-                 green {} differ",
-                role.r, role.g
+                red, green,
+                "the dark theme's {name} must be a neutral grey: red {red} and \
+                 green {green} differ"
             );
             assert!(
-                i32::from(role.b) - i32::from(role.r) <= 2,
-                "the dark theme's {name} must be a neutral grey: blue {} sits \
-                 more than two steps above red {}",
-                role.b,
-                role.r
+                i32::from(blue) - i32::from(red) <= 2,
+                "the dark theme's {name} must be a neutral grey: blue {blue} sits \
+                 more than two steps above red {red}"
             );
         }
     }

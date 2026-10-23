@@ -590,7 +590,7 @@ mod tests {
             "an unknown option is rejected"
         );
         assert!(
-            parsed(&["tui", "--renderer", "revue"]).is_err(),
+            parsed(&["tui", "--renderer", "ratatui"]).is_err(),
             "the removed renderer option is rejected"
         );
         assert!(parsed(&["run"]).is_err(), "a missing prompt is rejected");

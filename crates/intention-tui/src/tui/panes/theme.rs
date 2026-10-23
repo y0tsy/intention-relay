@@ -14,10 +14,14 @@
 //! `Auto`, the request to follow the terminal's own background, so returning to
 //! detection never needs a hand-edited file.
 
-use revue::text::char_width;
-use revue::widget::{Border, Card, RichText, Span, Stack, Style, Text, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::{AppState, ThemePreference};
+use crate::tui::layout::{char_width, frame_title};
 use crate::tui::palette::Palette;
 
 /// The rows the panel's frame takes.
@@ -59,14 +63,14 @@ pub(in crate::tui) const fn panel_rows() -> u16 {
 /// panel in the input's rows.
 pub(in crate::tui) fn picker_panel(
     state: &AppState,
-    width: u16,
-    rows: u16,
+    area: Rect,
+    frame: &mut Frame,
     palette: &'static Palette,
-) -> Stack {
-    if rows != panel_rows() {
-        return vstack();
+) {
+    if area.height != panel_rows() {
+        return;
     }
-    vstack().child_sized(panel(state, width, palette), rows)
+    panel(state, area, frame, palette);
 }
 
 /// Returns the framed panel: one rounded frame titled `Theme` around the
@@ -75,29 +79,48 @@ pub(in crate::tui) fn picker_panel(
 /// The rows read the highlighted preference, so the marker rides the row the
 /// picker is previewing: the whole window has already repainted through the
 /// palette that preference names by the time this frame is drawn.
-fn panel(state: &AppState, width: u16, palette: &'static Palette) -> Border {
-    let content = usize::from(width.saturating_sub(PANEL_CHROME_COLUMNS));
+fn panel(state: &AppState, area: Rect, frame: &mut Frame, palette: &'static Palette) {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(frame_title("Theme"))
+        .border_style(Style::new().fg(palette.accent))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+    let content = usize::from(area.width.saturating_sub(PANEL_CHROME_COLUMNS));
+    let rows = Rect::new(
+        inner.x.saturating_add(PANEL_PADDING),
+        inner.y,
+        inner.width.saturating_sub(PANEL_PADDING * 2),
+        inner.height,
+    );
     let highlighted = state.highlighted_preference();
-    let mut body = vstack();
-    for preference in ThemePreference::ALL {
-        body = body.child_sized(
-            preference_row(preference, preference == highlighted, content, palette),
-            1,
+    for (offset, preference) in ThemePreference::ALL.into_iter().enumerate() {
+        let Ok(offset) = u16::try_from(offset) else {
+            break;
+        };
+        frame.render_widget(
+            Paragraph::new(preference_row(
+                preference,
+                preference == highlighted,
+                content,
+                palette,
+            )),
+            Rect::new(rows.x, rows.y.saturating_add(offset), rows.width, 1),
         );
     }
-    Border::rounded()
-        .min_size(width, panel_rows())
-        .max_size(width, panel_rows())
-        .fg(palette.accent)
-        .bg(palette.panel)
-        .title(" Theme ")
-        .child(
-            Card::new()
-                .flat()
-                .padding(PANEL_PADDING)
-                .background(palette.panel)
-                .body(body.child_sized(legend(palette), LEGEND_ROWS)),
-        )
+    frame.render_widget(
+        Paragraph::new(legend(palette)),
+        Rect::new(
+            rows.x,
+            rows.y.saturating_add(THEME_ROWS),
+            rows.width,
+            LEGEND_ROWS,
+        ),
+    );
 }
 
 /// Returns one row: its marker, its name, and its one-line description.
@@ -106,7 +129,7 @@ fn preference_row(
     highlighted: bool,
     content: usize,
     palette: &'static Palette,
-) -> Text {
+) -> Line<'static> {
     let marker = if highlighted {
         CURSOR_MARKER
     } else {
@@ -119,39 +142,40 @@ fn preference_row(
     );
     let line = pad(&truncate(&line, content), content);
     if highlighted {
-        Text::new(line)
-            .fg(palette.accent_deep)
-            .bg(palette.row_selected_bg)
-            .bold()
+        Line::from(Span::styled(
+            line,
+            Style::new()
+                .fg(palette.accent_deep)
+                .bg(palette.row_selected_bg)
+                .add_modifier(Modifier::BOLD),
+        ))
     } else {
-        Text::new(line).fg(palette.ink)
+        Line::from(Span::styled(line, Style::new().fg(palette.ink)))
     }
 }
 
 /// Returns the panel's legend: the two keys and what they do.
-fn legend(palette: &'static Palette) -> RichText {
-    RichText::new()
-        .default_style(Style::new().bg(palette.panel))
-        .span(Span::styled(
-            "enter",
-            Style::new().fg(palette.accent).bg(palette.panel).bold(),
-        ))
-        .span(Span::styled(
-            " apply",
-            Style::new().fg(palette.ink_muted).bg(palette.panel),
-        ))
-        .span(Span::styled(
-            " | ",
-            Style::new().fg(palette.ink_faint).bg(palette.panel),
-        ))
-        .span(Span::styled(
-            "esc",
-            Style::new().fg(palette.accent).bg(palette.panel).bold(),
-        ))
-        .span(Span::styled(
-            " revert",
-            Style::new().fg(palette.ink_muted).bg(palette.panel),
-        ))
+fn legend(palette: &'static Palette) -> Line<'static> {
+    let key = |text: &'static str| {
+        Span::styled(
+            text,
+            Style::new()
+                .fg(palette.accent)
+                .bg(palette.panel)
+                .add_modifier(Modifier::BOLD),
+        )
+    };
+    let word = |text: &'static str| {
+        Span::styled(text, Style::new().fg(palette.ink_muted).bg(palette.panel))
+    };
+    Line::from(vec![
+        key("enter"),
+        word(" apply"),
+        Span::styled(" | ", Style::new().fg(palette.ink_faint).bg(palette.panel)),
+        key("esc"),
+        word(" revert"),
+    ])
+    .style(Style::new().bg(palette.panel))
 }
 
 /// Returns the display width of one piece of text.
@@ -200,17 +224,26 @@ fn truncate(text: &str, columns: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use revue::testing::TestApp;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Paragraph;
 
     use super::{PANEL_FRAME, display_width, legend, pad, panel_rows, picker_panel};
     use crate::app::{Action, AppState, ThemePreference};
     use crate::tui::palette::Palette;
+    use crate::tui::testing::Screen;
 
     /// The light palette every fixture renders with.
     const LIGHT: &Palette = &crate::tui::palette::LIGHT;
 
     /// The width every panel fixture renders into.
     const WIDTH: u16 = 60;
+
+    /// Renders the picker panel of `state` into a screen of its own size.
+    fn render(state: &AppState) -> Screen {
+        Screen::widget(WIDTH, panel_rows(), |frame| {
+            picker_panel(state, Rect::new(0, 0, WIDTH, panel_rows()), frame, LIGHT);
+        })
+    }
 
     #[test]
     fn the_panel_counts_its_frame_its_rows_and_its_legend() {
@@ -223,8 +256,7 @@ mod tests {
 
     #[test]
     fn the_panel_paints_its_title_its_rows_and_its_legend() {
-        let panel = picker_panel(&AppState::new(None), WIDTH, panel_rows(), LIGHT);
-        let app = TestApp::with_size(panel, WIDTH, panel_rows());
+        let app = render(&AppState::new(None));
         let text = app.screen_text();
         assert!(text.contains("Theme"), "the frame carries the title");
         assert!(
@@ -247,9 +279,9 @@ mod tests {
             "the legend is the panel's own last inner row"
         );
         assert!(
-            app.get_line(1).contains("> Auto"),
+            app.line(1).contains("> Auto"),
             "the committed preference's row is the marked one: {}",
-            app.get_line(1)
+            app.line(1)
         );
         assert!(!text.contains("> Light"));
         assert!(!text.contains("> Dark"));
@@ -259,15 +291,14 @@ mod tests {
     fn the_panel_marks_the_previewed_row() {
         let mut state = AppState::new(None);
         state.update(Action::ThemePreviewed(ThemePreference::Dark));
-        let panel = picker_panel(&state, WIDTH, panel_rows(), LIGHT);
-        let app = TestApp::with_size(panel, WIDTH, panel_rows());
+        let app = render(&state);
         assert!(
-            app.get_line(3).contains("> Dark"),
+            app.line(3).contains("> Dark"),
             "the marker follows the preview: {}",
-            app.get_line(3)
+            app.line(3)
         );
         assert!(
-            !app.get_line(1).contains("> "),
+            !app.line(1).contains("> "),
             "the committed row keeps the aligned blank marker"
         );
     }
@@ -275,16 +306,16 @@ mod tests {
     #[test]
     fn a_panel_given_any_other_height_paints_nothing() {
         let state = AppState::new(None);
-        assert_eq!(
-            picker_panel(&state, WIDTH, 0, LIGHT).len(),
-            0,
-            "a region the chat did not give the panel's rows stays empty"
-        );
-        assert_eq!(
-            picker_panel(&state, WIDTH, panel_rows() + 1, LIGHT).len(),
-            0,
-            "a region of another height is not the panel"
-        );
+        for height in [0, panel_rows() + 1] {
+            let app = Screen::widget(WIDTH, panel_rows() + 1, |frame| {
+                picker_panel(&state, Rect::new(0, 0, WIDTH, height), frame, LIGHT);
+            });
+            assert_eq!(
+                app.screen_text().trim(),
+                "",
+                "a region of {height} rows is not the panel"
+            );
+        }
     }
 
     #[test]
@@ -298,7 +329,9 @@ mod tests {
 
     #[test]
     fn the_legend_names_the_two_keys_the_picker_owns() {
-        let app = TestApp::with_size(legend(LIGHT), 40, 1);
+        let app = Screen::widget(40, 1, |frame| {
+            frame.render_widget(Paragraph::new(legend(LIGHT)), Rect::new(0, 0, 40, 1));
+        });
         assert_eq!(
             app.screen_text().trim_end(),
             "enter apply | esc revert",

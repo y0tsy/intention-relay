@@ -9,23 +9,16 @@ version = 2
 # The 2026-09-23 refresh stayed acknowledgement-free: RUSTSEC-2026-0285 was
 # resolved by upgrading rustls to 0.23.45 inside the selected SDK chains.
 #
-# The five entries below are the entire acknowledged set. They are all
-# `unmaintained` (no safe upgrade) and all reachable only through
-# revue 3.10.0 -> unic-emoji-char: the rust-unic family is archived, and the
-# widget library replaces that probe in hawk90/revue#950. Nothing else is
-# acknowledged; every other advisory is fixed by upgrading the graph.
+# The acknowledged set is empty. The five rust-unic advisories the previous
+# front end needed were reachable only through revue -> unic-emoji-char, and the
+# ratatui front end takes no such probe. Nothing is acknowledged; every advisory
+# is fixed by upgrading the graph.
 #
-# That this set is exactly these five is a review responsibility, not a gate:
-# `cargo deny` reads this file as written, so a new `ignore` entry passes the
-# gate silently. Adding one is a decision to review, and the accompanying
-# reason is what makes it reviewable.
-ignore = [
-  { id = "RUSTSEC-2025-0075", reason = "unmaintained unic-char-range, reachable only through revue 3.10.0 -> unic-emoji-char; no safe upgrade exists and the probe is dropped upstream." },
-  { id = "RUSTSEC-2025-0080", reason = "unmaintained unic-common, reachable only through revue 3.10.0 -> unic-emoji-char; no safe upgrade exists and the probe is dropped upstream." },
-  { id = "RUSTSEC-2025-0081", reason = "unmaintained unic-char-property, reachable only through revue 3.10.0 -> unic-emoji-char; no safe upgrade exists and the probe is dropped upstream." },
-  { id = "RUSTSEC-2025-0090", reason = "unmaintained unic-emoji-char, the revue 3.10.0 probe itself; no safe upgrade exists and the dependency is dropped upstream." },
-  { id = "RUSTSEC-2025-0098", reason = "unmaintained unic-ucd-version, reachable only through revue 3.10.0 -> unic-emoji-char; no safe upgrade exists and the probe is dropped upstream." },
-]
+# That this set is empty is a review responsibility, not a gate: `cargo deny`
+# reads this file as written, so a new `ignore` entry passes the gate silently.
+# Adding one is a decision to review, and the accompanying reason is what makes
+# it reviewable.
+ignore = []
 
 [licenses]
 version = 2
@@ -48,6 +41,9 @@ deny = []
 # `default-members`, so a bare `cargo tree -d` inspects only `intention-proto`
 # and `intention-config` and reports nothing. Use `cargo tree -d --workspace`.
 skip = [
+  { crate = "darling@0.20.11", reason = "Reviewed proc-macro duplicate: required by async-openai 0.42.2 and openrouter-rs 0.19.0 -> derive_builder 0.20.2 while ratatui 0.30.2 -> instability uses darling 0.24; reassess with the provider SDKs or ratatui." },
+  { crate = "darling_core@0.20.11", reason = "Reviewed companion duplicate required only by the derive_builder 0.20.2 branch of the two provider SDKs; reassess with async-openai or openrouter-rs." },
+  { crate = "darling_macro@0.20.11", reason = "Reviewed proc-macro companion duplicate required only by the derive_builder 0.20.2 branch of the two provider SDKs; reassess with async-openai or openrouter-rs." },
   { crate = "hashbrown@0.16.1", reason = "Reviewed target-specific duplicate: required only by rusqlite 0.40.2 -> sqlite-wasm-rs -> rsqlite-vfs on WASM targets; retain native bundled SQLite and reassess when that target chain no longer requires hashbrown 0.16." },
   { crate = "syn@2.0.119", reason = "Reviewed duplicate: required by async-openai 0.42.2 -> async-openai-macros 0.3.0 (proc-macro), by the darling/derive_builder proc-macro path that both selected SDKs use, and on WASM targets only by wasm-bindgen support; the native proc-macro path uses syn 3. Reassess with either SDK chain." },
   { crate = "base64@0.22.1", reason = "Reviewed provider SDK duplicate: required by async-openai 0.42.2 and by the reqwest 0.12 chain of openrouter-rs 0.19.0 while reqwest 0.13 resolves base64 0.23; reassess with async-openai or openrouter-rs." },
@@ -55,6 +51,7 @@ skip = [
   { crate = "getrandom@0.3.4", reason = "Reviewed Generic Chat SDK duplicate: async-openai 0.42.2 uses rand 0.9 -> getrandom 0.3 while the existing graph uses getrandom 0.4.3; reassess when async-openai updates." },
   { crate = "r-efi@5.3.0", reason = "Reviewed target-specific companion duplicate: required only by async-openai 0.42.2 -> rand 0.9 -> getrandom 0.3 on EFI targets; reassess with async-openai." },
   { crate = "reqwest@0.12.28", reason = "Reviewed provider SDK duplicate: openrouter-rs 0.19.0 requires reqwest 0.12 while async-openai 0.42.2 requires reqwest 0.13; reassess with openrouter-rs." },
+  { crate = "itertools@0.15.0", reason = "Reviewed widget duplicate: tui-markdown 0.3.12 requires itertools 0.15 while ratatui-core 0.1.2 requires 0.14; reassess when tui-markdown and ratatui agree." },
   { crate = "syn@1.0.109", reason = "M4 reviewed OpenRouter SDK duplicate: required only by openrouter-rs 0.19.0 -> dotenvy_macro 0.15.7; reassess with openrouter-rs." },
   { crate = "thiserror@1.0.69", reason = "Reviewed provider SDK duplicate: required by openrouter-rs 0.19.0 while the existing SQLite graph uses thiserror 2; reassess with openrouter-rs." },
   { crate = "thiserror-impl@1.0.69", reason = "Reviewed companion duplicate required only by the openrouter-rs thiserror 1 branch; reassess with openrouter-rs." },
