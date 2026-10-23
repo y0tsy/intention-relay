@@ -376,7 +376,7 @@ fn endpoint_discovery_prefers_a_declared_instance_and_falls_back_to_the_platform
 #[test]
 fn the_daemon_program_defaults_to_the_terminal_binary_sibling() {
     let directory = std::env::temp_dir();
-    let executable = directory.join("intention-tui");
+    let executable = directory.join("intention-cli");
     let expected = directory.join(format!("intention-daemon{}", std::env::consts::EXE_SUFFIX));
     let program = daemon_program_beside(&executable).expect("the sibling daemon program resolves");
     assert_eq!(

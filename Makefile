@@ -16,7 +16,7 @@ endef
 # production logic, not a central registry every crate must be entered into.
 COVERAGE_FLOORS = intention-transport=75 intention-storage=75 intention-engine=75 \
                   intention-tools=60 intention-config=60 intention-daemon=60 intention-providers=60 \
-                  intention-tui=20 intention-client=20
+                  intention-cli=60 intention-client=20
 
 # The components and tools each gate runs, so a gate validates exactly the
 # pinned set it uses. Every gate also validates the pinned toolchain, and a gate
@@ -36,11 +36,12 @@ ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS)
 # native absolute paths. `intention-daemon`'s `client_e2e` binary is the
 # cross-process proof that a real daemon serves over that transport.
 #
-# `intention-storage`'s SQLite contracts, `intention-providers`,
-# `intention-engine`, `intention-tui`, and the daemon's other suites assert
-# logic no platform boundary reaches, so the Linux coverage job verifies them
-# once; `lint-windows` still compiles every Windows code path.
-PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + (package(intention-daemon) and binary(client_e2e))
+# `intention-storage`'s SQLite contracts and `intention-providers` and
+# `intention-engine` assert logic no platform boundary reaches, so the Linux
+# coverage job verifies them once; `lint-windows` still compiles every Windows
+# code path. `intention-cli` is the command-line front end, so its suites spawn
+# a real daemon and reach the endpoint each platform resolves.
+PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + package(intention-cli) + (package(intention-daemon) and binary(client_e2e))
 
 .PHONY: help bootstrap-tools tools-check fmt fmt-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 

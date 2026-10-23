@@ -39,22 +39,11 @@ pub async fn perform(
             .await
             .map(Action::Bootstrapped)
             .map_err(|error| (Action::BootstrapFailed(error.clone()), error)),
-        Effect::ListSessions => client
-            .list_sessions()
-            .await
-            .map(Action::SessionsListed)
-            .map_err(|error| (Action::SessionsListFailed(error.clone()), error)),
         Effect::OpenSession(session_id) => client
             .session_snapshot(session_id)
             .await
             .map(Action::SessionSnapshotLoaded)
             .map_err(|error| (Action::SessionSnapshotFailed(error.clone()), error)),
-        Effect::PersistTheme(_) => {
-            // The local settings file is the fullscreen front end's own work:
-            // no client call carries a theme, and no other terminal mode has a
-            // theme to write.
-            return None;
-        }
         Effect::CreateSession { first_turn } => {
             let carried_first_turn = first_turn.is_some();
             let first_turn = match first_turn {

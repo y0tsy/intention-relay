@@ -19,17 +19,16 @@ use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
+use crate::app::{Action, AppState, Effect};
+use crate::client_task;
 use intention_client::{
-    FrameUpdate, IntentionClient, SessionStreamClient, SessionStreamState,
-    SessionStreamSubscription, StreamStep,
+    IntentionClient, SessionStreamClient, SessionStreamState, SessionStreamSubscription, StreamStep,
 };
 use intention_proto::{
     ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
     SessionFrameDto, SessionId, TextDeltaChannelDto, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_transport::LocalEndpoint;
-use intention_tui::app::{Action, AppState, Effect};
-use intention_tui::client_task;
 
 use crate::cli::{ExitStatus, Format, Options};
 
@@ -267,8 +266,6 @@ enum Received {
     Frame {
         /// The frame as the daemon sent it.
         frame: SessionFrameDto,
-        /// What the frame changed in the state beside it.
-        update: FrameUpdate,
         /// The subscription's committed session state after the frame.
         state: Box<SessionStreamState>,
     },
@@ -346,9 +343,9 @@ impl Driver {
         Self {
             client,
             endpoint,
-            workspace_root: workspace_root.clone(),
+            workspace_root,
             mode,
-            state: AppState::new(None).with_workspace_root(workspace_root),
+            state: AppState::new(None),
             subscription: None,
             last_failure: None,
             reported_row: None,
@@ -517,23 +514,13 @@ impl Driver {
                 return Ok(Some(outcome));
             }
             match self.next(deadline, interrupts).await {
-                Received::Frame {
-                    frame,
-                    update,
-                    state,
-                } => {
+                Received::Frame { frame, state } => {
                     if let SessionFrameDto::TextDelta(delta) = &frame {
                         events
                             .delta(delta.step(), delta.channel(), delta.text())
                             .map_err(PumpFailure::Output)?;
                     }
-                    let _failure = self
-                        .apply(Action::FrameReceived {
-                            frame,
-                            update,
-                            state,
-                        })
-                        .await;
+                    let _failure = self.apply(Action::FrameReceived(state)).await;
                 }
                 Received::Interrupted => {
                     // The signal reaches the loop that owns the state, which
@@ -593,9 +580,8 @@ impl Driver {
         // other arms drop the subscription.
         let state = subscription.state().clone();
         match received {
-            Ok(StreamStep::Frame { frame, update }) => Received::Frame {
+            Ok(StreamStep::Frame { frame, .. }) => Received::Frame {
                 frame,
-                update,
                 state: Box::new(state),
             },
             Ok(StreamStep::Closed(error)) => {
@@ -723,7 +709,7 @@ impl Driver {
 
     /// Drops every session-scoped value a new selection replaces.
     fn reset(&mut self, session: Option<SessionId>) {
-        self.state = AppState::new(session).with_workspace_root(self.workspace_root.clone());
+        self.state = AppState::new(session);
         self.subscription = None;
         self.last_failure = None;
         self.reported_row = None;
@@ -1074,17 +1060,13 @@ mod tests {
     /// test derives a frame through the same entry the production pump uses.
     fn receive(state: &mut AppState, frame: SessionFrameDto) -> Vec<Effect> {
         let mut derived = state
-            .session_state()
-            .cloned()
+            .session_state
+            .clone()
             .unwrap_or_else(|| SessionStreamState::new(frame_session(&frame)));
-        let update = derived
-            .apply_frame(frame.clone())
+        derived
+            .apply_frame(frame)
             .expect("the fixture frame belongs to the state's own session");
-        state.update(Action::FrameReceived {
-            frame,
-            update,
-            state: Box::new(derived),
-        })
+        state.update(Action::FrameReceived(Box::new(derived)))
     }
 
     /// Returns the session one frame belongs to.
@@ -1399,10 +1381,8 @@ mod tests {
         let line = error.to_string();
 
         // The application's error line is the type's own one-line form.
-        let mut state = intention_tui::app::AppState::new(None);
-        state.update(intention_tui::app::Action::SessionsListFailed(
-            error.clone(),
-        ));
+        let mut state = crate::app::AppState::new(None);
+        state.update(crate::app::Action::BootstrapFailed(error.clone()));
         assert_eq!(state.error(), Some(line.as_str()));
 
         // The process surface writes that form after its own label, in the text

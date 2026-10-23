@@ -1,6 +1,6 @@
 //! Terminal-client process end-to-end tests over real IPC and a real daemon.
 //!
-//! Every scenario spawns the real `intention-tui` binary with piped standard
+//! Every scenario spawns the real `intention-cli` binary with piped standard
 //! streams and drives it against a real daemon process, whose provider endpoint
 //! is either the scripted fake provider or a listener that never answers. The
 //! daemon is spawned by the fixture, so the binary reaches it through the
@@ -211,7 +211,7 @@ impl TerminalHost {
     /// than the interactive default expects passes the bound its own work needs,
     /// which [`run_deadline`] derives from the fixture's round count.
     fn run_within(&self, arguments: &[&str], input: Option<&str>, bound: Duration) -> CliOutput {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_intention-cli"));
         command.args(arguments);
         command.env(ENDPOINT_VARIABLE, self.endpoint.instance_id());
         redirect_directories(
@@ -249,7 +249,7 @@ impl TerminalHost {
     /// drive a process this way.
     #[cfg(unix)]
     fn spawn(&self, arguments: &[&str]) -> Child {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_intention-tui"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_intention-cli"));
         command.args(arguments);
         command.env(ENDPOINT_VARIABLE, self.endpoint.instance_id());
         redirect_directories(

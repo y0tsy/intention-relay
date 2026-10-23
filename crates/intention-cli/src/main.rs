@@ -1,38 +1,30 @@
-//! The Intention Relay terminal client binary.
+//! The Intention Relay line client binary.
 //!
-//! One binary serves the three terminal front ends: the
-//! fullscreen UI, the interactive REPL, and the headless prompt command. The
-//! binary consults the process-level seams every front end shares — the local
-//! endpoint and the daemon launcher the client declares, the workspace root,
-//! and the session runtime — and dispatches exactly one front end.
-//! Command-line rejections and startup failures go through explicit writers and
-//! the closed exit-status set of [`cli`], and the process status is the value
-//! `main` returns.
+//! One binary serves the two line front ends: the interactive REPL and the
+//! headless prompt command. The fullscreen terminal UI is a separate
+//! application that speaks the same protocol, so this binary neither names nor
+//! proxies it. The binary consults the process-level seams both front ends
+//! share — the local endpoint and the daemon launcher the client declares, the
+//! workspace root, and the session runtime — and dispatches exactly one front
+//! end. Command-line rejections and startup failures go through explicit
+//! writers and the closed exit-status set of [`cli`], and the process status is
+//! the value `main` returns.
 
+mod app;
 mod cli;
+mod client_task;
 mod headless;
 mod repl;
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
 use intention_client::{IntentionClient, ProcessDaemonLauncher, endpoint_discovery};
 use intention_proto::{DtoResult, ErrorDto, WorkspaceRootDto};
 use intention_transport::LocalEndpoint;
-use mimalloc::MiMalloc;
 
-use cli::{ExitStatus, Invocation, Options};
-
-/// The binary's process-wide allocator.
-///
-/// A terminal frame allocates many short-lived small strings - one per wrapped
-/// row, one per styled span, one per status line - so the binary takes
-/// mimalloc's small-allocation path instead of the system allocator's. The
-/// allocator is the crate's own type and the workspace's `unsafe_code` ban
-/// covers every line of ours: no pointer is dereferenced here.
-#[global_allocator]
-static GLOBAL: MiMalloc = MiMalloc;
+use cli::{ExitStatus, Invocation};
 
 fn main() -> ExitCode {
     let mut stdout = std::io::stdout();
@@ -50,41 +42,16 @@ fn main() -> ExitCode {
 
 /// Runs the front end one parsed invocation selects.
 fn dispatch(invocation: Invocation, out: &mut impl Write, err: &mut impl Write) -> ExitCode {
-    if matches!(invocation, Invocation::Tui(_)) && !console_attached() {
-        return usage_failure(cli::TUI_REQUIRES_TERMINAL, err);
-    }
     let (client, endpoint) = match open_client(err) {
         Ok(connected) => connected,
         Err(status) => return status.code(),
     };
     match invocation {
         Invocation::Help => ExitStatus::Completed.code(),
-        Invocation::Tui(options) => run_tui(&options, client, endpoint, err),
         Invocation::Repl(options) => repl::run(&options, client, endpoint, out, err).code(),
         Invocation::Run { prompt, options } => {
             headless::run(&prompt, &options, client, endpoint, out, err).code()
         }
-    }
-}
-
-/// Runs the fullscreen terminal front end over one connected client.
-fn run_tui(
-    options: &Options,
-    client: IntentionClient,
-    endpoint: LocalEndpoint,
-    err: &mut impl Write,
-) -> ExitCode {
-    let workspace_root = match workspace_root(options.workspace()) {
-        Ok(root) => root,
-        Err(error) => return startup_failure(&error, err).code(),
-    };
-    let tui_options =
-        intention_tui::tui::TuiOptions::new(workspace_root, options.mode(), options.session())
-            .continuing(options.continue_session())
-            .with_theme(options.theme());
-    match intention_tui::tui::run_blocking(tui_options, client, endpoint) {
-        Ok(()) => ExitStatus::Completed.code(),
-        Err(error) => startup_failure(&error, err).code(),
     }
 }
 
@@ -150,14 +117,6 @@ pub(crate) fn session_runtime() -> DtoResult<tokio::runtime::Runtime> {
                 "the terminal runtime could not be created",
             )
         })
-}
-
-/// Returns whether the fullscreen front end has the terminal it needs.
-fn console_attached() -> bool {
-    cli::terminal_available(
-        std::io::stdin().is_terminal(),
-        std::io::stdout().is_terminal(),
-    )
 }
 
 /// Reports one safe typed startup failure and returns its process status.

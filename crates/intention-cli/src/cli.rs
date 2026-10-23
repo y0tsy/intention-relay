@@ -1,10 +1,12 @@
 //! Command-line grammar and process status of the terminal client binary.
 //!
-//! One grammar serves the three terminal front ends: the bare command line and
-//! `tui` select the fullscreen UI, `repl` selects the interactive line loop, and
-//! `run <PROMPT>` selects the headless command. The module owns the complete
-//! user-facing text (help, usage, rejections) and the closed exit-status set, so
-//! no other terminal module decides what a rejection or a run end reports.
+//! One grammar serves the two line front ends: the bare command line and `repl`
+//! select the interactive line loop, and `run <PROMPT>` selects the headless
+//! command. The fullscreen terminal UI is a separate application with its own
+//! entry point, so this grammar neither names nor proxies it. The module owns
+//! the complete user-facing text (help, usage, rejections) and the closed
+//! exit-status set, so no other terminal module decides what a rejection or a
+//! run end reports.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -12,14 +14,9 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use intention_proto::{ErrorCategoryDto, ErrorDto, RunModeDto, RunStatusDto, SessionId};
-use intention_tui::app::ThemePreference;
 
 /// The one-line usage every command-line rejection prints.
-pub const USAGE: &str = "usage: intention-tui [tui | repl | run <PROMPT>] [OPTIONS]";
-
-/// The rejection text the fullscreen front end prints without a usable terminal.
-pub const TUI_REQUIRES_TERMINAL: &str =
-    "the fullscreen front end requires a terminal on standard input and output";
+pub const USAGE: &str = "usage: intention-cli [repl | run <PROMPT>] [OPTIONS]";
 
 /// The complete help text `-h` and `--help` print.
 ///
@@ -29,25 +26,23 @@ pub const TUI_REQUIRES_TERMINAL: &str =
 pub fn help() -> String {
     let modes = RunModeDto::ALL.map(RunModeDto::as_str).join("|");
     let default = RunModeDto::DEFAULT.as_str();
-    let themes = ThemePreference::ALL.map(ThemePreference::as_str).join("|");
-    let default_theme = ThemePreference::default().as_str();
     format!(
         "Intention Relay terminal client
 
 usage:
-  intention-tui [tui] [OPTIONS]         fullscreen terminal UI (requires a terminal)
-  intention-tui repl [OPTIONS]          interactive line REPL
-  intention-tui run <PROMPT> [OPTIONS]  one headless prompt
+  intention-cli [repl] [OPTIONS]         interactive line REPL
+  intention-cli run <PROMPT> [OPTIONS]   one headless prompt
 
 options:
   --workspace PATH    workspace root for a new session (default: current directory)
   --session ID        open an existing session by its durable identifier
   --continue          continue the most recently updated session
   --mode {modes}   run policy of a created session (default: {default})
-  --theme {themes}    colour theme of the fullscreen UI (default: {default_theme})
   --timeout SECS      stop the run when it does not finish within SECS
   --format text|json  run output format: progressive text or NDJSON records
   -h, --help          print this help
+
+The fullscreen terminal UI is a separate application; see apps/tui.
 "
     )
 }
@@ -68,7 +63,6 @@ pub struct Options {
     session: Option<SessionId>,
     continue_session: bool,
     mode: Option<RunModeDto>,
-    theme: Option<ThemePreference>,
     timeout: Option<Duration>,
     format: Format,
 }
@@ -102,17 +96,6 @@ impl Options {
         self.mode
     }
 
-    /// Returns the colour theme preference the caller spelled, if any.
-    ///
-    /// The grammar carries no default: an absent `--theme` leaves the theme to
-    /// the launch's own resolution - the local settings file, then environment
-    /// detection - so a scripted run never overrides what the terminal already
-    /// carries.
-    #[must_use]
-    pub const fn theme(&self) -> Option<ThemePreference> {
-        self.theme
-    }
-
     /// Returns the run wait deadline the caller configured, if any.
     #[must_use]
     pub const fn timeout(&self) -> Option<Duration> {
@@ -129,8 +112,6 @@ impl Options {
 /// One parsed command line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Invocation {
-    /// Run the fullscreen terminal UI.
-    Tui(Options),
     /// Run the interactive line REPL.
     Repl(Options),
     /// Run one headless prompt.
@@ -204,12 +185,6 @@ impl ExitStatus {
     }
 }
 
-/// Returns whether the fullscreen front end has the terminal it needs.
-#[must_use]
-pub const fn terminal_available(stdin_is_terminal: bool, stdout_is_terminal: bool) -> bool {
-    stdin_is_terminal && stdout_is_terminal
-}
-
 /// Parses one command line into the invocation it selects.
 ///
 /// # Errors
@@ -228,10 +203,6 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
     // The flag carries only a mode the caller spelled: the durable default of a
     // created session is the core's, so the grammar substitutes none.
     let mut mode = None;
-    // The flag carries only a preference the caller spelled: an absent value
-    // leaves the theme to the launch's own resolution, and `auto` asks that
-    // resolution to run detection for this launch.
-    let mut theme = None;
     let mut timeout = None;
     let mut format = None;
 
@@ -247,7 +218,6 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
             }
             Long("continue") => continue_session = true,
             Long("mode") => mode = Some(mode_value(&text(parser)?)?),
-            Long("theme") => theme = Some(theme_value(&text(parser)?)?),
             Long("timeout") => timeout = Some(seconds(&text(parser)?)?),
             Long("format") => format = Some(format_value(&text(parser)?)?),
             Value(value) => {
@@ -262,12 +232,9 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
         }
     }
 
-    let command = command.unwrap_or(Command::Tui);
+    let command = command.unwrap_or(Command::Repl);
     if session.is_some() && continue_session {
         return Err("--session and --continue are mutually exclusive".to_owned());
-    }
-    if command != Command::Tui && theme.is_some() {
-        return Err("--theme applies to the tui command".to_owned());
     }
     if command != Command::Run {
         if timeout.is_some() {
@@ -282,12 +249,10 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
         session,
         continue_session,
         mode,
-        theme,
         timeout,
         format: format.unwrap_or(Format::Text),
     };
     match command {
-        Command::Tui => Ok(Invocation::Tui(options)),
         Command::Repl => Ok(Invocation::Repl(options)),
         Command::Run => {
             let Some(prompt) = prompt else {
@@ -304,8 +269,6 @@ pub fn parse(parser: &mut lexopt::Parser) -> Result<Invocation, String> {
 /// The command one positional argument selects.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Command {
-    /// The fullscreen terminal UI.
-    Tui,
     /// The interactive line REPL.
     Repl,
     /// One headless prompt.
@@ -320,7 +283,6 @@ impl Command {
     /// Returns the usage message for a name the grammar does not declare.
     fn parse(value: &str) -> Result<Self, String> {
         match value {
-            "tui" => Ok(Self::Tui),
             "repl" => Ok(Self::Repl),
             "run" => Ok(Self::Run),
             _ => Err(format!("unknown command '{value}'")),
@@ -357,20 +319,6 @@ fn mode_value(value: &str) -> Result<RunModeDto, String> {
     RunModeDto::parse(value).map_err(|_| {
         let modes = RunModeDto::ALL.map(RunModeDto::as_str).join(" or ");
         format!("--mode must be {modes}, got '{value}'")
-    })
-}
-
-/// Parses one `--theme` value.
-///
-/// # Errors
-///
-/// Returns the usage message for a preference the grammar does not declare.
-fn theme_value(value: &str) -> Result<ThemePreference, String> {
-    ThemePreference::parse(value).map_err(|_| {
-        let themes = ThemePreference::ALL
-            .map(ThemePreference::as_str)
-            .join(" or ");
-        format!("--theme must be {themes}, got '{value}'")
     })
 }
 
@@ -412,16 +360,16 @@ mod tests {
     /// Returns the options of one parsed front-end invocation.
     fn options_of(invocation: Invocation) -> Options {
         match invocation {
-            Invocation::Tui(options) | Invocation::Repl(options) => options,
+            Invocation::Repl(options) => options,
             Invocation::Run { options, .. } => options,
             Invocation::Help => panic!("help carries no front-end options"),
         }
     }
 
     #[test]
-    fn a_bare_command_line_selects_the_fullscreen_front_end_with_defaults() {
+    fn a_bare_command_line_selects_the_repl_with_defaults() {
         let invocation = parsed(&[]).expect("a bare command line is valid");
-        assert!(matches!(invocation, Invocation::Tui(_)));
+        assert!(matches!(invocation, Invocation::Repl(_)));
         let default = options_of(invocation);
         assert_eq!(default.workspace(), None);
         assert_eq!(default.session(), None);
@@ -429,42 +377,20 @@ mod tests {
         assert_eq!(default.mode(), None);
         assert_eq!(default.timeout(), None);
         assert_eq!(default.format(), Format::Text);
-        assert_eq!(
-            default.theme(),
-            None,
-            "the grammar carries no theme of its own"
-        );
     }
 
     #[test]
-    fn the_theme_flag_selects_one_declared_preference_for_the_fullscreen_front_end() {
-        let spelled = options_of(parsed(&["--theme", "dark"]).expect("the flag parses"));
-        assert_eq!(spelled.theme(), Some(ThemePreference::Dark));
-        let light = options_of(parsed(&["tui", "--theme=light"]).expect("the flag parses"));
-        assert_eq!(light.theme(), Some(ThemePreference::Light));
-        let automatic = options_of(parsed(&["--theme=auto"]).expect("the flag parses"));
-        assert_eq!(
-            automatic.theme(),
-            Some(ThemePreference::Auto),
-            "auto is a value the flag declares like any other"
-        );
-        let help = help();
-        let themes = ThemePreference::ALL.map(ThemePreference::as_str).join("|");
+    fn the_fullscreen_front_end_is_not_part_of_this_grammar() {
+        let rejected = parsed(&["tui"]).expect_err("the grammar declares no tui command");
+        assert_eq!(rejected, "unknown command 'tui'");
+        let theme = parsed(&["--theme", "dark"]).expect_err("the grammar declares no theme flag");
         assert!(
-            help.contains(&format!("--theme {themes}")),
-            "the help renders the declared theme set"
+            theme.contains("--theme"),
+            "the rejection names the flag the grammar does not take"
         );
         assert!(
-            help.contains("(default: auto)"),
-            "the help names the default preference"
-        );
-        let declared = ThemePreference::ALL
-            .map(ThemePreference::as_str)
-            .join(" or ");
-        assert_eq!(
-            theme_value("midnight"),
-            Err(format!("--theme must be {declared}, got 'midnight'")),
-            "an undeclared theme names the declared set"
+            !help().contains("--theme"),
+            "the help never offers a flag this binary does not parse"
         );
     }
 
@@ -507,7 +433,6 @@ mod tests {
 
     #[test]
     fn every_command_name_parses_with_its_prompt() {
-        assert!(matches!(parsed(&["tui"]), Ok(Invocation::Tui(_))));
         assert!(matches!(parsed(&["repl"]), Ok(Invocation::Repl(_))));
         let Invocation::Run { prompt, .. } =
             parsed(&["run", "read the roadmap"]).expect("run parses")
@@ -573,10 +498,8 @@ mod tests {
     #[test]
     fn terminal_only_options_are_rejected_for_the_other_commands() {
         assert!(parsed(&["repl", "--format", "json"]).is_err());
-        assert!(parsed(&["tui", "--timeout", "2"]).is_err());
+        assert!(parsed(&["--timeout", "2"]).is_err());
         assert!(parsed(&["--format", "json"]).is_err());
-        assert!(parsed(&["repl", "--theme", "dark"]).is_err());
-        assert!(parsed(&["run", "hello", "--theme", "dark"]).is_err());
     }
 
     #[test]
@@ -590,8 +513,8 @@ mod tests {
             "an unknown option is rejected"
         );
         assert!(
-            parsed(&["tui", "--renderer", "ratatui"]).is_err(),
-            "the removed renderer option is rejected"
+            parsed(&["repl", "--renderer", "ratatui"]).is_err(),
+            "an option the grammar never declared is rejected"
         );
         assert!(parsed(&["run"]).is_err(), "a missing prompt is rejected");
         assert!(
@@ -621,14 +544,6 @@ mod tests {
             parsed(&["run", "hello", "-h"]),
             Ok(Invocation::Help)
         ));
-    }
-
-    #[test]
-    fn terminal_availability_requires_both_standard_streams() {
-        assert!(terminal_available(true, true));
-        assert!(!terminal_available(true, false));
-        assert!(!terminal_available(false, true));
-        assert!(!terminal_available(false, false));
     }
 
     #[test]

@@ -13,10 +13,10 @@
 
 use std::io::{BufRead, Write};
 
+use crate::app::{CommandAction, CommandInvocation, resolve_command, short_identifier};
 use intention_client::IntentionClient;
 use intention_proto::{RunStatusDto, SessionId, run_status_is_terminal};
 use intention_transport::LocalEndpoint;
-use intention_tui::app::{CommandAction, CommandInvocation, resolve_command, short_identifier};
 
 use crate::cli::{ExitStatus, Options};
 use crate::headless::{
@@ -136,15 +136,6 @@ async fn converse<W: Write, E: Write>(
                             );
                         }
                     }
-                }
-                // The two surfaces share one vocabulary; a command that drives
-                // the fullscreen surface is known here and has nothing to drive.
-                CommandAction::SessionsBrowser | CommandAction::Theme => {
-                    let _ = writeln!(
-                        err,
-                        "error: {} needs the fullscreen front end",
-                        invocation.spec().typed_name()
-                    );
                 }
             },
             Line::Turn(turn) => {
@@ -354,14 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn the_repl_parses_the_one_vocabulary_exactly_as_the_fullscreen_surface_does() {
-        assert_eq!(
-            resolved("/theme DARK")
-                .expect("a declared value resolves")
-                .value(0),
-            Some("dark"),
-            "the value vocabulary and its case rule are the registry's"
-        );
+    fn the_repl_parses_the_one_vocabulary_the_registry_declares() {
         assert_eq!(
             resolved("/session").expect_err("the identifier is required"),
             "missing argument \"session\""
@@ -372,8 +356,8 @@ mod tests {
         );
         assert_eq!(
             resolved("/watch").expect_err("watch is registered nowhere"),
-            "unknown command /watch; known commands: /new /sessions /theme /session /quit",
-            "the REPL's notice lists the same set the hint band shows"
+            "unknown command /watch; known commands: /new /session /quit",
+            "the REPL's notice lists the registry it resolved against"
         );
     }
 }
