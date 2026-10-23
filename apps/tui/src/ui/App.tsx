@@ -18,6 +18,7 @@ import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
 import { type Palette, paletteFor } from "../theme/palette";
 import { ChatPanel } from "./ChatPanel";
+import { type CopyText, useCopyOnSelect } from "./copy";
 import { keyIntent, pastedText } from "./keys";
 import { useStore } from "./use-store";
 
@@ -45,13 +46,19 @@ function usePalette(preference: ThemePreference): Palette {
   return paletteFor(mode);
 }
 
-/** The fullscreen application. */
-export function App({ store }: { store: AppStore }) {
+/**
+ * The fullscreen application.
+ *
+ * `copy` names where a finished text selection goes; the running app leaves it
+ * out and writes to the clipboard the terminal and the host offer.
+ */
+export function App({ store, copy }: { store: AppStore; copy?: CopyText }) {
   const surface = useStore(store, selectSurface);
   const theme = useStore(store, selectTheme);
   const menu = useStore(store, selectCommandMenu);
   const palette = usePalette(theme);
   const { width, height } = useTerminalDimensions();
+  useCopyOnSelect(copy);
 
   useKeyboard((event) => {
     const intent = keyIntent(event, { surface, menu: menu !== null, height });
