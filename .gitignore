@@ -5,3 +5,6 @@
 /.env
 __pycache__/
 *.py[cod]
+node_modules/
+apps/tui/coverage/
+*.tsbuildinfo

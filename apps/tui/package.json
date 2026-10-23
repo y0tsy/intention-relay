@@ -1,0 +1,34 @@
+{
+  "name": "@intention-relay/tui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The fullscreen terminal front end of intention-relay",
+  "engines": {
+    "node": ">=26.4.0"
+  },
+  "scripts": {
+    "start": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx src/main.tsx",
+    "test": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "coverage": "node --experimental-ffi --disable-warning=ExperimentalWarning --import tsx --test --experimental-test-coverage --test-coverage-lines=60 --test-coverage-include='src/**' --test-coverage-exclude='src/bindings/**' 'src/**/*.test.ts' 'src/**/*.test.tsx'",
+    "typecheck": "tsc --noEmit",
+    "fmt": "biome format --write .",
+    "lint": "biome lint ."
+  },
+  "dependencies": {
+    "@opentui/core": "0.6.8",
+    "@opentui/react": "0.6.8",
+    "marked": "18.1.1",
+    "react": "19.3.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.2",
+    "@types/node": "26.6.5",
+    "@types/react": "19.2.9",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

@@ -6,16 +6,16 @@ proved and what it cost.
 
 ## Versions
 
-| Component | Version | Note |
-| --- | --- | --- |
-| Node | 26.12.1 | Active LTS from 2026-10-28; `engines` requires `>=26.4.0` |
-| `@opentui/core` | 0.6.8 | Zig core with prebuilt natives for eight targets |
-| `@opentui/react` | 0.6.8 | React reconciler, peer `react >= 19.2.0` |
-| React | 19.3.1 | |
-| TypeScript | 7.0.2 | Go-native compiler; no programmatic API before 7.1 |
-| `tsx` | 4.23.15 | Loader for `.tsx` under Node |
-| `@biomejs/biome` | 2.6.2 | Formatter and linter |
-| `@types/node` | 26.6.5 | |
+| Component        | Version | Note                                                      |
+| ---------------- | ------- | --------------------------------------------------------- |
+| Node             | 26.12.1 | Active LTS from 2026-10-28; `engines` requires `>=26.4.0` |
+| `@opentui/core`  | 0.6.8   | Zig core with prebuilt natives for eight targets          |
+| `@opentui/react` | 0.6.8   | React reconciler, peer `react >= 19.2.0`                  |
+| React            | 19.3.1  |                                                           |
+| TypeScript       | 7.0.2   | Go-native compiler; no programmatic API before 7.1        |
+| `tsx`            | 4.23.15 | Loader for `.tsx` under Node                              |
+| `@biomejs/biome` | 2.6.2   | Formatter and linter                                      |
+| `@types/node`    | 26.6.5  |                                                           |
 
 ## What ran
 
