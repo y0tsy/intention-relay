@@ -178,7 +178,7 @@ canonicalization-version, or digest layer wraps them ([architecture
 
 - `fork-base-snapshot`: `1 schema_version`, `2 context_schema_version`, `3 source_session_id`, `4 boundary`,
 `5 source_boundary_sequence`, `6 effective_instruction_text`, `7 materialized_model_messages`, `8
-inherited_future_defaults`, `9 workspace_state`.
+inherited_future_defaults`, `9 workspace_state`, `10 inherited_references`.
 - `fork-preview`: `1 preview_schema_version`, `2 source_session_id`, `3 boundary`, `4 source_head_sequence`,
 `5 inherited_future_defaults`, `6 workspace_state`, `7 inherited_reference_counts`. Field 4 is
 the source head observed by the preview, not the selected boundary sequence; field 7 carries the
@@ -190,6 +190,12 @@ The former `canonical_snapshot_digest`, `model_context_digest`, and `fork-comman
 the codec ([architecture 02](02-dto-and-contract-policy.md)). A command binds to the exact source state the client
 accepted through `expected_source_sequence`, which the fork transaction validates; no canonical digest and no preview
 binding are part of the current contract.
+
+`inherited_references` is the frozen reference set a child inherits: the applicable project-Goal links and the selected
+summary reference ([architecture 28](28-goal-domain-and-verification.md)), the selected role cards, and the run's frozen
+`SkillSelectionV1` ([architecture 21](21-goals-skills-context-memory-and-compaction.md)), each at the exact revision the
+source held at the selected boundary. A fork retains them verbatim, and a preview reports their counts and safe types
+instead of the values.
 
 `effective_instruction_text` carries the frozen instruction text of
 [architecture 30](30-instruction-sources-and-system-context.md), materialized
@@ -216,9 +222,10 @@ Fork provenance is stored as committed records: fork, anchor materialization, re
 a durable record alongside the ordinary session and run records. Generic metadata records and a synthetic
 source-session fork record are not acceptable audit boundaries.
 
-Inherited usage is source provenance and is never charged to the child a second time. Child totals count only
-child-owned runs; tree aggregates deduplicate inherited usage by original `RunId`. Presentation must distinguish own and
-inherited usage.
+A fork copies no usage: `fork-model-context-v1` excludes it and the base snapshot has no field for it, so inherited usage
+is never charged to the child a second time. Child totals count only the child's own runs, and a tree aggregate sums each
+run once, because every run belongs to exactly one session ([architecture
+04](04-sessions-runs-events-and-storage.md)).
 
 The closed fork safe failures through `ErrorDto` are:
 
