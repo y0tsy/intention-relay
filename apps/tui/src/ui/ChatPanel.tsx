@@ -19,13 +19,12 @@ import {
 } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { Palette } from "../theme/palette";
-import { CommittedList } from "./CommittedList";
 import { InputBlock } from "./InputBlock";
-import { ProvisionalTail } from "./ProvisionalTail";
 import { inputBlockRows, panelLayout } from "./panel";
 import { SessionBrowser } from "./SessionBrowser";
 import { Detail } from "./StatusRow";
 import { ThemePicker } from "./ThemePicker";
+import { Transcript } from "./Transcript";
 import { useNow } from "./use-now";
 import { useStore } from "./use-store";
 import { Welcome } from "./Welcome";
@@ -118,10 +117,9 @@ export function ChatPanel({
                 },
               }}
             >
-              <box flexDirection="column" gap={1}>
-                <CommittedList store={store} palette={palette} />
-                <ProvisionalTail store={store} palette={palette} />
-              </box>
+              {/* The scrollbar reserves one column, so the blocks lay out one
+                  column short of the region and never sit under the thumb. */}
+              <Transcript store={store} palette={palette} width={layout.contentColumns - 1} />
             </scrollbox>
           )}
         </box>

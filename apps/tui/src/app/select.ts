@@ -124,6 +124,11 @@ export function selectElapsed(state: AppState): number | null {
   return state.elapsed;
 }
 
+/** Returns the chunks each reasoning block has revealed, keyed by block identity. */
+export function selectExpansions(state: AppState): ReadonlyMap<string, number> {
+  return state.expansions;
+}
+
 /** Returns when the turn in flight began, in Unix milliseconds. */
 export function selectTurnStartedAt(state: AppState): number | null {
   return state.turnStart;

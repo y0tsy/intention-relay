@@ -1,0 +1,179 @@
+//! The transcript: every committed row of the open session, then the step in
+//! flight.
+//!
+//! A committed row becomes one block, and exactly one blank row separates two
+//! consecutive blocks: the user card is padded from the reasoning above the
+//! answer, the reasoning is padded from the answer, and an answer always starts
+//! after a blank row. A tool exchange is one block drawn at the call's position,
+//! so the result row it pairs with contributes no block of its own.
+//!
+//! The live tail is the step's two blocks before they commit - its reasoning,
+//! then the answer it precedes - laid out by the very components the committed
+//! row will use, so no live row looks provisional and none changes when the
+//! commit arrives.
+
+import {
+  selectExpansions,
+  selectProvisionalReasoning,
+  selectProvisionalText,
+  selectTranscript,
+} from "../app/select";
+import type { AppStore } from "../app/store";
+import type { MessageProjectionDto } from "../bindings";
+import type { Palette } from "../theme/palette";
+import { Answer } from "./blocks/Answer";
+import { markerColumns } from "./blocks/marker";
+import { Notice } from "./blocks/Notice";
+import { Reasoning } from "./blocks/Reasoning";
+import { ToolBlock } from "./blocks/ToolBlock";
+import { UserCard } from "./blocks/UserCard";
+import { ANSWER_GLYPH } from "./glyphs";
+import { useStore } from "./use-store";
+
+/** The identity a live segment's expansion is kept under. */
+export const LIVE_REASONING = "live";
+
+/** One block of the transcript: the rows it draws and what decides their state. */
+interface Block {
+  readonly key: string;
+  readonly message: MessageProjectionDto | null;
+  readonly call: MessageProjectionDto | null;
+  readonly result: MessageProjectionDto | null;
+}
+
+/** Returns the call identity one tool row carries. */
+function callId(message: MessageProjectionDto): string | null {
+  const tool = message.tool;
+  return tool === null ? null : tool.value.call_id;
+}
+
+/**
+ * Pairs every tool call with the result that answers it.
+ *
+ * A result whose call is committed is drawn by that call and returns `null`
+ * here, so an exchange is shown exactly once; a result without its call stays
+ * a block of its own and says so.
+ */
+export function blocks(messages: readonly MessageProjectionDto[]): Block[] {
+  const results = new Map<string, MessageProjectionDto>();
+  for (const message of messages) {
+    if (message.kind === "tool_result") {
+      const id = callId(message);
+      if (id !== null) {
+        results.set(id, message);
+      }
+    }
+  }
+  const drawn = new Set(results.values());
+  return messages
+    .filter((message) => !drawn.has(message))
+    .map((message) => {
+      const id = message.kind === "tool_call" ? callId(message) : null;
+      const result = id === null ? null : (results.get(id) ?? null);
+      const key = String(message.id);
+      return id === null
+        ? { key, message, call: null, result: null }
+        : { key, message, call: message, result };
+    });
+}
+
+/** Renders one committed block. */
+function CommittedBlock({
+  block,
+  palette,
+  width,
+  expansion,
+}: {
+  block: Block;
+  palette: Palette;
+  width: number;
+  expansion: number;
+}) {
+  if (block.call !== null) {
+    return (
+      <ToolBlock
+        call={block.call}
+        result={block.result}
+        palette={palette}
+        columns={width - markerColumns(ANSWER_GLYPH)}
+      />
+    );
+  }
+  const message = block.message;
+  if (message === null) {
+    return null;
+  }
+  switch (message.kind) {
+    case "user":
+      return <UserCard text={message.text} palette={palette} width={width} />;
+    case "assistant":
+      return (
+        <>
+          {message.reasoning === null || message.reasoning.trim().length === 0 ? null : (
+            <Reasoning
+              text={message.reasoning}
+              palette={palette}
+              width={width}
+              columns={width}
+              expansion={expansion}
+            />
+          )}
+          {message.text.trim().length === 0 ? null : (
+            <Answer text={message.text} palette={palette} />
+          )}
+        </>
+      );
+    case "notice":
+      return <Notice text={message.text} palette={palette} />;
+    case "tool_call":
+    case "tool_result":
+      return (
+        <ToolBlock
+          call={block.call}
+          result={block.result ?? (message.kind === "tool_result" ? message : null)}
+          palette={palette}
+          columns={width - markerColumns(ANSWER_GLYPH)}
+        />
+      );
+  }
+}
+
+/** Renders the committed rows and the step in flight. */
+export function Transcript({
+  store,
+  palette,
+  width,
+}: {
+  store: AppStore;
+  palette: Palette;
+  width: number;
+}) {
+  const messages = useStore(store, selectTranscript);
+  const expansions = useStore(store, selectExpansions);
+  const liveReasoning = useStore(store, selectProvisionalReasoning);
+  const liveText = useStore(store, selectProvisionalText);
+  const committed = blocks(messages);
+  return (
+    <box flexDirection="column" gap={1}>
+      {committed.map((block) => (
+        <CommittedBlock
+          key={block.key}
+          block={block}
+          palette={palette}
+          width={width}
+          expansion={expansions.get(block.key) ?? 0}
+        />
+      ))}
+      {liveReasoning.length === 0 ? null : (
+        <Reasoning
+          text={liveReasoning}
+          palette={palette}
+          width={width}
+          columns={width}
+          expansion={expansions.get(LIVE_REASONING) ?? 0}
+        />
+      )}
+      {liveText.length === 0 ? null : <Answer text={liveText} palette={palette} />}
+    </box>
+  );
+}

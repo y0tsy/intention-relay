@@ -44,23 +44,54 @@ function withoutComposer(lines: readonly string[]): string[] {
   return lines.filter((_, index) => index !== composer);
 }
 
-/** Returns the transcript the frame painted, without the chrome around it. */
+/** The columns one live answer's marker takes before its text. */
+const ANSWER_MARK = /^∷ /;
+
+/**
+ * Returns the text of a transcript's answers, their markers aside.
+ *
+ * An answer's marker rides its first display row and the body hangs beside it,
+ * so naming the marker is what makes two frames of the same answer comparable.
+ */
+function answerRows(lines: readonly string[]): string[] {
+  return lines.map((line) => line.replace(ANSWER_MARK, "").replace(/^ {2}(?=\S)/, ""));
+}
+
+/**
+ * Returns the transcript the frame painted, without the chrome around it.
+ *
+ * The transcript is the region between the panel's own top border and the input
+ * block's: the input block is the last frame above the line the draft is typed
+ * on, so its top border is where the transcript stops.
+ */
 function transcriptLines(lines: readonly string[]): string[] {
-  // The transcript is the panel region between the panel's own frame and the
-  // input block's frame: everything above opens the panel, everything below
-  // is the prompt's own block.
-  // The window's own margin is a blank row above the panel, and the panel's
-  // frame is the row after it.
   const start = lines.findIndex((line) => line.startsWith("╭"));
-  const inputTop = lines.findIndex((line) => line.startsWith("│") && line.includes("╭"));
-  const body = lines.slice(start + 1, inputTop < 0 ? lines.length : inputTop).map((line) =>
-    line.startsWith("│")
-      ? line
-          .slice(1, line.endsWith("│") ? -1 : undefined)
-          .replace(/^ /, "")
-          .trimEnd()
-      : line,
-  );
+  const composer = lines.findLastIndex((line) => line.includes("> "));
+  let inputTop = lines.length;
+  for (let index = composer - 1; index > start; index -= 1) {
+    const line = lines[index];
+    if (line?.includes("╭") === true) {
+      inputTop = index;
+      break;
+    }
+  }
+  // A nested frame - the user card or the input block inside the panel -
+  // contributes its own border columns, which peel away until the text shows.
+  const body = lines.slice(start + 1, inputTop).map((line) => {
+    let row = line;
+    for (;;) {
+      const before = row;
+      row = row
+        .replace(/^│ ?/, "")
+        .replace(/^ +/, "")
+        .replace(/ +│ *$/, "")
+        .replace(/│ *$/, "")
+        .trimEnd();
+      if (row === before) {
+        return row;
+      }
+    }
+  });
   while (body.length > 0 && (body[0] ?? "").trim().length === 0) {
     body.shift();
   }
@@ -79,10 +110,10 @@ function transcriptLines(lines: readonly string[]): string[] {
 function watchParses(): string[] {
   const seen: string[] = [];
   const parse = marked.lexer.bind(marked);
-  mock.method(marked, "lexer", (source: string) => {
+  mock.method(marked, "lexer", ((source: string) => {
     seen.push(source);
     return parse(source);
-  });
+  }) as typeof marked.lexer);
   return seen;
 }
 
@@ -122,7 +153,7 @@ test("an appended row lays out only the tail", async (t) => {
     messages: [row(1, "user", "first"), row(2, "assistant", "an earlier answer")],
     run: run("completed"),
   });
-  const setup = await mount(store);
+  const setup = await mount(store, 60, 24);
   const seen = watchParses();
   t.after(() => mock.restoreAll());
 
@@ -131,14 +162,19 @@ test("an appended row lays out only the tail", async (t) => {
   await setup.renderOnce();
 
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
-  // A committed row is separated from the next one by one blank row.
-  assert.deepEqual(transcriptLines(frameLines(setup)), [
-    "> first",
-    "",
-    "an earlier answer",
-    "",
-    "a later answer",
-  ]);
+  // A committed row is separated from the next one by one blank row: the user
+  // card, the gap, the earlier answer, the gap, the later answer.
+  const shown = transcriptLines(frameLines(setup));
+  assert.ok(
+    shown.some((line) => line.startsWith("╭─") && line.includes("❯ you")),
+    "the prompt is a card",
+  );
+  assert.ok(shown.includes("first"), "the card names the prompt");
+  assert.deepEqual(
+    shown.filter((line) => line.startsWith("∷")),
+    ["∷ an earlier answer", "∷ a later answer"],
+    "each answer opens with its own marker",
+  );
 
   store.dispose();
   await setup.dispose();
@@ -150,7 +186,7 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
     messages: [row(1, "user", "ask")],
     run: run("running"),
   });
-  const setup = await mount(store);
+  const setup = await mount(store, 60, 24);
   const seen = watchParses();
   t.after(() => mock.restoreAll());
 
@@ -165,7 +201,16 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
     ["one ", "one two ", "one two three"],
     "every frame parses the block still being written",
   );
-  assert.deepEqual(transcriptLines(frameLines(setup)), ["> ask", "", "one two three"]);
+  const stream = transcriptLines(frameLines(setup));
+  assert.ok(
+    stream.some((line) => line.startsWith("╭─") && line.includes("❯ you")),
+    "the prompt is a card",
+  );
+  assert.deepEqual(
+    answerRows(stream.filter((line) => line.startsWith("∷"))),
+    ["one two three"],
+    "the tail is the answer the row becomes",
+  );
 
   store.dispose();
   await setup.dispose();
@@ -187,8 +232,12 @@ test("the streaming tail lays out as the committed row it becomes", async () => 
   await setup.renderOnce();
   const committed = transcriptLines(frameLines(setup));
 
-  assert.deepEqual(tail, ["- one", "- two", "", "after the list"]);
-  assert.deepEqual(committed, tail, "the row lands exactly where the tail stood");
+  assert.deepEqual(answerRows(tail), ["- one", "- two", "", "after the list"]);
+  assert.deepEqual(
+    answerRows(committed),
+    answerRows(tail),
+    "the row lands exactly where the tail stood",
+  );
 
   store.dispose();
   await setup.dispose();

@@ -95,6 +95,9 @@ export function App({ store }: { store: AppStore }) {
       case "close_surface":
         store.dispatch({ kind: "surface_closed" });
         return;
+      case "expand_reasoning":
+        store.dispatch({ kind: "reasoning_expanded", id: null });
+        return;
     }
   });
 

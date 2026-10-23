@@ -112,6 +112,8 @@ export class AppState {
   elapsedMillis: number | null = null;
   /** When the current turn began, in Unix milliseconds, or `null` before one. */
   turnStartedAt: number | null = null;
+  /** The chunks each reasoning block has revealed, keyed by block identity. */
+  expansions: ReadonlyMap<string, number> = new Map();
   /** The elapsed reading at which the newest open tool call was first seen. */
   #toolSince: number | null = null;
   /** Whether an open tool call has been in flight past the working threshold. */
@@ -167,6 +169,9 @@ export class AppState {
         return this.#applyFailure(action.error);
       case "elapsed_reported":
         this.#applyElapsedReported(action.millis);
+        return [];
+      case "reasoning_expanded":
+        this.#applyReasoningExpanded(action.id);
         return [];
       case "run_cancel_accepted":
         return [];
@@ -578,6 +583,46 @@ export class AppState {
       return;
     }
     this.#toolWorking = millis - this.#toolSince > TOOL_WORKING_AFTER_MILLIS;
+  }
+
+  /**
+   * Reveals one more chunk of one reasoning block.
+   *
+   * A block that names no identity asks for the newest block there is: the live
+   * segment while a step is reasoning, the last committed one after it, so the
+   * gesture reveals what the reader is looking at.
+   */
+  #applyReasoningExpanded(id: string | null): void {
+    const key = id ?? this.#newestReasoningBlock();
+    if (key === null) {
+      return;
+    }
+    const next = new Map(this.expansions);
+    next.set(key, (this.expansions.get(key) ?? 0) + 1);
+    this.expansions = next;
+  }
+
+  /** Returns the identity of the newest block that has reasoning to reveal. */
+  #newestReasoningBlock(): string | null {
+    if (this.provisionalReasoning.length > 0) {
+      return "live";
+    }
+    for (let index = this.transcript.length - 1; index >= 0; index -= 1) {
+      const message = this.transcript[index];
+      if (
+        message !== undefined &&
+        message.reasoning !== null &&
+        message.reasoning.trim().length > 0
+      ) {
+        return String(message.id);
+      }
+    }
+    return null;
+  }
+
+  /** Returns the chunks one reasoning block has revealed. */
+  expansionOf(id: string): number {
+    return this.expansions.get(id) ?? 0;
   }
 
   /** Records a daemon this front end could not reach. */

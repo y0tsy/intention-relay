@@ -130,7 +130,8 @@ test("the transcript paints the rows the daemon sent", async () => {
     await until(() => store.state.stream === "live");
     const painted_ = await lines(store, 60, 16);
     const text = painted_.join("\n");
-    assert.match(text, /> explain this repository/);
+    assert.match(text, /❯ you/);
+    assert.match(text, /explain this repository/);
     assert.match(text, /It relays intentions\./);
     assert.equal(
       text.includes("intention relay\n"),

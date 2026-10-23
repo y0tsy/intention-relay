@@ -20,17 +20,30 @@ function recordingStore(): { store: AppStore; reported: number[] } {
   return { store: store as unknown as AppStore, reported };
 }
 
-/** Mounts the clock alone, so its interval is the only thing under test. */
+/** Runs the clock inside the tree, so its interval is the only thing under test. */
+function Clock({
+  store,
+  turnStartedAt,
+  live,
+}: {
+  store: AppStore;
+  turnStartedAt: number | null;
+  live: boolean;
+}) {
+  useRunClock(store, turnStartedAt, live);
+  return <text>clock</text>;
+}
+
+/** Mounts the clock alone at one size. */
 async function mountClock(
   store: AppStore,
   turnStartedAt: number | null,
   live: boolean,
 ): Promise<{ renderOnce: () => Promise<void>; dispose: () => Promise<void> }> {
-  function Clock() {
-    useRunClock(store, turnStartedAt, live);
-    return <text>clock</text>;
-  }
-  return await testRender(<Clock />, { width: 10, height: 1 });
+  return await testRender(<Clock store={store} turnStartedAt={turnStartedAt} live={live} />, {
+    width: 10,
+    height: 1,
+  });
 }
 
 test("a live turn reports its elapsed time ten times a second", async (t) => {

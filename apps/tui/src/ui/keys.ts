@@ -46,7 +46,9 @@ export type KeyIntent =
   /** Commit the selection of the open surface. */
   | { readonly kind: "commit_selection" }
   /** Dismiss the open surface. */
-  | { readonly kind: "close_surface" };
+  | { readonly kind: "close_surface" }
+  /** Reveals one more chunk of the newest reasoning block. */
+  | { readonly kind: "expand_reasoning" };
 
 /** What the intent depends on beyond the event itself. */
 export interface KeyContext {
@@ -99,6 +101,11 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
   }
   if (event.ctrl && event.name === "d") {
     return { kind: "quit" };
+  }
+  // Ctrl+E reveals more of the newest reasoning block on the chat surface; on a
+  // surface that owns the keyboard it stays a key that surface may claim.
+  if (event.ctrl && event.name === "e" && context.surface === "chat") {
+    return { kind: "expand_reasoning" };
   }
   if (context.surface !== "chat") {
     switch (event.name) {
