@@ -32,6 +32,8 @@ export type CommandAction =
 export interface CommandSpec {
   /** The command's name, spelled without its leading slash. */
   readonly name: string;
+  /** The column the band names the command under: Session, Navigation, Appearance. */
+  readonly category: string;
   /** The arguments the command declares, in the order a line fills them. */
   readonly arguments: readonly ArgumentSpec[];
   /** What the command does, as the welcome surface offers it. */
@@ -44,24 +46,28 @@ export interface CommandSpec {
 export const COMMANDS: readonly CommandSpec[] = [
   {
     name: "new",
+    category: "Session",
     arguments: [],
     summary: "start a fresh session",
     action: "new_session",
   },
   {
     name: "session",
+    category: "Session",
     arguments: [{ name: "session", required: true }],
     summary: "open the session with this id",
     action: "open_session",
   },
   {
     name: "sessions",
+    category: "Navigation",
     arguments: [],
     summary: "browse the sessions on this machine",
     action: "list_sessions",
   },
   {
     name: "theme",
+    category: "Appearance",
     // The value is optional: a bare `/theme` opens the picker, and a declared
     // value pins the palette in one word.
     arguments: [{ name: "theme", required: false }],
@@ -70,6 +76,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   },
   {
     name: "quit",
+    category: "Session",
     arguments: [],
     summary: "leave",
     action: "quit",

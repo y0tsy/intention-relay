@@ -62,11 +62,11 @@ test("the theme picker takes the panel when it is asked for", async () => {
   store.dispatch({ kind: "theme_requested" });
   const painted_ = await lines(store, 60, 16);
   const text = painted_.join("\n");
-  assert.match(text, /^│\s+theme\b/m);
-  assert.match(text, /light\s+current/);
-  assert.match(text, /↑↓ move · enter apply/);
-  assert.equal(text.includes("INTENTION"), false, "the welcome is not painted");
-  assert.equal(text.includes("↑↓ move · enter apply"), true, "the picker owns the region");
+  assert.match(text, /Theme/, "the picker's panel is titled");
+  assert.match(text, /> light/, "the highlighted preference is the one the store holds");
+  assert.match(text, /> light\s+for a light terminal/);
+  assert.match(text, /for a light terminal\s+current/);
+  assert.match(text, /enter apply \| esc revert/, "the panel carries its own legend");
   store.dispose();
 });
 

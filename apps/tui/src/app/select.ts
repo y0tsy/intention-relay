@@ -16,6 +16,7 @@ import type {
 } from "../bindings";
 import type { ThemePreference } from "./action";
 import type { Draft } from "./editor";
+import { type CommandMenu, commandMenu } from "./menu";
 import type { RunPhase } from "./run";
 import type { AppState, ConnectionStatus, Surface } from "./state";
 
@@ -67,6 +68,17 @@ export function selectError(state: AppState): string | null {
 /** Returns the notice the chat surface reports. */
 export function selectNotice(state: AppState): string | null {
   return state.notice;
+}
+
+/**
+ * Returns the rows the word the caret sits in opens, or `null` while no band is
+ * open.
+ *
+ * The menu is derived, and the binding reads it once per store version, so a
+ * keystroke that does not move the word costs no band.
+ */
+export function selectCommandMenu(state: AppState): CommandMenu | null {
+  return commandMenu(state.draft);
 }
 
 /** Returns the input line the composer shows. */
