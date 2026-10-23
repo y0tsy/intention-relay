@@ -193,50 +193,6 @@ export const DARK: Palette = {
   error: hex(0x5e, 0x5e, 0x60),
 };
 
-/** Returns the role names every rule below reads, error and scarlet apart. */
-function roleNames(): ReadonlyArray<keyof Omit<Palette, "error" | "scarlet">> {
-  return [
-    "canvas",
-    "panel",
-    "headerBg",
-    "tabActiveBg",
-    "rowSelectedBg",
-    "rowAltBg",
-    "stubBg",
-    "inputBg",
-    "badgeBg",
-    "badgeInk",
-    "userSurface",
-    "userBorder",
-    "userLabel",
-    "selectionBg",
-    "toolSurface",
-    "toolBorder",
-    "toolLabel",
-    "toolPreview",
-    "noticeSurface",
-    "noticeInk",
-    "scrollTrack",
-    "scrollThumb",
-    "dividerTint",
-    "border",
-    "accent",
-    "accentDeep",
-    "markdownHeading",
-    "markdownCode",
-    "markdownLink",
-    "reasoningBody",
-    "reasoningHeader",
-    "reasoningMarker",
-    "timerInk",
-    "ink",
-    "inkMuted",
-    "inkFaint",
-    "success",
-    "warning",
-  ];
-}
-
 /** Returns the palette one preference resolves to. */
 export function paletteFor(preference: "light" | "dark"): Palette {
   return preference === "light" ? LIGHT : DARK;

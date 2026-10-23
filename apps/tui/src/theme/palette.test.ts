@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DARK, LIGHT, paletteFor, type Palette } from "./palette";
+import { DARK, LIGHT, type Palette, paletteFor } from "./palette";
 
 /** Every role but the documented alias, in declaration order. */
 const ROLES: ReadonlyArray<keyof Omit<Palette, "error" | "scarlet">> = [

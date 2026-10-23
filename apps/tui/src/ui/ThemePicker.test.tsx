@@ -5,8 +5,8 @@ import test from "node:test";
 import { THEME_PREFERENCES } from "../app/action";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { PICKER_HINTS, THEME_ENTRIES, ThemePicker } from "./ThemePicker";
 import { renderHints } from "./format";
+import { PICKER_HINTS, THEME_ENTRIES, ThemePicker } from "./ThemePicker";
 
 /** Renders the picker at one panel size and returns its lines. */
 async function lines(

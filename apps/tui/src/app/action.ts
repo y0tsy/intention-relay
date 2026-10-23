@@ -43,6 +43,13 @@ export type Action =
   | { readonly kind: "turn_accepted"; readonly outcome: SendUserTurnOutcomeDto }
   /** Sending one user turn failed. */
   | { readonly kind: "turn_failed"; readonly error: ErrorDto }
+  /**
+   * The front end measured the live turn's own elapsed time.
+   *
+   * The clock lives in the front end, so the value arrives here as an action and
+   * the state stays a pure function of what it was told.
+   */
+  | { readonly kind: "elapsed_reported"; readonly millis: number }
   /** The daemon accepted one stop request. */
   | { readonly kind: "run_cancel_accepted" }
   /** Stopping the active run failed. */

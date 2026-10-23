@@ -1,78 +1,101 @@
-//! The surface a fresh session starts on.
+//! The welcome pane: the product lockup over the version the binary was built as.
 //!
-//! The block renders the composition its plan chose for the panel it was given:
-//! whole lines only, never more rows than the panel holds, and the leftover rows
-//! shared around the block instead of squashing its children.
+//! The pane replaces the transcript's content in the same region, so the input
+//! block, the detail line, and the panel geometry never move: the lockup sits at
+//! the top of the region and the overview block is pinned to its last rows,
+//! directly above the input block. A region too short for both drops the lockup
+//! first, and a region with room for nothing draws nothing.
+//!
+//! A terminal has no font sizes, so the lockup approximates one: the product word
+//! is bold in the accent ink and the trailing word is tracked out one column per
+//! letter in the muted ink. Every column is measured through the terminal's own
+//! width helper, so the pair centres however the letters render.
 
 import { TextAttributes } from "@opentui/core";
-import { COMMANDS } from "../app/commands";
 import type { Palette } from "../theme/palette";
-import { commandRow, planRows, planWelcome } from "./welcome-plan";
+import { displayWidth } from "./measure";
+import { welcomeLayout } from "./panel";
 
-/** Renders the empty transcript. */
+/** The product word of the lockup. */
+const PRODUCT = "INTENTION";
+
+/** The trailing word of the lockup. */
+const TRAILING = "RELAY";
+
+/** The columns the lockup keeps between its two words. */
+const LOGO_GAP = 2;
+
+/** The version this application is built as. */
+export const VERSION = "0.0.0";
+
+/** Returns one word written with a blank column between its letters. */
+function tracked(word: string): string {
+  return [...word].join(" ");
+}
+
+/** Returns the blank columns a centred run of `width` needs beside it. */
+function pad(width: number): number {
+  return Math.max(
+    0,
+    Math.floor((width - (displayWidth(PRODUCT) + LOGO_GAP + displayWidth(tracked(TRAILING)))) / 2),
+  );
+}
+
+/** Renders the lockup: the product word, the gap, and the tracked trailing word. */
+function Lockup({ width, palette }: { width: number; palette: Palette }) {
+  return (
+    <box flexDirection="row" height={1}>
+      <text>{" ".repeat(pad(width))}</text>
+      <text fg={palette.accentDeep} attributes={TextAttributes.BOLD}>
+        {PRODUCT}
+      </text>
+      <text>{" ".repeat(LOGO_GAP)}</text>
+      <text fg={palette.inkMuted}>{tracked(TRAILING)}</text>
+    </box>
+  );
+}
+
+/** Renders the framed overview: one row of the sub-blocks the core can fill. */
+function Overview({ rows, width, palette }: { rows: number; width: number; palette: Palette }) {
+  return (
+    <box
+      height={rows}
+      width={width}
+      flexDirection="column"
+      borderStyle="rounded"
+      border
+      borderColor={palette.border}
+      backgroundColor={palette.panel}
+      paddingLeft={1}
+      paddingRight={1}
+    >
+      <box flexDirection="row" height={1}>
+        <text bg={palette.badgeBg} fg={palette.badgeInk}>
+          {` Version ${VERSION} `}
+        </text>
+      </box>
+    </box>
+  );
+}
+
+/** Renders the welcome pane over the rows and columns of the transcript region. */
 export function Welcome({
-  width,
-  height,
-  workspace,
+  rows,
+  columns,
   palette,
 }: {
-  width: number;
-  height: number;
-  workspace: string;
+  rows: number;
+  columns: number;
   palette: Palette;
 }) {
-  const textWidth = Math.max(8, Math.min(width - 4, 78));
-  const plan = planWelcome({ width, height, workspace });
-  const workspaceLine = `new sessions run in ${workspace}`;
-  const free = height - planRows(plan, textWidth, workspaceLine);
+  const layout = welcomeLayout(rows);
   return (
-    <box flexDirection="column" flexGrow={1} paddingLeft={1} paddingRight={1} gap={1}>
-      {/* A roomy panel centres the block, which reads as deliberate; a tight one
-          keeps it at the top so the last line still has a blank row under it. */}
-      <box
-        flexDirection="column"
-        flexGrow={1}
-        justifyContent={free >= 3 ? "center" : "flex-start"}
-        gap={1}
-      >
-        <text fg={palette.ink} attributes={TextAttributes.BOLD}>
-          intention relay
-        </text>
-        {plan.rule ? <text fg={palette.inkFaint}>{"─".repeat(Math.max(4, textWidth))}</text> : null}
-        {plan.tagline === null ? null : (
-          <text wrapMode="word" fg={palette.inkMuted}>
-            {plan.tagline}
-          </text>
-        )}
-        {plan.examples.length === 0 ? null : (
-          <box flexDirection="column">
-            {plan.examples.map((example) => (
-              <text key={example} wrapMode="word" fg={palette.inkFaint}>
-                {`- ${example}`}
-              </text>
-            ))}
-          </box>
-        )}
-        {plan.commands === "none" ? null : plan.commands === "hint" ? (
-          <text fg={palette.inkFaint}>/ commands</text>
-        ) : (
-          <box flexDirection="column">
-            {COMMANDS.map((command) => {
-              const [usage, summary] = commandRow(command, textWidth).split("  ");
-              return (
-                <text key={command.name} wrapMode="word" fg={palette.inkFaint}>
-                  <span fg={palette.markdownLink}>{usage}</span>
-                  {summary === undefined ? "" : `  ${summary}`}
-                </text>
-              );
-            })}
-          </box>
-        )}
-      </box>
-      {plan.workspace ? (
-        <text wrapMode="word" fg={palette.inkFaint}>
-          {workspaceLine}
-        </text>
+    <box flexDirection="column" height={rows} width={columns}>
+      <box height={layout.lead} />
+      {layout.logo > 0 ? <Lockup width={columns} palette={palette} /> : null}
+      <box height={layout.filler} />
+      {layout.overview > 0 ? (
+        <Overview rows={layout.overview} width={columns} palette={palette} />
       ) : null}
     </box>
   );

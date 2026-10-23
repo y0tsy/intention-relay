@@ -10,6 +10,7 @@
 import type {
   ErrorDto,
   MessageProjectionDto,
+  RunModeDto,
   RunProjectionDto,
   RunStatusDto,
   SendUserTurnOutcomeDto,
@@ -17,7 +18,7 @@ import type {
   SessionSnapshotDto,
   SessionSummariesDto,
 } from "../bindings";
-import { SessionStreamState } from "../client/stream";
+import { runStatusIsTerminal, SessionStreamState } from "../client/stream";
 import { type Action, THEME_PREFERENCES, type ThemePreference } from "./action";
 import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
 import {
@@ -30,6 +31,7 @@ import {
 } from "./editor";
 import type { Effect } from "./effect";
 import { PromptHistory } from "./history";
+import { type RunPhase, TOOL_WORKING_AFTER_MILLIS } from "./run";
 
 /** Which surface owns the keyboard. */
 export type Surface = "chat" | "sessions" | "theme";
@@ -45,6 +47,9 @@ export type StreamStatus = "inactive" | "live" | "failed" | "ended";
  * list on every call would repaint forever.
  */
 const NO_ROWS: readonly MessageProjectionDto[] = [];
+
+/** Whether the daemon this front end talks to has answered. */
+export type ConnectionStatus = "connecting" | "ready" | "offline";
 
 /** Every value one front end holds, with no terminal attached. */
 export class AppState {
@@ -95,6 +100,22 @@ export class AppState {
   draft: Draft = EMPTY_DRAFT;
   /** The one-line notice the chat surface shows instead of an effect. */
   notice: string | null = null;
+  /** Whether the daemon this front end talks to has answered. */
+  connection: ConnectionStatus = "connecting";
+  /** The run mode the open session's projection carries, or `null`. */
+  sessionMode: RunModeDto | null = null;
+  /** The effective provider model the session's projection names, or `null`. */
+  sessionModel: string | null = null;
+  /** The live phase of the run this front end observes, if one is live. */
+  phase: RunPhase | null = null;
+  /** The elapsed time this front end measured for the current or last turn. */
+  elapsedMillis: number | null = null;
+  /** When the current turn began, in Unix milliseconds, or `null` before one. */
+  turnStartedAt: number | null = null;
+  /** The elapsed reading at which the newest open tool call was first seen. */
+  #toolSince: number | null = null;
+  /** Whether an open tool call has been in flight past the working threshold. */
+  #toolWorking = false;
   /** The rows {@link AppState.transcript} handed out last, and their revision. */
   #rows: readonly MessageProjectionDto[] = NO_ROWS;
   #rowsSource: SessionStreamState | null = null;
@@ -118,11 +139,12 @@ export class AppState {
   update(action: Action): readonly Effect[] {
     switch (action.kind) {
       case "connect_requested":
+        this.connection = "connecting";
         return [{ kind: "connect" }];
       case "bootstrapped":
         return this.#applyBootstrapped();
       case "bootstrap_failed":
-        return this.#applyFailure(action.error);
+        return this.#applyBootstrapFailed(action.error);
       case "session_snapshot_loaded":
         return this.#applySessionSnapshot(action.snapshot);
       case "session_snapshot_failed":
@@ -143,6 +165,9 @@ export class AppState {
         return this.#applyTurnAccepted(action.outcome);
       case "turn_failed":
         return this.#applyFailure(action.error);
+      case "elapsed_reported":
+        this.#applyElapsedReported(action.millis);
+        return [];
       case "run_cancel_accepted":
         return [];
       case "run_cancel_failed":
@@ -282,6 +307,7 @@ export class AppState {
   /** Records a ready daemon and asks for the selected session. */
   #applyBootstrapped(): readonly Effect[] {
     this.error = null;
+    this.connection = "ready";
     const sessionId = this.sessionId ?? this.initialSession;
     return sessionId === null ? [] : [{ kind: "open_session", sessionId }];
   }
@@ -291,6 +317,8 @@ export class AppState {
     const read = SessionStreamState.fromSnapshot(snapshot);
     this.#mergeTranscript(read);
     this.sessionId = snapshot.session_id;
+    this.sessionMode = snapshot.projection.mode;
+    this.sessionModel = snapshot.projection.provider_model ?? null;
     this.stream = "inactive";
     this.error = null;
     // Opening a session records no notice: the notice line stays free for real
@@ -385,6 +413,7 @@ export class AppState {
       // dropping it keeps the committed rows authoritative.
       return [];
     }
+    this.#applyPhase(state);
     this.sessionState = state;
     // A frame the client accepted is the evidence that this stream carries the
     // session's traffic: the one reconnect a later loss is owed is restored
@@ -409,6 +438,7 @@ export class AppState {
     switch (outcome.kind) {
       case "started":
       case "pending":
+        this.#beginTurn();
         return this.#ensureSessionStream();
     }
   }
@@ -488,10 +518,87 @@ export class AppState {
    */
   #submitTurn(content: string): readonly Effect[] {
     this.error = null;
+    this.#beginTurn();
     if (this.sessionId === null) {
       return [{ kind: "create_session", firstTurn: content }];
     }
     return [{ kind: "send_turn", sessionId: this.sessionId, content }];
+  }
+
+  /**
+   * Opens a turn: the row reads `Waiting…` until a stream names more.
+   *
+   * The elapsed value the previous turn measured belongs to that turn, so a new
+   * turn starts from zero and the tool watch forgets the call it was watching.
+   */
+  #beginTurn(): void {
+    this.phase = "waiting";
+    this.elapsedMillis = 0;
+    this.turnStartedAt = Date.now();
+    this.#toolSince = null;
+    this.#toolWorking = false;
+  }
+
+  /** Reads one accepted frame's phase out of what it changed. */
+  #applyPhase(state: SessionStreamState): void {
+    const status = state.status;
+    if (status !== null && runStatusIsTerminal(status)) {
+      this.phase = null;
+      this.#toolSince = null;
+      this.#toolWorking = false;
+      return;
+    }
+    if (state.provisionalText.length > 0) {
+      this.phase = "answering";
+      return;
+    }
+    if (state.provisionalReasoning.length > 0) {
+      this.phase = "thinking";
+      return;
+    }
+    this.phase = this.phase ?? "waiting";
+  }
+
+  /**
+   * Records one elapsed reading and decides whether a tool call is work.
+   *
+   * A call open for longer than the threshold reads as `working`; a shorter one
+   * leaves the phase it found, so a fast tool never flickers the row.
+   */
+  #applyElapsedReported(millis: number): void {
+    this.elapsedMillis = millis;
+    const open = this.activeRun?.open_tool_calls ?? 0;
+    if (open === 0) {
+      this.#toolSince = null;
+      this.#toolWorking = false;
+      return;
+    }
+    if (this.#toolSince === null) {
+      this.#toolSince = millis;
+      return;
+    }
+    this.#toolWorking = millis - this.#toolSince > TOOL_WORKING_AFTER_MILLIS;
+  }
+
+  /** Records a daemon this front end could not reach. */
+  #applyBootstrapFailed(error: ErrorDto): readonly Effect[] {
+    this.connection = "offline";
+    return this.#applyFailure(error);
+  }
+
+  /** Returns the live phase the status row names, if one is live. */
+  get runPhase(): RunPhase | null {
+    return this.#toolWorking ? "working" : this.phase;
+  }
+
+  /** Returns the elapsed value this front end measured, if it measured one. */
+  get elapsed(): number | null {
+    return this.elapsedMillis;
+  }
+
+  /** Returns when the turn in flight began, in Unix milliseconds. */
+  get turnStart(): number | null {
+    return this.turnStartedAt;
   }
 
   /** Requests that the live run stop for good. */

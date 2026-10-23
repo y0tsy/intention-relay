@@ -1,119 +1,259 @@
-//! The status line: who this session is, and what is happening to the prompt.
+//! The status row and the detail line.
+//!
+//! The row names what a reader acts on, in words: the connection, the session,
+//! the session's run mode, the run's live phase, and the committed token usage.
+//! The live phase is `Waiting…` from the moment a turn request leaves,
+//! `Thinking…` when the reasoning channel starts, `Answering…` when the answer
+//! channel does, and `Working…` while a tool call has been open past the
+//! threshold. A completed run reads `Answered in 13s` from the projection's own
+//! times, the interrupted and failed runs keep their words, and a live elapsed
+//! value reads in tenths while the committed one reads in whole seconds. A run
+//! that has committed no usage carries no usage segment rather than a fabricated
+//! number.
+//!
+//! The detail line under the row is the failure, the notice, or the idle hint -
+//! never a placeholder for a fact the front end does not carry.
 
+import { committedSeconds, elapsedTenths, phaseWord, type RunPhase } from "../app/run";
 import {
-  selectAnswering,
-  selectLive,
+  selectConnection,
+  selectElapsed,
+  selectError,
+  selectFinishedAt,
+  selectNotice,
+  selectRunPhase,
   selectRunStatus,
   selectSessionId,
+  selectSessionMode,
   selectStartedAt,
-  selectTokens,
+  selectTurnStartedAt,
+  selectUsage,
 } from "../app/select";
+import type { ConnectionStatus } from "../app/state";
 import type { AppStore } from "../app/store";
-import type { RunStatusDto } from "../bindings";
+import type { RunModeDto, RunStatusDto } from "../bindings";
 import type { Palette } from "../theme/palette";
-import { describeRun, formatElapsed, shortId } from "./format";
-import { useNow } from "./use-now";
+import { SEPARATOR } from "./glyphs";
+import { useRunClock } from "./run-clock";
 import { useStore } from "./use-store";
 
-/** The facts the status line renders. */
+/** The detail line this front end shows while no error or notice claims it. */
+export const DEFAULT_HINT = "enter sends | /new session | /sessions switch";
+
+/** The word for a daemon this front end has not reached yet. */
+const CONNECTING = "Connecting…";
+
+/** The word for a ready daemon. */
+const READY = "Ready";
+
+/** The word for a daemon the last attempt could not reach. */
+const OFFLINE = "Offline";
+
+/** One styled run of the status row. */
+export interface StatusRun {
+  /** The text the run paints. */
+  readonly text: string;
+  /** The role the run's ink comes from. */
+  readonly ink: keyof Palette;
+}
+
+/** What the status row reads. */
 export interface StatusFacts {
-  /** The open session's identity, or `null` before any session is open. */
+  /** Whether the daemon has answered. */
+  readonly connection: ConnectionStatus;
+  /** The open session's identity, or `null`. */
   readonly sessionId: string | null;
-  /** The run's lifecycle status, or `null` when the session reports none. */
+  /** The session's run mode, or `null`. */
+  readonly mode: RunModeDto | null;
+  /** The live phase, or `null` when no run is live. */
+  readonly phase: RunPhase | null;
+  /** The run's lifecycle status, or `null`. */
   readonly runStatus: RunStatusDto | null;
+  /** The measured elapsed value of the live turn, in milliseconds. */
+  readonly elapsed: number | null;
+  /** The committed usage the projection carries. */
+  readonly usage: "not_reported" | { readonly input: number; readonly output: number } | null;
   /** When the run started, in whole Unix seconds. */
   readonly startedAt: number | null;
-  /** Whether the step in flight has produced answer text. */
-  readonly answering: boolean;
-  /** The committed tokens the run reports, or `null` when it reports none. */
-  readonly tokens: number | null;
-  /** The current time, in whole Unix seconds. */
-  readonly now: number;
+  /** When the run finished, in whole Unix seconds. */
+  readonly finishedAt: number | null;
 }
 
-/** Returns the phrase that names what is happening to the prompt. */
-export function statusPhrase(facts: StatusFacts): string {
-  if (facts.runStatus === null) {
-    return "ready";
+/** Returns the eight-character identity a status row prints. */
+export function shortIdentifier(id: string): string {
+  return id.length <= 8 ? id : id.slice(0, 8);
+}
+
+/** Returns the connection word and the role it paints. */
+function connectionRun(connection: ConnectionStatus): StatusRun {
+  switch (connection) {
+    case "connecting":
+      return { text: CONNECTING, ink: "warning" };
+    case "ready":
+      return { text: READY, ink: "success" };
+    case "offline":
+      return { text: OFFLINE, ink: "error" };
   }
-  return describeRun(facts.runStatus, facts.answering);
 }
 
-/** Returns the detail parts, in the order a reader needs them. */
-export function statusParts(facts: StatusFacts): string[] {
-  const parts: string[] = [];
-  const elapsed = formatElapsed(facts.startedAt, facts.now);
-  if (elapsed !== null) {
-    parts.push(elapsed);
-  }
-  if (facts.tokens !== null) {
-    parts.push(`${facts.tokens} tokens`);
-  }
-  return parts;
-}
-
-/** Returns the detail line's text: elapsed time and tokens, never a status. */
-export function statusDetail(facts: StatusFacts): string {
-  return statusParts(facts).join(" · ");
-}
-
-/** Renders the status line, dropping what the line cannot hold whole. */
-export function StatusRow({
-  facts,
-  palette,
-  width,
-}: {
-  facts: StatusFacts;
-  palette: Palette;
-  width: number;
-}) {
-  const phrase = statusPhrase(facts);
-  const identity = facts.sessionId === null ? "no session" : shortId(facts.sessionId);
-  // A part is kept whole or dropped whole, in the order a reader needs it: a
-  // token count cut to "512 tok" tells a reader less than no count at all.
-  let right = phrase;
-  for (const part of statusParts(facts)) {
-    const candidate = `${right} · ${part}`;
-    if (candidate.length <= width - 2) {
-      right = candidate;
+/** Returns the phrase one run reads as, or `null` when no run is named. */
+function runPhrase(facts: StatusFacts): StatusRun[] | null {
+  if (facts.phase !== null) {
+    const runs: StatusRun[] = [{ text: phaseWord(facts.phase), ink: "scarlet" }];
+    if (facts.elapsed !== null) {
+      runs.push({ text: ` ${elapsedTenths(facts.elapsed)}`, ink: "timerInk" });
     }
+    return runs;
   }
-  // The left half is the session's identity and the right half is the prompt's
-  // fate: when the line cannot hold both, the fate is what a reader needs.
-  const showIdentity = identity.length + right.length + 4 <= width;
+  switch (facts.runStatus) {
+    case null:
+      return null;
+    case "completed": {
+      const runs: StatusRun[] = [{ text: "Answered", ink: "success" }];
+      if (facts.startedAt !== null && facts.finishedAt !== null) {
+        runs.push({ text: " in ", ink: "success" });
+        runs.push({
+          text: `${committedSeconds(facts.startedAt, facts.finishedAt)}s`,
+          ink: "timerInk",
+        });
+      }
+      return runs;
+    }
+    case "failed":
+      return [{ text: "Failed", ink: "error" }];
+    case "interrupted":
+      return [{ text: "Interrupted", ink: "warning" }];
+    default:
+      return null;
+  }
+}
+
+/** Returns the usage segment one run reads as, when its projection carries one. */
+function usageRun(facts: StatusFacts): StatusRun | null {
+  if (facts.usage === null) {
+    return null;
+  }
+  return facts.usage === "not_reported"
+    ? { text: "ctx not reported", ink: "inkMuted" }
+    : { text: `ctx in ${facts.usage.input} out ${facts.usage.output}`, ink: "inkMuted" };
+}
+
+/** Returns every styled run of the status row, in reading order. */
+export function statusRuns(facts: StatusFacts): StatusRun[] {
+  const runs: StatusRun[] = [connectionRun(facts.connection), { text: SEPARATOR, ink: "inkFaint" }];
+  runs.push(
+    facts.sessionId === null
+      ? { text: "no session", ink: "inkFaint" }
+      : { text: `session ${shortIdentifier(facts.sessionId)}`, ink: "inkMuted" },
+  );
+  if (facts.mode !== null) {
+    runs.push({ text: SEPARATOR, ink: "inkFaint" });
+    runs.push({ text: facts.mode, ink: "inkMuted" });
+  }
+  const phrase = runPhrase(facts);
+  if (phrase !== null) {
+    runs.push({ text: SEPARATOR, ink: "inkFaint" }, ...phrase);
+  }
+  const usage = usageRun(facts);
+  if (usage !== null) {
+    runs.push({ text: SEPARATOR, ink: "inkFaint" }, usage);
+  }
+  return runs;
+}
+
+/** Returns the text the detail line prints, and the role it paints. */
+export function detailRuns(facts: {
+  readonly error: string | null;
+  readonly notice: string | null;
+}): StatusRun[] {
+  if (facts.error !== null) {
+    return [{ text: facts.error, ink: "error" }];
+  }
+  if (facts.notice !== null) {
+    return [{ text: facts.notice, ink: "inkMuted" }];
+  }
+  return [{ text: DEFAULT_HINT, ink: "inkFaint" }];
+}
+
+/** Renders one row of styled runs as one line that clips at the panel's width. */
+function RunLine({ runs, palette }: { runs: readonly StatusRun[]; palette: Palette }) {
+  // A run's own ink and text name it: the same phrase can only repeat next to a
+  // separator, so the pair is a key the row can be diffed on.
+  const seen = new Map<string, number>();
+  const keyed = runs.map((run) => {
+    const base = `${run.ink}:${run.text}`;
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    return { key: count === 0 ? base : `${base}#${count}`, run };
+  });
   return (
-    <box flexDirection="row" justifyContent="space-between" paddingLeft={1} paddingRight={1}>
-      <text fg={palette.inkFaint}>{showIdentity ? identity : ""}</text>
-      <text fg={palette.inkMuted}>{right}</text>
-    </box>
+    <text wrapMode="none">
+      {keyed.map(({ key, run }) => (
+        <span key={key} fg={palette[run.ink]}>
+          {run.text}
+        </span>
+      ))}
+    </text>
   );
 }
 
-/**
- * Renders the status line from the store.
- *
- * The line subscribes to the facts it prints and keeps the clock itself, so a
- * token count that moves with the stream, and the second that passes, repaint
- * this one row.
- */
-export function StatusLine({
-  store,
+/** Renders the status row from the facts it reads. */
+export function StatusRow({ facts, palette }: { facts: StatusFacts; palette: Palette }) {
+  return <RunLine runs={statusRuns(facts)} palette={palette} />;
+}
+
+/** Renders the detail line from the facts it reads. */
+export function DetailLine({
+  error,
+  notice,
   palette,
-  width,
 }: {
-  store: AppStore;
+  error: string | null;
+  notice: string | null;
   palette: Palette;
-  width: number;
 }) {
+  return <RunLine runs={detailRuns({ error, notice })} palette={palette} />;
+}
+
+/**
+ * Renders the status row from the store.
+ *
+ * The row subscribes to the facts it prints, so a streamed phase, a measured
+ * tenth, and a committed usage each repaint this one row.
+ */
+export function StatusLine({ store, palette }: { store: AppStore; palette: Palette }) {
+  const connection = useStore(store, selectConnection);
   const sessionId = useStore(store, selectSessionId);
+  const mode = useStore(store, selectSessionMode);
+  const phase = useStore(store, selectRunPhase);
   const runStatus = useStore(store, selectRunStatus);
+  const elapsed = useStore(store, selectElapsed);
+  const usage = useStore(store, selectUsage);
   const startedAt = useStore(store, selectStartedAt);
-  const answering = useStore(store, selectAnswering);
-  const tokens = useStore(store, selectTokens);
-  const live = useStore(store, selectLive);
-  // The elapsed time only moves while a run is live, so the clock runs then and
-  // is silent otherwise.
-  const now = useNow(live);
-  const facts: StatusFacts = { sessionId, runStatus, startedAt, answering, tokens, now };
-  return <StatusRow facts={facts} palette={palette} width={width} />;
+  const finishedAt = useStore(store, selectFinishedAt);
+  const turnStartedAt = useStore(store, selectTurnStartedAt);
+  useRunClock(store, turnStartedAt, phase !== null);
+  return (
+    <StatusRow
+      facts={{
+        connection,
+        sessionId,
+        mode,
+        phase,
+        runStatus,
+        elapsed,
+        usage,
+        startedAt,
+        finishedAt,
+      }}
+      palette={palette}
+    />
+  );
+}
+
+/** Renders the detail line from the store. */
+export function Detail({ store, palette }: { store: AppStore; palette: Palette }) {
+  const error = useStore(store, selectError);
+  const notice = useStore(store, selectNotice);
+  return <DetailLine error={error} notice={notice} palette={palette} />;
 }

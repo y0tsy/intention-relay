@@ -28,38 +28,45 @@ async function lines(store: AppStore, width: number, height: number): Promise<st
   return frameLines(frame);
 }
 
-test("the frame is the only accent border and it holds the whole surface", async () => {
+test("the panel is the one frame the window holds, inside a one-cell margin", async () => {
   const store = offlineStore();
-  const painted_ = await lines(store, 60, 16);
-  assert.equal(painted_.length, 16, "the frame fills the terminal");
-  assert.match(painted_[0] ?? "", /^╭─intention relay─+╮$/);
-  assert.match(painted_.at(-1) ?? "", /^╰─+╯$/);
-  for (const line of painted_) {
-    assert.ok(line.startsWith("│") || line.startsWith("╭") || line.startsWith("╰"), line);
-    assert.ok(line.endsWith("│") || line.endsWith("╮") || line.endsWith("╯"), line);
+  const frame = await painted(<App store={store} />, 60, 16);
+  const raw = frame.replace(/\n$/, "").split("\n");
+  assert.equal(raw.length, 16, "the frame fills the terminal");
+  assert.equal(raw[0]?.trim(), "", "the window's own margin stays visible above the panel");
+  assert.equal(raw.at(-1)?.trim(), "", "and below it");
+  assert.match(raw[1]?.trim() ?? "", /^╭─+╮$/, "the panel opens one row down");
+  assert.match(raw[14]?.trim() ?? "", /^╰─+╯$/, "and closes one row above the window's last");
+  for (const line of raw.slice(1, 15)) {
+    const edge = line.trim();
+    assert.ok(edge.startsWith("│") || edge.startsWith("╭") || edge.startsWith("╰"), edge);
+    assert.ok(edge.endsWith("│") || edge.endsWith("╮") || edge.endsWith("╯"), edge);
   }
   store.dispose();
 });
 
-test("an app with nothing open paints the welcome, the composer, and the status row", async () => {
+test("an app with nothing open paints the welcome, the input block, and the status row", async () => {
   const store = offlineStore();
-  const painted_ = await lines(store, 40, 12);
+  const painted_ = await lines(store, 60, 16);
   const text = painted_.join("\n");
-  assert.match(text, /intention relay/);
-  assert.match(text, /> ▏type a prompt/);
-  assert.match(text, /no session\s+ready/);
+  assert.match(text, /INTENTION {2}R E L A Y/);
+  assert.match(text, /Version 0\.0\.0/);
+  assert.match(text, /> █/);
+  assert.match(text, /Connecting… · no session/);
+  assert.match(text, /enter sends \| \/new session \| \/sessions switch/);
   store.dispose();
 });
 
 test("the theme picker takes the panel when it is asked for", async () => {
   const store = offlineStore("light");
   store.dispatch({ kind: "theme_requested" });
-  const painted_ = await lines(store, 40, 12);
+  const painted_ = await lines(store, 60, 16);
   const text = painted_.join("\n");
-  assert.match(text, /^│\s*theme\s*│$/m);
+  assert.match(text, /^│\s+theme\b/m);
   assert.match(text, /light\s+current/);
-  assert.match(text, /↑↓ move · enter apply · esc close/);
-  assert.equal(text.includes("> ▏type a prompt"), false, "the composer is not painted");
+  assert.match(text, /↑↓ move · enter apply/);
+  assert.equal(text.includes("INTENTION"), false, "the welcome is not painted");
+  assert.equal(text.includes("↑↓ move · enter apply"), true, "the picker owns the region");
   store.dispose();
 });
 

@@ -1,83 +1,55 @@
-//! The welcome surface: the composition a panel of a given size can hold.
+//! The welcome surface: the lockup over the version, in the region it was given.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
+import { welcomeLayout } from "./panel";
 import { Welcome } from "./Welcome";
-import { EXAMPLES, planWelcome } from "./welcome-plan";
 
-/**
- * Renders the welcome block at one terminal size.
- *
- * The block is given the rows the frame leaves it: the border takes two and the
- * hint band, the composer, and the status row take one each.
- */
-async function lines(
-  terminalWidth: number,
-  terminalHeight: number,
-  workspace = "/home/user/project",
-): Promise<string[]> {
-  const width = terminalWidth - 2;
-  const height = terminalHeight - 5;
-  const frame = await painted(
-    <Welcome width={width} height={height} workspace={workspace} palette={DARK} />,
-    width,
-    height,
+/** Renders the welcome pane at one region size and returns its lines. */
+async function lines(columns: number, rows: number): Promise<string[]> {
+  return frameLines(
+    await painted(<Welcome rows={rows} columns={columns} palette={DARK} />, columns, rows),
   );
-  return frameLines(frame);
 }
 
-test("a welcome at forty by twelve fills its room with the lockup and the examples", async () => {
+test("the lockup centres in the region it was given", async () => {
+  const frame = await painted(<Welcome rows={12} columns={40} palette={DARK} />, 40, 12);
+  const painted_ = frame.split("\n");
+  assert.equal(painted_[1]?.trim(), "INTENTION  R E L A Y", "the pair is whole");
+  assert.equal(painted_[1]?.indexOf("I"), 10, "and centred in the region");
+  assert.match(painted_[2] ?? "", /^\s*$/);
+});
+
+test("the overview is pinned to the last rows and names the version", async () => {
   const painted_ = await lines(40, 12);
-  assert.equal(painted_[0], "intention relay");
-  const body = painted_.slice(1).filter((line) => line.length > 0);
-  assert.ok(body.length > 0, "the block paints something under the lockup");
-  for (const line of body) {
-    assert.ok(EXAMPLES.includes(line.slice(2)) || line.startsWith("/"), `"${line}" is whole`);
-  }
-});
-
-test("a welcome at thirty-four by ten keeps the lockup and drops the rest", async () => {
-  const painted_ = await lines(34, 10);
-  assert.equal(painted_[0], "intention relay");
-  assert.ok(painted_.length <= 5, "the block never asks for more rows than it has");
-  const plan = planWelcome({ width: 32, height: 5, workspace: "/home/user/project" });
-  assert.equal(plan.tagline, null, "a tagline that would not fit is given up whole");
-  assert.equal(plan.workspace, false);
-});
-
-test("a tall panel shows the command reference and where sessions run", async () => {
-  const painted_ = await lines(100, 30);
   const text = painted_.join("\n");
-  assert.match(text, /intention relay/);
-  assert.match(text, /\/new\s+start a fresh session/);
-  assert.match(text, /new sessions run in \/home\/user\/project/);
+  assert.match(text, /Version 0\.0\.0/);
+  assert.match(painted_.at(-1) ?? "", /╰/, "the overview's bottom edge is the last row");
 });
 
-test("no panel size paints a line longer than the block", async () => {
-  for (const [width, height] of [
+test("a region too short for the lockup keeps the overview", async () => {
+  const painted_ = await lines(40, welcomeLayout(3).overview);
+  assert.equal(painted_.length, 3);
+  assert.match(painted_.join("\n"), /Version 0\.0\.0/);
+  assert.doesNotMatch(painted_.join("\n"), /INTENTION/);
+});
+
+test("a region with no rows draws nothing", async () => {
+  assert.deepEqual(await lines(40, 0), []);
+});
+
+test("no line is wider than the region", async () => {
+  for (const [columns, rows] of [
     [34, 10],
     [40, 12],
     [60, 16],
     [100, 30],
     [200, 60],
   ] as const) {
-    for (const line of await lines(width, height)) {
-      assert.ok(line.length <= width - 4, `${width}x${height}: "${line}" fits`);
-    }
-  }
-});
-
-test("every example the block keeps is whole", async () => {
-  for (const [width, height] of [
-    [40, 12],
-    [100, 30],
-  ] as const) {
-    for (const line of await lines(width, height)) {
-      if (line.startsWith("- ")) {
-        assert.ok(EXAMPLES.includes(line.slice(2)), `"${line}" is one whole example`);
-      }
+    for (const line of await lines(columns, rows)) {
+      assert.ok(line.length <= columns, `${columns}x${rows}: "${line}" fits`);
     }
   }
 });

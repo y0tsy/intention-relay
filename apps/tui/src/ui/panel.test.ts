@@ -5,12 +5,12 @@ import test from "node:test";
 import {
   DETAIL_ROWS,
   INPUT_CHROME_ROWS,
+  inputBlockRows,
   MIN_BLOCK_ROWS,
   PANEL_FRAME,
-  TRANSCRIPT_TOP_ROWS,
-  inputBlockRows,
   panelFits,
   panelLayout,
+  TRANSCRIPT_TOP_ROWS,
   welcomeLayout,
 } from "./panel";
 

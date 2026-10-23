@@ -2,11 +2,11 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { frameLines, painted } from "../testing/render";
 import { summary } from "../testing/fixtures";
+import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { BROWSER_HINTS, SessionBrowser } from "./SessionBrowser";
 import { fitColumns, renderHints, sessionCells } from "./format";
+import { BROWSER_HINTS, SessionBrowser } from "./SessionBrowser";
 
 /** Renders the browser at one panel size and returns its lines. */
 async function lines(

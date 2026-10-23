@@ -105,7 +105,7 @@ export function panelLayout(
   // The cap bounds the buffer lines the block shows, never its own chrome: a
   // block taller than its share windows the lines instead of growing further.
   const share = Math.floor(available / INPUT_LINE_SHARE);
-  const lines = share > INPUT_MIN_LINES ? share : INPUT_MIN_LINES;
+  const lines = Math.max(share, INPUT_MIN_LINES);
   const cap = Math.min(lines + INPUT_CHROME_ROWS, available);
   const inputRows = Math.min(wantedInputRows, cap);
   // The band takes its rows exactly or not at all: a body too short for it beside

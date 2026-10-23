@@ -40,16 +40,27 @@ function frameLines(setup: { captureCharFrame: () => string }): string[] {
  * composer, so the line to drop is the last one that opens that way.
  */
 function withoutComposer(lines: readonly string[]): string[] {
-  const composer = lines.findLastIndex((line) => line.startsWith("│ > "));
+  const composer = lines.findLastIndex((line) => line.includes("> "));
   return lines.filter((_, index) => index !== composer);
 }
 
 /** Returns the transcript the frame painted, without the chrome around it. */
 function transcriptLines(lines: readonly string[]): string[] {
-  const composer = lines.findLastIndex((line) => line.startsWith("│ > "));
-  const body = lines
-    .slice(1, composer - 1)
-    .map((line) => line.replace(/^│\s?/, "").replace(/\s*│$/, "").trimEnd());
+  // The transcript is the panel region between the panel's own frame and the
+  // input block's frame: everything above opens the panel, everything below
+  // is the prompt's own block.
+  // The window's own margin is a blank row above the panel, and the panel's
+  // frame is the row after it.
+  const start = lines.findIndex((line) => line.startsWith("╭"));
+  const inputTop = lines.findIndex((line) => line.startsWith("│") && line.includes("╭"));
+  const body = lines.slice(start + 1, inputTop < 0 ? lines.length : inputTop).map((line) =>
+    line.startsWith("│")
+      ? line
+          .slice(1, line.endsWith("│") ? -1 : undefined)
+          .replace(/^ /, "")
+          .trimEnd()
+      : line,
+  );
   while (body.length > 0 && (body[0] ?? "").trim().length === 0) {
     body.shift();
   }
@@ -99,7 +110,7 @@ test("a keystroke never reaches the committed rows", async (t) => {
     withoutComposer(before),
     "every cell but the input line is the cell it was",
   );
-  assert.match(after.findLast((line) => line.startsWith("│ > ")) ?? "", /abc▏/);
+  assert.match(after.findLast((line) => line.includes("> ")) ?? "", /abc█/);
 
   store.dispose();
   await setup.dispose();

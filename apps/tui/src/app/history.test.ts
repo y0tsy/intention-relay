@@ -2,20 +2,20 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PromptHistory } from "./history";
 import {
-  EMPTY_DRAFT,
   backspace,
   caretToEnd,
   caretToStart,
   characterAt,
   deleteForward,
+  EMPTY_DRAFT,
   insertNewline,
   insertText,
   moveCaret,
   renderDraft,
   replaceDraft,
 } from "./editor";
+import { PromptHistory } from "./history";
 
 test("typed text lands at the caret and the caret follows it", () => {
   const draft = insertText(EMPTY_DRAFT, "hello");

@@ -1,8 +1,8 @@
 //! The process entry point: one renderer, one store, one application.
 
+import { fileURLToPath } from "node:url";
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
-import { fileURLToPath } from "node:url";
 import { AppStore } from "./app/store";
 import { IntentionClient } from "./client/client";
 import { ProcessDaemonLauncher } from "./client/daemon";

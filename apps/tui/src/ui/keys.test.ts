@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { keyIntent, type KeyContext, type KeyEvent, typed } from "./keys";
+import { type KeyContext, type KeyEvent, keyIntent, typed } from "./keys";
 
 /** A plain key event with nothing modified. */
 function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {

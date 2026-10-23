@@ -7,11 +7,17 @@
 //! call, and the subscription would repaint forever. The state's own lists - the
 //! committed rows, the session summaries - are the identities to return.
 
-import type { MessageProjectionDto, SessionSummariesDto } from "../bindings";
-import type { RunProjectionDto, RunStatusDto } from "../bindings";
-import type { AppState, Surface } from "./state";
+import type {
+  MessageProjectionDto,
+  RunModeDto,
+  RunProjectionDto,
+  RunStatusDto,
+  SessionSummariesDto,
+} from "../bindings";
 import type { ThemePreference } from "./action";
 import type { Draft } from "./editor";
+import type { RunPhase } from "./run";
+import type { AppState, ConnectionStatus, Surface } from "./state";
 
 /** Returns the committed rows of the open session. */
 export function selectTranscript(state: AppState): readonly MessageProjectionDto[] {
@@ -93,6 +99,36 @@ export function selectSessionId(state: AppState): string | null {
   return state.sessionId;
 }
 
+/** Returns whether the daemon this front end talks to has answered. */
+export function selectConnection(state: AppState): ConnectionStatus {
+  return state.connection;
+}
+
+/** Returns the run mode the open session's projection carries. */
+export function selectSessionMode(state: AppState): RunModeDto | null {
+  return state.sessionMode;
+}
+
+/** Returns the effective provider model the session's projection names. */
+export function selectSessionModel(state: AppState): string | null {
+  return state.sessionModel;
+}
+
+/** Returns the live phase of the run this front end observes. */
+export function selectRunPhase(state: AppState): RunPhase | null {
+  return state.runPhase;
+}
+
+/** Returns the elapsed time this front end measured for the current turn. */
+export function selectElapsed(state: AppState): number | null {
+  return state.elapsed;
+}
+
+/** Returns when the turn in flight began, in Unix milliseconds. */
+export function selectTurnStartedAt(state: AppState): number | null {
+  return state.turnStart;
+}
+
 /** Returns whether a run this front end observes is still live. */
 export function selectLive(state: AppState): boolean {
   return state.liveRun !== null;
@@ -106,6 +142,24 @@ export function selectAnswering(state: AppState): boolean {
 /** Returns when the last known run started, in whole Unix seconds. */
 export function selectStartedAt(state: AppState): number | null {
   return state.activeRun?.started_at ?? null;
+}
+
+/** Returns the committed usage the active run's projection carries. */
+export function selectUsage(
+  state: AppState,
+): "not_reported" | { readonly input: number; readonly output: number } | null {
+  const usage = state.activeRun?.usage;
+  if (usage === undefined || usage === null) {
+    return null;
+  }
+  return usage.state === "reported"
+    ? { input: usage.input_tokens, output: usage.output_tokens }
+    : "not_reported";
+}
+
+/** Returns when the last known run finished, in whole Unix seconds. */
+export function selectFinishedAt(state: AppState): number | null {
+  return state.activeRun?.finished_at ?? null;
 }
 
 /** Returns the tokens the last known run reports, or `null` when it reports none. */

@@ -5,8 +5,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SessionSummaryDto } from "../bindings";
 import {
-  HINT_SEGMENTS,
-  SESSION_COLUMNS,
   basename,
   describeRun,
   fitColumns,
@@ -15,7 +13,9 @@ import {
   formatAgo,
   formatDuration,
   formatElapsed,
+  HINT_SEGMENTS,
   renderHints,
+  SESSION_COLUMNS,
   sessionCells,
   shortId,
 } from "./format";
