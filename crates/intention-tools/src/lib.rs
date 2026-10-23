@@ -23,7 +23,6 @@ pub use guidance::tool_failure_guidance;
 pub use workspace::WorkspaceRoot;
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "deterministic timeout fixture setup")]
 mod timeout_tests {
     use super::*;
     use std::process::Command;
@@ -131,8 +130,15 @@ mod timeout_tests {
         let child = command.spawn().expect("spawn descendant fixture");
         let started = Instant::now();
         // No declared timeout: the only bound is the post-exit collection
-        // window, which a descendant holding the pipes cannot extend.
-        let result = bounded_output_with_timeout(child, CancellationSignal::new(), None);
+        // window, which a descendant holding the pipes cannot extend. The test
+        // passes a short window so it exercises that bound instead of waiting
+        // out the production grace; the window's behavior is identical.
+        let result = bounded_output_with_grace(
+            child,
+            CancellationSignal::new(),
+            None,
+            Duration::from_millis(100),
+        );
         assert!(matches!(
             result,
             Err(ExecuteFailure::Interrupted {
@@ -141,7 +147,7 @@ mod timeout_tests {
             })
         ));
         assert!(
-            started.elapsed() < Duration::from_secs(20),
+            started.elapsed() < Duration::from_secs(2),
             "a descendant holding the pipes open must not extend the collection"
         );
         // The process-group termination must also kill the background
@@ -195,6 +201,15 @@ impl CancellationSignal {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
         }
+    }
+    /// Observes a cancellation flag owned elsewhere.
+    ///
+    /// A run has one cancellation state, and the blocking tool path observes
+    /// the same flag its model stream awaits rather than a copy kept in step
+    /// with it.
+    #[must_use]
+    pub fn from_shared(cancelled: Arc<AtomicBool>) -> Self {
+        Self { cancelled }
     }
     #[must_use]
     pub fn cancelled() -> Self {
@@ -467,9 +482,23 @@ fn deadline_cause(
 }
 
 fn bounded_output_with_timeout(
+    child: Child,
+    cancellation: CancellationSignal,
+    timeout: Option<ToolTimeoutSecondsDto>,
+) -> Result<BoundedOutput, ExecuteFailure> {
+    bounded_output_with_grace(child, cancellation, timeout, READER_DRAIN_GRACE)
+}
+
+/// Bounds one call with an explicit drain window.
+///
+/// The window is a parameter so a test can exercise the window itself without
+/// waiting out the production grace; every production call passes
+/// [`READER_DRAIN_GRACE`].
+fn bounded_output_with_grace(
     mut child: Child,
     cancellation: CancellationSignal,
     timeout: Option<ToolTimeoutSecondsDto>,
+    grace: Duration,
 ) -> Result<BoundedOutput, ExecuteFailure> {
     let child_id = child.id();
     let progress = Arc::new(ReaderProgress::default());
@@ -482,7 +511,9 @@ fn bounded_output_with_timeout(
                 inner: pipe,
                 progress,
             });
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         })
     });
     let stderr = child.stderr.take().map(|pipe| {
@@ -494,7 +525,9 @@ fn bounded_output_with_timeout(
                 inner: pipe,
                 progress,
             });
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         })
     });
     let mut pipes = PipeReaders::new(stdout, stderr, progress);
@@ -518,7 +551,7 @@ fn bounded_output_with_timeout(
             // joining the killed readers instead of bailing on the signal, so
             // their captured output survives as the partial result whenever
             // the pipes were collected.
-            let _ = pipes.collect(READER_DRAIN_GRACE, None);
+            let _ = pipes.collect(grace, None);
             return Err(ExecuteFailure::Interrupted {
                 cause,
                 partial: pipes.partial(),
@@ -532,13 +565,13 @@ fn bounded_output_with_timeout(
                 // descendant, and a descendant must never extend the call. A
                 // window that runs out stops the process group and keeps
                 // whatever the readers already captured.
-                match pipes.collect(READER_DRAIN_GRACE, Some(&cancellation)) {
+                match pipes.collect(grace, Some(&cancellation)) {
                     PipeDrain::Complete => return pipes.into_bounded_output(status),
                     PipeDrain::Stalled => {
                         let cause = interruption_cause(&cancellation);
                         terminate_process_tree(&mut child, child_id);
                         let _ = child.wait();
-                        let _ = pipes.collect(READER_DRAIN_GRACE, None);
+                        let _ = pipes.collect(grace, None);
                         return Err(ExecuteFailure::Interrupted {
                             cause,
                             partial: pipes.partial(),
@@ -551,7 +584,7 @@ fn bounded_output_with_timeout(
                 let cause = interruption_cause(&cancellation);
                 terminate_process_tree(&mut child, child_id);
                 let _ = child.wait();
-                let _ = pipes.collect(READER_DRAIN_GRACE, None);
+                let _ = pipes.collect(grace, None);
                 return Err(ExecuteFailure::Interrupted {
                     cause,
                     partial: pipes.partial(),
@@ -820,12 +853,11 @@ mod process_failure_tests {
     }
 
     #[test]
-    fn read_failure_is_classified_as_read_failure() {
+    fn read_failure_keeps_the_underlying_error() {
         let mut output = Vec::new();
-        assert_eq!(
-            read_bounded(&mut FailingReader, &mut output),
-            Err("tool_execute_read_failed")
-        );
+        let error = read_bounded(&mut FailingReader, &mut output)
+            .expect_err("an injected read failure is reported");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
     }
 
     #[test]
@@ -841,7 +873,9 @@ mod process_failure_tests {
         let reader = thread::spawn(|| {
             let mut reader = PanicReader;
             let mut output = Vec::new();
-            read_bounded(&mut reader, &mut output).map(|truncated| (output, truncated))
+            read_bounded(&mut reader, &mut output)
+                .map(|truncated| (output, truncated))
+                .map_err(|_| "tool_execute_read_failed")
         });
         assert_eq!(join_reader(Some(reader)), Err("tool_execute_read_failed"));
     }
@@ -862,8 +896,8 @@ enum LimitedReadOutcome {
     Content(Vec<u8>),
     /// The file exceeds the bound; no content is retained.
     TooLarge,
-    /// The file could not be opened or read.
-    Unreadable,
+    /// The file could not be opened or read, with its underlying error.
+    Unreadable(std::io::Error),
 }
 
 /// Reads a whole file only when it fits within `limit` bytes.
@@ -874,11 +908,11 @@ fn read_limited(path: &std::path::Path, limit: usize) -> LimitedReadOutcome {
     use std::io::Read;
     let file = match std::fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return LimitedReadOutcome::Unreadable,
+        Err(error) => return LimitedReadOutcome::Unreadable(error),
     };
     let mut bytes = Vec::new();
-    if file.take(limit as u64 + 1).read_to_end(&mut bytes).is_err() {
-        return LimitedReadOutcome::Unreadable;
+    if let Err(error) = file.take(limit as u64 + 1).read_to_end(&mut bytes) {
+        return LimitedReadOutcome::Unreadable(error);
     }
     if bytes.len() > limit {
         return LimitedReadOutcome::TooLarge;
@@ -889,16 +923,14 @@ fn read_limited(path: &std::path::Path, limit: usize) -> LimitedReadOutcome {
 fn read_bounded(
     reader: &mut impl std::io::Read,
     output: &mut Vec<u8>,
-) -> Result<bool, &'static str> {
+) -> Result<bool, std::io::Error> {
     let mut buffer = [0_u8; 4096];
     let mut total = 0;
     // Truncation means bytes were actually dropped: a source ending exactly at
     // the bound stays untruncated.
     let mut truncated = false;
     loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|_| "tool_execute_read_failed")?;
+        let count = reader.read(&mut buffer)?;
         if count == 0 {
             return Ok(truncated);
         }
@@ -917,15 +949,16 @@ fn read_bounded(
 
 /// Static specification of one tool.
 ///
-/// The specification carries the three strings the model boundary consumes:
-/// the tool identity, its description, and the JSON Schema document text for
-/// its typed model arguments. The typed input DTO is the decode authority and
-/// the typed result DTO is the result contract, so no result schema is kept.
+/// The specification carries the two code-owned strings the model boundary
+/// consumes: the tool identity and its description. The tool's model arguments
+/// are defined once, by the typed input DTO that decodes them in
+/// `intention-proto`, and [`ToolSpec::input_schema`] renders their JSON Schema
+/// document from that definition. The typed result DTO is the result contract,
+/// so no result schema is kept.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ToolSpec {
     id: ToolId,
     description: &'static str,
-    input_schema: &'static str,
 }
 impl ToolSpec {
     /// Returns the tool this specification describes.
@@ -937,151 +970,13 @@ impl ToolSpec {
     pub const fn description(self) -> &'static str {
         self.description
     }
-    /// Returns the JSON Schema document text for this tool's typed model
-    /// arguments.
+    /// Returns the JSON Schema document of this tool's typed model arguments,
+    /// rendered from the typed input DTO that defines them.
     #[must_use]
-    pub const fn input_schema(self) -> &'static str {
-        self.input_schema
+    pub fn input_schema(self) -> String {
+        self.id.input_schema()
     }
 }
-
-/// JSON Schema for the `read` tool's typed model arguments.
-pub const READ_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to read."
-    }
-  },
-  "required": ["path"]
-}"#;
-
-/// JSON Schema for the `write` tool's typed model arguments.
-pub const WRITE_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to write."
-    },
-    "content": {
-      "type": "string",
-      "description": "Bounded text to write to the file."
-    },
-    "expected_content": {
-      "type": "string",
-      "description": "Optional guard: the write applies only while the file holds exactly this text."
-    }
-  },
-  "required": ["path", "content"]
-}"#;
-
-/// JSON Schema for the `edit` tool's typed model arguments.
-pub const EDIT_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "path": {
-      "type": "string",
-      "description": "Workspace-relative path of the file to edit."
-    },
-    "old": {
-      "type": "string",
-      "description": "Existing text to replace."
-    },
-    "new": {
-      "type": "string",
-      "description": "Replacement text."
-    },
-    "expected_content": {
-      "type": "string",
-      "description": "Optional guard: the edit applies only while the file holds exactly this text."
-    }
-  },
-  "required": ["path", "old", "new"]
-}"#;
-
-/// JSON Schema for the `execute` tool's typed model arguments.
-pub const EXECUTE_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "command": {
-      "type": "string",
-      "description": "Shell command text with shell semantics: pipelines, redirects, and compound commands."
-    },
-    "cwd": {
-      "type": "string",
-      "description": "Optional workspace-relative working directory; the workspace root by default."
-    },
-    "env": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "description": "Environment variable name."
-          },
-          "value": {
-            "type": "string",
-            "description": "Environment variable value."
-          }
-        },
-        "required": ["name", "value"]
-      },
-      "description": "Optional environment variables overlaid on the inherited environment."
-    },
-    "timeout_seconds": {
-      "type": "integer",
-      "minimum": 1,
-      "description": "Optional per-call deadline in whole seconds. Without it the command runs until it finishes or the run is cancelled; when it elapses the command is terminated and the call returns the captured output as a partial result whose notice names the timeout."
-    }
-  },
-  "required": ["command"]
-}"#;
-
-/// JSON Schema for the `glob` tool's typed model arguments.
-pub const GLOB_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "Glob pattern matched against workspace-relative paths."
-    }
-  },
-  "required": ["pattern"]
-}"#;
-
-/// JSON Schema for the `grep` tool's typed model arguments.
-pub const GREP_INPUT_SCHEMA: &str = r#"{
-  "type": "object",
-  "properties": {
-    "pattern": {
-      "type": "string",
-      "description": "Text pattern to search for inside workspace files."
-    },
-    "scope": {
-      "type": "object",
-      "properties": {
-        "kind": {
-          "type": "string",
-          "enum": ["file", "directory", "workspace"],
-          "description": "Search scope kind."
-        },
-        "path": {
-          "type": "string",
-          "description": "Workspace-relative path required by the file and directory scope kinds."
-        }
-      },
-      "required": ["kind"]
-    },
-    "path": {
-      "type": "string",
-      "description": "Optional workspace-relative path narrowing the search."
-    }
-  },
-  "required": ["pattern"]
-}"#;
 
 /// Returns the static specification of one tool.
 #[must_use]
@@ -1090,32 +985,26 @@ pub const fn spec(id: ToolId) -> ToolSpec {
         ToolId::Read => ToolSpec {
             id,
             description: "Read bounded text from a workspace file.",
-            input_schema: READ_INPUT_SCHEMA,
         },
         ToolId::Write => ToolSpec {
             id,
             description: "Write bounded text to a workspace file.",
-            input_schema: WRITE_INPUT_SCHEMA,
         },
         ToolId::Edit => ToolSpec {
             id,
             description: "Apply a bounded text replacement.",
-            input_schema: EDIT_INPUT_SCHEMA,
         },
         ToolId::Execute => ToolSpec {
             id,
             description: "Run a shell command in the workspace.",
-            input_schema: EXECUTE_INPUT_SCHEMA,
         },
         ToolId::Glob => ToolSpec {
             id,
             description: "List workspace paths matching a pattern.",
-            input_schema: GLOB_INPUT_SCHEMA,
         },
         ToolId::Grep => ToolSpec {
             id,
             description: "Search bounded workspace text.",
-            input_schema: GREP_INPUT_SCHEMA,
         },
     }
 }
@@ -1275,10 +1164,6 @@ pub fn partial_tool_result_content(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Renderer fixtures use expect to provide precise failures."
-)]
 mod tool_result_renderer_tests {
     use super::*;
 
@@ -1549,6 +1434,24 @@ impl ToolService {
     }
 }
 
+/// Builds one failed workspace-operation error for the addressed target.
+///
+/// The message names the logical target the call addressed — never the
+/// resolved absolute path — and reports the underlying error verbatim; the
+/// guidance rendering is what bounds the model-visible detail.
+fn operation_failure(
+    code: &'static str,
+    operation: &str,
+    target: &str,
+    error: &impl std::fmt::Display,
+) -> intention_proto::ErrorDto {
+    intention_proto::ErrorDto::owned_message(
+        code,
+        intention_proto::ErrorCategoryDto::Validation,
+        format!("unable to {operation} {target}: {error}"),
+    )
+}
+
 fn read_tool(
     root: &WorkspaceRoot,
     input: ReadInput,
@@ -1557,12 +1460,12 @@ fn read_tool(
     if cancellation.is_cancelled() {
         return Ok(stopped_outcome(None));
     }
-    let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+    let mut file = std::fs::File::open(root.resolve_path(&input.path)).map_err(|error| {
+        operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
     })?;
     let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_read_failed", "unable to read workspace file")
+    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
+        operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
     })?;
     let (text, truncated) = bounded_lossy(&bytes);
     // A read that rewrote invalid UTF-8 reports it the way grep does, so the
@@ -1665,11 +1568,8 @@ fn write_tool(
         // larger file can never equal the bounded expected content and is
         // reported as changed instead of being slurped (PR24-022).
         let current = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
-            LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-                intention_proto::ErrorDto::validation(
-                    "tool_write_conflict",
-                    "workspace file changed before write",
-                )
+            LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|error| {
+                operation_failure("tool_write_conflict", "read", input.path.as_str(), &error)
             })?,
             LimitedReadOutcome::TooLarge => {
                 return Err(intention_proto::ErrorDto::validation(
@@ -1677,10 +1577,12 @@ fn write_tool(
                     "workspace file changed before write",
                 ));
             }
-            LimitedReadOutcome::Unreadable => {
-                return Err(intention_proto::ErrorDto::validation(
+            LimitedReadOutcome::Unreadable(error) => {
+                return Err(operation_failure(
                     "tool_write_conflict",
-                    "workspace file changed before write",
+                    "read",
+                    input.path.as_str(),
+                    &error,
                 ));
             }
         };
@@ -1695,8 +1597,8 @@ fn write_tool(
             return Ok(stopped_outcome(None));
         }
     }
-    std::fs::write(path, input.content.as_str()).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+    std::fs::write(path, input.content.as_str()).map_err(|error| {
+        operation_failure("tool_write_failed", "write", input.path.as_str(), &error)
     })?;
     Ok(ToolDispatchOutcome::Completed(ToolResult::Write(
         WriteResult { bytes },
@@ -1716,11 +1618,8 @@ fn edit_tool(
     // therefore size-bounded so a huge file cannot allocate unboundedly
     // (PR24-022).
     let text = match read_limited(&path, MAX_EDIT_TARGET_BYTES) {
-        LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|_| {
-            intention_proto::ErrorDto::validation(
-                "tool_read_failed",
-                "unable to read workspace file",
-            )
+        LimitedReadOutcome::Content(bytes) => String::from_utf8(bytes).map_err(|error| {
+            operation_failure("tool_read_failed", "read", input.path.as_str(), &error)
         })?,
         LimitedReadOutcome::TooLarge => {
             return Err(intention_proto::ErrorDto::validation(
@@ -1728,10 +1627,12 @@ fn edit_tool(
                 "edit target exceeds the workspace file size bound",
             ));
         }
-        LimitedReadOutcome::Unreadable => {
-            return Err(intention_proto::ErrorDto::validation(
+        LimitedReadOutcome::Unreadable(error) => {
+            return Err(operation_failure(
                 "tool_read_failed",
-                "unable to read workspace file",
+                "read",
+                input.path.as_str(),
+                &error,
             ));
         }
     };
@@ -1754,8 +1655,8 @@ fn edit_tool(
         return Ok(stopped_outcome(None));
     }
     let replacement = text.replacen(input.old.as_str(), input.new.as_str(), 1);
-    std::fs::write(path, &replacement).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_write_failed", "unable to write workspace file")
+    std::fs::write(path, &replacement).map_err(|error| {
+        operation_failure("tool_write_failed", "write", input.path.as_str(), &error)
     })?;
     Ok(ToolDispatchOutcome::Completed(ToolResult::Edit(
         WriteResult {
@@ -1782,8 +1683,13 @@ fn glob_tool(
         })?
         .to_owned();
     let mut paths = Vec::new();
-    for entry in glob::glob(&pattern).map_err(|_| {
-        intention_proto::ErrorDto::validation("invalid_tool_pattern", "tool pattern is invalid")
+    for entry in glob::glob(&pattern).map_err(|error| {
+        operation_failure(
+            "invalid_tool_pattern",
+            "expand",
+            input.pattern.as_str(),
+            &error,
+        )
     })? {
         // The traversal is the tool's I/O step: a stop ends it and the entries
         // collected so far are returned as an honestly truncated partial list.
@@ -1855,104 +1761,43 @@ fn grep_tool(
         scope,
         path,
     } = input;
-    if let Some(scope) = scope {
-        return grep_scoped(root, pattern, scope, cancellation);
-    }
-    // A pathless call addresses the whole workspace, exactly like the declared
-    // default scope; it is not a model error.
-    let Some(path) = path else {
-        return grep_scoped(root, pattern, GrepScope::Workspace, cancellation);
-    };
-    let resolved = root.resolve_path(&path);
-    // An explicit file path is addressed as given: `metadata` follows a
-    // symbolic link like any other filesystem path, and only the type
-    // decision happens here.
-    let metadata = std::fs::metadata(&resolved).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-    })?;
-    if !metadata.is_file() {
-        return Err(intention_proto::ErrorDto::validation(
-            "tool_search_failed",
-            "workspace search failed",
-        ));
-    }
-    let mut file = std::fs::File::open(resolved).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-    })?;
-    let mut bytes = Vec::new();
-    let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-    })?;
-    let text = String::from_utf8_lossy(&bytes);
-    let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-    let logical = path;
-    let mut matches = Vec::new();
-    let mut retained_bytes = 0usize;
-    let mut truncated = source_truncated || lossy_truncated;
-    for (line_index, line) in text.lines().enumerate() {
-        // A stop observed between scanned lines keeps the matches found so far
-        // as an honestly truncated partial result.
-        if cancellation.is_cancelled() {
-            return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
-                matches,
-                truncated: true,
-            }))));
-        }
-        let Some(column) = line.find(pattern.as_str()) else {
-            continue;
-        };
-        let fragment = if line.len() > MAX_TOOL_OUTPUT_BYTES {
-            truncated = true;
-            let end = line
-                .char_indices()
-                .take_while(|(index, _)| *index < MAX_TOOL_OUTPUT_BYTES)
-                .map(|(index, _)| index)
-                .last()
-                .unwrap_or(0);
-            line[..end].to_owned()
-        } else {
-            line.to_owned()
-        };
-        if !record_grep_match(
-            &mut matches,
-            &mut retained_bytes,
-            &mut truncated,
-            logical.clone(),
-            line_index as u64 + 1,
-            line[..column].chars().count() as u64 + 1,
-            fragment,
-        )? {
-            break;
-        }
-    }
-    if cancellation.is_cancelled() {
-        return Ok(stopped_outcome(Some(ToolResult::Grep(GrepResult {
-            matches,
-            truncated: true,
-        }))));
-    }
-    Ok(ToolDispatchOutcome::Completed(ToolResult::Grep(
-        GrepResult { matches, truncated },
-    )))
+    // An explicit scope wins; an addressed path is a file scope; a pathless
+    // call addresses the whole workspace, exactly like the declared default
+    // scope. All three are ordinary calls, not model errors.
+    let scope = scope
+        .or_else(|| path.map(|path| GrepScope::File { path }))
+        .unwrap_or(GrepScope::Workspace);
+    grep_scoped(root, pattern, scope, cancellation)
 }
 
+/// Searches one resolved scope and renders its bounded match list.
+///
+/// Every `grep` call reaches this one search body: the scope alone decides
+/// whether one addressed file or a directory walk supplies the searched files.
 fn grep_scoped(
     root: &WorkspaceRoot,
     pattern: BoundedText,
     scope: GrepScope,
     cancellation: &CancellationSignal,
 ) -> DtoResult<ToolDispatchOutcome> {
-    let (base, single) = match scope {
-        GrepScope::File { path } => (root.resolve_path(&path), Some(path)),
-        GrepScope::Directory { path } => (root.resolve_path(&path), None),
-        GrepScope::Workspace => (root.root().to_path_buf(), None),
+    let (base, single, target) = match scope {
+        GrepScope::File { path } => {
+            let base = root.resolve_path(&path);
+            let target = path.as_str().to_owned();
+            (base, Some(path), target)
+        }
+        GrepScope::Directory { path } => {
+            let base = root.resolve_path(&path);
+            let target = path.as_str().to_owned();
+            (base, None, target)
+        }
+        GrepScope::Workspace => (root.root().to_path_buf(), None, "the workspace".to_owned()),
     };
     // An explicit scope is addressed as given: `metadata` follows a symbolic
     // link like any other filesystem path, and only the type decision happens
     // here.
-    let metadata = std::fs::metadata(&base).map_err(|_| {
-        intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-    })?;
+    let metadata = std::fs::metadata(&base)
+        .map_err(|error| operation_failure("tool_search_failed", "search", &target, &error))?;
     if single.is_some() && !metadata.is_file() {
         return Err(intention_proto::ErrorDto::validation(
             "tool_search_failed",
@@ -2018,27 +1863,27 @@ fn grep_scoped(
                 truncated: true,
             }))));
         }
-        let mut file = std::fs::File::open(&path).map_err(|_| {
-            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-        })?;
-        let mut bytes = Vec::new();
-        // Every file is read through the bounded reader, so an oversized file
-        // cannot allocate unbounded memory during a directory search; the
-        // truncation flag reports the dropped tail (PR24-022).
-        let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|_| {
-            intention_proto::ErrorDto::validation("tool_search_failed", "workspace search failed")
-        })?;
-        let text = String::from_utf8_lossy(&bytes);
-        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
-        if source_truncated || lossy_truncated {
-            truncated = true;
-        }
         let logical = single.clone().or_else(|| {
             path.strip_prefix(root.root()).ok().and_then(|p| {
                 WorkspaceRelativePathDto::parse(p.to_string_lossy().replace('\\', "/")).ok()
             })
         });
         let Some(logical) = logical else { continue };
+        let mut file = std::fs::File::open(&path).map_err(|error| {
+            operation_failure("tool_search_failed", "search", logical.as_str(), &error)
+        })?;
+        let mut bytes = Vec::new();
+        // Every file is read through the bounded reader, so an oversized file
+        // cannot allocate unbounded memory during a directory search; the
+        // truncation flag reports the dropped tail (PR24-022).
+        let source_truncated = read_bounded(&mut file, &mut bytes).map_err(|error| {
+            operation_failure("tool_search_failed", "search", logical.as_str(), &error)
+        })?;
+        let text = String::from_utf8_lossy(&bytes);
+        let lossy_truncated = std::str::from_utf8(&bytes).is_err();
+        if source_truncated || lossy_truncated {
+            truncated = true;
+        }
         for (line_index, line) in text.lines().enumerate() {
             // A stop observed between scanned lines ends the search with the
             // matches found so far.

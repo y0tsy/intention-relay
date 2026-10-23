@@ -10,132 +10,54 @@ Contract Policy](02-dto-and-contract-policy.md).
 
 - Each crate owns one cohesive responsibility and exposes DTO-based public contracts.
 - Dependency cycles are forbidden.
--  An adapter may depend on `intention-client` and presentation-only crates, never on application, runtime, storage
-implementation, tools, or provider implementations.
+- An adapter may depend on `intention-client` and presentation-only crates, never on storage implementation, tools, or
+  provider implementations.
 - Concrete drivers are selected only by the composition root.
 - Feature flags may choose implementations, but may not make the public contract type-unstable.
--  M1 establishes the `ConfigRevisionId` and credential-free configuration-snapshot contract foundation. M3 makes
-`ConfigSnapshotDto` the canonical credential-free persisted configuration selection: the composition root supplies one
-startup snapshot, storage records it by `ConfigRevisionId`, and each accepted run retains its immutable revision. TOML
-is applied only at daemon startup; live reload remains deferred.
--  M3 activates the engine and storage layers, merged since Slice 1.5 into `intention-engine` and `intention-storage`. The
-active graph adds the intentional `storage -> config`, `storage-sqlite -> config`, `application -> config`, and `runtime
--> config` edges required to persist and attach canonical configuration revisions without exposing credentials or
-filesystem paths.
--  M4 activates the provider layer, carried since the Slice 1.5 collapse by `intention-providers`. The model
-crate remains provider-neutral and depends only on `intention-proto`; provider crates depend only on model/config/types
-plus their private SDK. `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and
-`ProviderErrorDto` shared by model and durable domain facts; `intention-providers` re-exports them for its consumers. Only
-`intention-daemon` may select either concrete provider.
--  M4 model and provider evidence is domain-owned and current-state: domain, storage, and protocol never depend on
-`intention-providers`, and SQLite stores assistant content, reasoning text, tool calls, and tool results on the transcript
-and tool-result rows rather than in typed envelopes or per-run cursors. `intention-engine` depends on the
-provider-neutral `intention-providers` contract only for its injected base execution service; it neither selects a concrete
-provider nor exposes an async runtime resource.
--  M4 activates the daemon host as a private composition consumer. `intention-daemon` may depend on the composition
-root plus the DTO/application/runtime/model/protocol/transport/type crates needed to host selected execution and
-streaming, and on private Tokio/future support. It never depends directly on a concrete provider or storage
-implementation, selects no provider, and exposes no provider SDK, credential, Tokio, or storage resource in its public
-contract.
--  M5 activates the typed tool/workspace path. The composition root (`intention-daemon`) owns assembly of the six active
-tools (`read`, `write`, `edit`, `execute`, `glob`, and `grep`) and the workspace service; `intention-daemon` hosts
-the application path but does not select implementations. No registry or reserved slot exists: the tool set is the
-closed six-variant `ToolId`, and any other tool name is rejected as `unknown_tool` before effect.
+- `ConfigSnapshotDto` is the canonical credential-free persisted configuration selection: the composition root supplies
+  one startup snapshot, and a turn that starts a run freezes that snapshot on the run row's `config_snapshot_json`.
+  The snapshot's content is the run's configuration and nothing mints an identity for it. TOML is applied only at daemon
+  startup, and live reload is not an accepted direction, so startup stays the only activation path.
+- `intention-proto` owns the provider-neutral `UsageDto`, `FinishReasonDto`, `ToolCallDto`, and `ProviderErrorDto` that
+  model and durable domain facts share; `intention-providers` re-exports them for its consumers.
+- Domain, storage, and protocol never depend on `intention-providers`. SQLite stores assistant content, reasoning text,
+  tool calls, and tool results on the transcript and tool-result rows rather than in typed envelopes or per-run cursors.
+  `intention-engine` depends on the provider-neutral `intention-providers` contract for its injected model execution
+  driver and the model request and stream values it assembles; it neither selects a concrete provider nor exposes an
+  async runtime resource.
+- `intention-daemon` is the composition root: it may depend on the configuration, engine, storage, tools, provider, DTO,
+  protocol, and transport crates it connects, and on private Tokio/future support. It selects the concrete provider
+  driver and SQLite storage, and exposes no provider SDK, credential, Tokio, or storage resource in its public contract.
+- The tool set is the closed six-variant `ToolId` (`read`, `write`, `edit`, `execute`, `glob`, and `grep`). No registry
+  or reserved slot exists, and any other tool name is rejected as `unknown_tool` before effect.
 
-The M1-M5 activation notes are historical records: the coverage policy is now the per-crate tiers declared in
-`quality/coverage.toml` ([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
+## Crate map
 
-## Pre-collapse crate map (historical)
+The workspace has nine production crates, the `intention-tui` adapter, the non-production `intention-test-support`
+fixture crate, and two future slots. Each crate's permitted dependency direction is the one its manifest declares, and
+the root `Makefile`'s `COVERAGE_FLOORS` declares the line floor of every measured crate
+([12 Quality Gates and Makefile](12-quality-gates-and-makefile.md)).
 
-This table and the diagram below record the pre-collapse crate plan. They are superseded by the
-[Slice 1.5 crate map (activated)](#slice-15-crate-map-activated) further down, which is the live map; several crates
-named here (`intention-domain`, `intention-protocol`, `intention-application`, `intention-runtime`,
-`intention-model`, the provider crates, `intention-workspace`, and `intention-hooks`) are not workspace members.
+| Crate | Owns |
+| --- | --- |
+| `intention-proto` | Identity newtypes, shared value types, run lifecycle and projection values, the typed public protocol DTOs, their typed serde payloads, and the typed tool contract (the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection). |
+| `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
+| `intention-engine` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
+| `intention-tools` | The declared tools' model-facing JSON Schema descriptors, the cancellation-aware dispatch surface, and the `WorkspaceRoot` addressing policy, over the proto's typed tool contract. VFR and Headroom arrive here as modules at M7. |
+| `intention-providers` | The provider-neutral model contract and both concrete SDK translation adapters. |
+| `intention-storage` | Repository contracts and the bundled SQLite single-schema implementation. |
+| `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |
+| `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
+| `intention-daemon` | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
+| `intention-tui` | The terminal application: one binary with a fullscreen ratatui UI, an interactive REPL, and a headless prompt mode over the shared client, and the owner of its own terminal theme, which it stores locally ([architecture 03](03-daemon-transport-and-adapters.md)). |
+| `intention-test-support` | Non-production fixtures: credential-free fixture configuration, native temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded fixture listener orchestration. |
+| `intention-tauri` (M6) | Tauri bootstrap and the minimal native bridge over `intention-client`. |
+| `intention-plans` (M5+ Slice 3) | Plan artifacts, plan lifecycle records, and Plan/Build policy. |
 
-| Crate | Owns | May depend on |
-| --- | --- | --- |
-| `intention-proto` | ID newtypes, schema versions, common errors, and time. | Minimal shared dependencies only. |
-| `intention-engine` | Commands, queries, semantic use-case workflows, and protocol-result mapping plus deterministic run execution, interruption handling, context-window accounting, and recovery-before-ready, over DTO-only storage. | Domain, storage, tools, providers, configuration revisions, proto. |
-| `intention-storage` | DTO-only semantic repository methods, committed-change evidence, transcript and tool-result reads, and persisted configuration-revision inputs. | Config, domain, types. |
-| `intention-config` | TOML parsing, validation, resolved configuration and revision DTOs. | Types, domain as needed. |
-| `intention-providers` | Provider-neutral model DTOs and driver trait plus both SDK translation adapters. | Config, proto, and shared value types. |
-| `intention-tools` | Tool identity and core tool contracts with JSON Schema argument text, the static six-tool spec match, and the WorkspaceRoot addressing anchor. | Proto. |
-| `intention-vfr` (created at M7) | VFR transform, mapping, expansion/raw-read tools. | Tools, domain, types. |
-| `intention-headroom` (created at M7) | Headroom compression, CCR contracts, retrieve tool. | Tools, storage contracts, domain, types. |
-| `intention-plans` (created at M5+ Slice 3) | Plan artifacts, hidden frontmatter, Plan/Build policy. | Tools, storage contracts, domain, types. |
-| `intention-transport` | Socket/pipe framing, server/client protocol, subscriptions. | Protocol, types. |
-| `intention-client` | Bootstrap, connection, dispatch, subscription, reconnect. | Protocol, transport, types. |
-| `intention-daemon` | One durable composition holder (`DaemonApplicationFacade`) that selects and connects the configuration snapshot, SQLite storage, and the provider driver, plus the daemon host and binary. | All selected concrete implementations. |
-| `intention-tauri` (created at M6) | Tauri bootstrap and native bridge. | Client, protocol, presentation DTO mapping. |
-| `intention-tui` | TUI and REPL presentation adapters. | Client, protocol, presentation crates. |
+Rules the map fixes:
 
-## Pre-collapse dependency direction (historical)
-
-This diagram records the pre-collapse dependency direction. The live edges are the ones declared in
-`quality/architecture.toml` and shown by the activated crate map below.
-
-```mermaid
-flowchart BT
-  TY[types] --> DO[domain]
-  TY --> CF[config]
-  DO --> ST[storage contracts]
-  CF --> ST
-  DO --> MO[model contracts]
-  DO --> TL[tool contracts]
-  DO --> PR[protocol]
-  CF --> AP[application]
-  CF --> RT[runtime]
-  ST --> AP
-  ST --> RT
-  MO --> RT
-  TL --> RT
-  ST --> SQ[SQLite storage]
-  CF --> SQ
-  DO --> SQ
-  AP --> IN[intention composition]
-  RT --> IN
-  SQ --> IN
-  IN --> DH[daemon host]
-  AP --> DH
-  RT --> DH
-  MO --> DH
-  DO --> DH
-  PR --> TR[transport]
-  TR --> DH
-  TR --> CL[client]
-  CL --> TA[tauri adapter]
-  CL --> TU[tui repl]
-```
-
-<!-- Arrows show permitted lower-level dependencies toward a consumer. Composition is the sole wiring location. -->
-
-## Slice 1.5 crate map (activated)
-
-Slice 1.5 collapsed the workspace to nine production crates, shown below together with what each absorbed. The table
-below is the live crate map, and the exact permitted edges and coverage tiers are declared
-by `quality/architecture.toml` under phase `slice2`.
-
-| Target crate | Absorbs | Owns |
-| --- | --- | --- |
-| `intention-proto` | `intention-proto`, `intention-protocol`, `intention-domain` | Identity newtypes, shared value types, schema versions, run lifecycle and projection values, the typed public protocol DTOs, their typed serde payloads, and the typed tool contract (the closed `ToolId`, the typed input and result families, and each committed tool row's typed projection). |
-| `intention-config` | `intention-config` | TOML parsing, validation, resolved configuration, and credential-free snapshots. |
-| `intention-engine` | `intention-application`, `intention-runtime` | Commands, queries, semantic use-case workflows, deterministic lifecycle decisions, interruption handling, and recovery. |
-| `intention-tools` | `intention-tools`, `intention-workspace`, `intention-hooks` | The declared tools' model-facing JSON Schema descriptors, the cancellation-aware dispatch surface, and the `WorkspaceRoot` addressing policy, over the proto's typed tool contract. |
-| `intention-providers` | `intention-model`, `intention-provider-openrouter`, `intention-provider-generic-chat` | The provider-neutral model contract and both concrete SDK translation adapters. |
-| `intention-storage` | `intention-storage`, `intention-storage-sqlite` | Repository contracts and the bundled SQLite single-schema implementation. |
-| `intention-transport` | `intention-transport` | Socket/pipe framing, the typed server/client wire, and subscriptions. |
-| `intention-client` | `intention-client` | Bootstrap, connection, dispatch, subscriptions, and reconnect, fully asynchronous and covering every protocol command and query. |
-| `intention-daemon` | `intention` (the composition facade library) | One composition holder that selects and connects configuration, SQLite storage, and the provider driver, plus the daemon host and binary. |
-
-Retained outside the nine production crates: the `intention-tui` adapter crate — since Slice 2 the terminal
-application, one binary with a fullscreen revue UI, an interactive REPL, and a headless prompt mode over the shared
-client — and the non-production `intention-test-support` fixture crate. The future crates are created at their
-milestones: `intention-tauri` (M6), `intention-plans` (M5+ Slice 3), and `intention-vfr` and `intention-headroom` (M7).
-
-Rules the target map fixes:
-
-- One composition location. The composition facade library is gone; `intention-daemon` is the only crate that selects
-  concrete implementations and the only place that wires them, and the daemon host calls the engine directly.
+- One composition location. `intention-daemon` is the only crate that selects concrete implementations and the only
+  place that wires them, and the daemon host calls the engine directly.
 - Boundaries own serialization. Only types crossing the three physical boundaries carry wire attributes: the IPC wire
   (`intention-proto` payloads served by `intention-transport`), SQLite rows (`intention-storage`), and provider SDK
   calls (`intention-providers`). Every other cross-crate call passes domain types.
@@ -159,7 +81,11 @@ flowchart BT
   TL --> EN
   PV --> EN
   EN --> DH[intention-daemon]
+  CF --> DH
+  PR --> DH
+  PV --> DH
   ST --> DH
+  TL --> DH
   TR --> DH
   PR --> TR[intention-transport]
   TR --> CL[intention-client]
@@ -168,25 +94,21 @@ flowchart BT
   DH --> BIN[daemon binary]
 ```
 
-## M3 ownership decisions
+## Ownership decisions
 
--  `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or
-pending, remove a not-yet-seen pending turn, append pending turns to a run context, transition a run, recover
-unfinished runs, read the transcript and tool results, and accept configuration revisions. It does not expose a
-transaction closure, SQL connection, filesystem path, or backend resource.
--  `intention-storage` owns bundled SQLite opening and direct creation of the single current storage schema,
-single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId
--> WorkspaceRootDto` association; the workspace addressing policy — the root as an anchor, not a containment boundary
-([architecture 05](05-tools-and-workspace.md)) — remains M5 policy ownership.
--  `intention-engine` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
-call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
-creation, pending-turn context joins, and recovery. It has no provider, tool, timer, or stream dependency in
-M3.
--  `intention-test-support` is a non-production workspace crate. It owns credential-free fixture configuration, native
-temporary roots under `std::env::temp_dir()`, `TempDir`-backed durable databases, deterministic sessions, and bounded
-fixture listener orchestration. `intention-daemon` exposes only hidden `test-support` seams for an injected
-database and current-state inspection; `intention-daemon` exposes only a hidden one-connection dispatch seam.
-Release production APIs and the daemon binary expose no fixture mode.
+- `intention-storage` defines semantic, DTO-only operations such as create session, accept a user turn as started or
+  pending, append pending turns to a run context, transition a run, recover unfinished runs, read the transcript and
+  tool results, and load a run's frozen configuration snapshot. It does not expose a transaction closure, SQL
+  connection, filesystem path, or backend resource.
+- `intention-storage` owns bundled SQLite opening and direct creation of the single current storage schema,
+  single-transaction state writes, and SQLite-only fault injection. It persists one canonical `WorkspaceId ->
+  WorkspaceRootDto` association; the addressing semantics of that root are [architecture
+  05](05-tools-and-workspace.md)'s.
+- `intention-engine` decides valid run state edges and owns interruption handling: a stopped provider stream or tool
+  call records a notice, resets its signal, and the run continues with its next model step. The repository owns run
+  creation, pending-turn context joins, and recovery.
+- `intention-daemon` exposes hidden `test-support` seams for an injected database, current-state inspection, and
+  one-connection dispatch. Release production APIs and the daemon binary expose no fixture mode.
 
 ## Composition rules
 
@@ -197,16 +119,12 @@ Release production APIs and the daemon binary expose no fixture mode.
 - the one selected provider driver;
 - command admission serialization;
 - the host-owned per-run registry, single cancellation handle, and injected tool-execution port through which the
-engine runs its typed tool sequence over the six core tool contracts.
+  engine runs its typed tool sequence over the six tool contracts. Composition selects concrete
+  implementations; the binary owns process lifecycle.
 
-The composition holder (`composition.rs`) selects and connects every concrete implementation, and the host (`lib.rs`)
-owns the listener, typed connection hosting, and the streaming run loop; no per-purpose `*_for_daemon` bridge surface
-exists, and the host reaches the composition holder through crate-private accessors. Composition selects concrete
-implementations; the binary owns process lifecycle.
-
-For M5, this is the ownership boundary for the six active tools, `WorkspaceRoot`, and the direct tool sequence.
-Base tools remain primitive implementations; the engine owns lifecycle/result persistence and publication, and the
-future plan, VFR, and Headroom owners attach as ordinary calls when activated, not as extension points.
+This is the ownership boundary for the six active tools and the direct tool sequence. Base tools remain primitive
+implementations; the engine owns lifecycle/result persistence and publication, and the plan owner and the VFR/Headroom
+modules attach as ordinary calls when activated, not as extension points.
 
 No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter implementation by global construction.
 
@@ -215,29 +133,26 @@ No other crate chooses a concrete SQLite driver, OpenRouter client, or adapter i
 Binaries are thin:
 
 - `intention-daemon`: starts a configured daemon host.
-- `intention-tui`: the terminal application; one command line selects the fullscreen revue UI (the bare command or
+- `intention-tui`: the terminal application; one command line selects the fullscreen ratatui UI (the bare command or
   `tui`), the interactive `repl`, or the headless `run <PROMPT>` mode, every mode reaches the daemon only through
   `intention-client`, and the process ends with one of the closed typed exit statuses.
 - a future administrative CLI may use `intention-client`, not daemon internals.
 
-The future `intention-tauri` crate (created at M6) is a desktop integration crate/binary host, not a second daemon
-implementation.
+The future `intention-tauri` crate (created at M6) is a desktop integration crate and binary host over
+`intention-client`.
 
-## Architectural test requirements
+## Enforcement
 
-The workspace must have tests that fail when these rules are broken:
-
-1. no cyclic crate dependencies;
-2. the required v1 crate set exists, and every crate has a single declared responsibility;
-3. adapters do not import forbidden implementation crates or declare forbidden workspace/external dependencies;
-4. only `intention-daemon` selects concrete storage/provider/tool extension implementations;
-5. `intention-proto` has no dependency on Tauri, SQLite, provider SDKs, or UI crates;
-6. public cross-crate methods accept/return DTOs, not implementation resources or provider SDK types;
-7. every planned crate has a stated test target before implementation begins;
-8. every declared boundary is enforced by the architecture checker against the machine-readable policy.
+The dependency manifests and rustc decide the dependency direction: a crate that names a foreign implementation crate,
+a provider SDK outside `intention-providers`, or a composition-only concrete implementation outside
+`intention-daemon`'s composition root fails to compile, and `cargo metadata` reports the same edges the manifests
+declare. The root `clippy.toml` and the denied `clippy::disallowed_types` and `clippy::disallowed_methods` lints forbid
+untyped JSON and the process working directory, so the DTO-first and `WorkspaceRoot` source rules fail the lint gate at
+the exact line that breaks them. Provider-SDK ownership, DTO-only public boundaries, and the acyclic production graph
+are review responsibilities, checked against this map and the manifests.
 
 The exact test strategy and minimum test portfolio are defined in [10 Test-Driven Delivery and
-Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate tiers),
+Verification](10-test-driven-delivery-and-verification.md); the pinned tooling, coverage policy (per-crate line floors),
 lint policy, and Makefile/CI contract in [12 Quality Gates and Makefile](12-quality-gates-and-makefile.md).
 
 ## Non-goals

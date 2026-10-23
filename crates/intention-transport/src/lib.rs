@@ -13,7 +13,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto};
 #[cfg(any(unix, test))]
 use interprocess::ConnectWaitMode;
 use interprocess::local_socket::tokio::{
@@ -41,23 +41,11 @@ pub const MAX_MESSAGE_BYTES: usize = 1_048_576;
 /// envelope cap.
 ///
 /// The budget bounds transcript rows only. The read path that spends it must
-/// charge the whole encoded snapshot — projection, pending turns, and rows —
-/// against [`MAX_MESSAGE_BYTES`], and answer a snapshot it cannot fit with the
+/// charge the whole encoded snapshot — projection and rows — against
+/// [`MAX_MESSAGE_BYTES`], and answer a snapshot it cannot fit with the
 /// typed `local_protocol_message_too_large` rejection instead of writing a line
 /// the peer refuses.
 pub const MAX_TRANSCRIPT_SNAPSHOT_BYTES: usize = MAX_MESSAGE_BYTES - MAX_MESSAGE_BYTES / 4;
-
-/// The single live local wire version.
-///
-/// Two protections cover a peer from another build. The byte is part of the
-/// platform-default endpoint name, so a daemon whose build declared a different
-/// value owns a different endpoint and a current client never reaches it. The
-/// byte itself stays 1 while the wire evolves in place, so the protection on
-/// the shared endpoint is the fail-closed typed decode: a peer that answers on
-/// the current endpoint with bytes this build cannot decode fails closed with
-/// the typed `stale_daemon_protocol` error instead of being reached as a
-/// compatible peer.
-pub const WIRE_VERSION: u8 = 1;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
 const LISTENER_SPIN_TIMEOUT: Duration = Duration::from_millis(500);
@@ -137,14 +125,19 @@ impl LocalEndpoint {
         })
     }
 
-    /// Derives the standard per-user daemon endpoint for the live wire version.
+    /// Derives the standard per-user daemon endpoint.
+    ///
+    /// The endpoint name is one fixed literal for the platform. There is no
+    /// handshake, no negotiation, and no version check: the only protection is
+    /// the fail-closed typed decode, which rejects bytes this build cannot
+    /// decode with the typed `invalid_local_protocol_response` error.
     ///
     /// # Errors
     ///
     /// Returns a safe unavailable error when a usable platform runtime directory
     /// cannot be determined.
     pub fn platform_default() -> DtoResult<Self> {
-        Self::from_instance_id(format!("intention-relay-v{WIRE_VERSION}"))
+        Self::from_instance_id("intention-relay")
     }
 
     /// Returns the safe logical endpoint instance identifier.
@@ -498,8 +491,7 @@ fn endpoint_in_use() -> ErrorDto {
         "local_daemon_endpoint_in_use",
         ErrorCategoryDto::Conflict,
         "the local daemon endpoint is already in use",
-        ErrorRetryDto::Immediate,
-        None,
+        true,
     )
     .unwrap_or_else(|_| unavailable("local_daemon_endpoint_in_use"))
 }
@@ -588,11 +580,6 @@ const fn reclaim_stale_socket(_endpoint: &LocalEndpoint) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Transport unit fixtures use direct assertions for diagnostics."
-    )]
 
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -636,10 +623,7 @@ mod tests {
     #[test]
     fn platform_default_uses_a_safe_logical_instance_identifier() {
         let endpoint = LocalEndpoint::platform_default().expect("platform default is available");
-        assert_eq!(
-            endpoint.instance_id(),
-            format!("intention-relay-v{WIRE_VERSION}")
-        );
+        assert_eq!(endpoint.instance_id(), "intention-relay");
         assert!(endpoint.path.is_absolute());
     }
 

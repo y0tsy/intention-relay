@@ -5,12 +5,6 @@
 //! and kill it within a bounded window, so every suite drives the real process
 //! boundary without duplicating harness code.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "process fixtures fail with a precise diagnostic when the test environment cannot host the daemon"
-)]
-
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,63 +17,33 @@ use intention_transport::LocalEndpoint;
 /// The bounded window one killed daemon process has to become reapable.
 const KILL_DEADLINE: Duration = Duration::from_secs(5);
 
-/// The ancestor levels searched for the daemon binary, counted from the
-/// directory the running test executable sits in.
-const DAEMON_SEARCH_LEVELS: usize = 5;
-
 /// Returns the executable path of the real daemon binary the fixtures spawn.
 ///
-/// `INTENTION_DAEMON_BIN` overrides the resolution. Otherwise the daemon binary
-/// is searched in the directory the running test executable sits in and in each
-/// of that directory's ancestors, testing the directory itself and its `deps`
-/// directory. A test binary runs from its Cargo profile's `deps` directory, and
-/// a coverage tool may run it from a per-target artifact directory several
-/// levels below the profile, so the search reaches the profile's
-/// `intention-daemon` binary in both layouts. The platform executable suffix is
-/// applied, and a binary the search cannot find falls back to the
-/// profile-directory sibling.
+/// `INTENTION_DAEMON_BIN` overrides the resolution. Cargo builds every target of
+/// a profile into that profile's directory and runs a test binary from the
+/// profile's `deps` directory, so the daemon binary sits exactly one directory
+/// above the running executable's own. The platform executable suffix is
+/// applied.
+///
+/// The crate that owns the daemon binary names it directly instead, through the
+/// `CARGO_BIN_EXE_intention-daemon` value Cargo defines for its integration
+/// tests; this derivation is what a suite in another crate - which Cargo gives
+/// no such value - resolves it with.
 ///
 /// # Panics
 ///
-/// Panics when the running test executable has no resolvable path.
+/// Panics when the running test executable has no resolvable profile directory.
 #[must_use]
 pub fn daemon_binary_path() -> PathBuf {
     if let Some(program) = std::env::var_os("INTENTION_DAEMON_BIN") {
         return PathBuf::from(program);
     }
     let executable = std::env::current_exe().expect("the running test executable path resolves");
-    let directory = executable
+    let profile = executable
         .parent()
-        .expect("the running test executable has a parent directory");
-    search_daemon_binary(directory).unwrap_or_else(|| fallback_daemon_binary_path(directory))
-}
-
-/// Returns the daemon binary in `start`, in its `deps` directory, or in either
-/// directory of an ancestor within [`DAEMON_SEARCH_LEVELS`] levels.
-fn search_daemon_binary(start: &Path) -> Option<PathBuf> {
-    let name = daemon_binary_name();
-    let mut directory = Some(start);
-    for _ in 0..DAEMON_SEARCH_LEVELS {
-        let current = directory?;
-        for candidate in [current.join(&name), current.join("deps").join(&name)] {
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-        directory = current.parent();
-    }
-    None
-}
-
-/// Returns the daemon binary path beside the profile directory of a test
-/// executable directory.
-fn fallback_daemon_binary_path(directory: &Path) -> PathBuf {
-    let profile_directory = if directory.file_name().is_some_and(|name| name == "deps") {
-        directory.parent().unwrap_or(directory)
-    } else {
-        directory
-    };
-    profile_directory.join(daemon_binary_name())
+        .and_then(Path::parent)
+        .expect("the running test executable sits in its profile's deps directory");
+    profile.join(daemon_binary_name())
 }
 
 /// Returns the platform file name of the daemon executable.
@@ -288,78 +252,4 @@ pub async fn wait_until_ready(endpoint: &LocalEndpoint, deadline: Instant) -> In
         }
     }
     panic!("daemon becomes ready before the deadline");
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{daemon_binary_name, fallback_daemon_binary_path, search_daemon_binary};
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use tempfile::TempDir;
-
-    /// Creates the directory tree `relative` below `root` and returns its path.
-    fn create_directory(root: &Path, relative: &str) -> PathBuf {
-        let path = root.join(relative);
-        fs::create_dir_all(&path).expect("the fixture directory tree is created");
-        path
-    }
-
-    /// Writes a placeholder daemon executable into `directory` and returns it.
-    fn write_daemon(directory: &Path) -> PathBuf {
-        let path = directory.join(daemon_binary_name());
-        fs::write(&path, b"daemon").expect("the fixture daemon executable is written");
-        path
-    }
-
-    #[test]
-    fn the_daemon_binary_is_found_beside_the_test_executable() {
-        let root = TempDir::new().expect("the fixture root is created");
-        let deps = create_directory(root.path(), "debug/deps");
-        let daemon = write_daemon(&deps);
-        assert_eq!(search_daemon_binary(&deps), Some(daemon));
-    }
-
-    #[test]
-    fn the_daemon_binary_is_found_in_the_profile_directory_above_deps() {
-        let root = TempDir::new().expect("the fixture root is created");
-        let profile = create_directory(root.path(), "debug");
-        let deps = create_directory(root.path(), "debug/deps");
-        let daemon = write_daemon(&profile);
-        assert_eq!(search_daemon_binary(&deps), Some(daemon));
-    }
-
-    #[test]
-    fn the_daemon_binary_is_found_from_a_coverage_artifact_directory() {
-        let root = TempDir::new().expect("the fixture root is created");
-        let profile = create_directory(root.path(), "llvm-cov-target/debug");
-        let start = create_directory(
-            root.path(),
-            "llvm-cov-target/debug/build/intention-daemon/50288d1a1e3ff36d/out",
-        );
-        let daemon = write_daemon(&profile);
-        assert_eq!(search_daemon_binary(&start), Some(daemon));
-    }
-
-    #[test]
-    fn the_daemon_binary_is_found_in_the_deps_directory_of_an_ancestor() {
-        let root = TempDir::new().expect("the fixture root is created");
-        let deps = create_directory(root.path(), "llvm-cov-target/debug/deps");
-        let start = create_directory(
-            root.path(),
-            "llvm-cov-target/debug/build/intention-daemon/50288d1a1e3ff36d/out",
-        );
-        let daemon = write_daemon(&deps);
-        assert_eq!(search_daemon_binary(&start), Some(daemon));
-    }
-
-    #[test]
-    fn a_missing_daemon_binary_resolves_to_the_profile_sibling() {
-        let root = TempDir::new().expect("the fixture root is created");
-        let deps = create_directory(root.path(), "debug/deps");
-        assert_eq!(search_daemon_binary(&deps), None);
-        assert_eq!(
-            fallback_daemon_binary_path(&deps),
-            root.path().join("debug").join(daemon_binary_name())
-        );
-    }
 }

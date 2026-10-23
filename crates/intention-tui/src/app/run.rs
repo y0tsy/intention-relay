@@ -16,19 +16,15 @@ use super::{AppState, ConnectionStatus, Effect, RunPhase, StreamStatus, short_id
 const TOOL_WORKING_AFTER_MILLIS: u64 = 500;
 
 impl AppState {
-    /// Reconciles a freshly opened subscription into the client's row state.
+    /// Takes the client's committed state of a freshly opened subscription.
     ///
-    /// The subscription reply is a second read of the same durable transcript
-    /// the session read carried, so the client merges the two by durable row
-    /// identity and the read's run projection is the current one. This front end
-    /// keeps no second projection: the panes render exactly the rows the client
-    /// reconciled.
+    /// The subscription reply is the client's own read of the session, and the
+    /// state beside it is that read: this front end renders those rows and
+    /// nothing else, so it holds the client's value instead of merging a copy
+    /// of its own. Every later frame replaces it the same way, which is what
+    /// keeps one derivation and one transcript version across the two.
     pub(super) fn apply_session_stream_opened(&mut self, state: SessionStreamState) -> Vec<Effect> {
-        if let Err(error) = self.merge_transcript(state) {
-            // The reply belongs to another session: the client classified it,
-            // so the front end reports that failure instead of merging it.
-            return self.apply_failure(&error);
-        }
+        self.session_state = Some(state);
         self.note_replacement();
         self.stream = StreamStatus::Live;
         // An accepted subscription proves only that a stream exists: the
@@ -111,8 +107,18 @@ impl AppState {
         vec![Effect::Connect]
     }
 
-    /// Applies one committed or transient run-stream frame.
-    pub(super) fn apply_frame(&mut self, frame: SessionFrameDto) -> Vec<Effect> {
+    /// Applies one run-stream frame the client already derived.
+    ///
+    /// The client applies every frame to the one session state it exposes, so
+    /// the state beside the frame is the derivation's own result: this front
+    /// end takes it and decides only what the frame means for its own display
+    /// state - the phase, the notice, and whether a replacement moved the rows.
+    pub(super) fn apply_frame(
+        &mut self,
+        frame: SessionFrameDto,
+        update: FrameUpdate,
+        state: SessionStreamState,
+    ) -> Vec<Effect> {
         if self.stream != StreamStatus::Live {
             // A frame for a subscription this front end no longer holds is
             // stale; dropping it keeps the committed rows authoritative.
@@ -120,13 +126,7 @@ impl AppState {
         }
         let epoch = self.transcript_epoch();
         let previous_run = self.active_run().map(|run| run.run_id());
-        let Some(state) = self.session_state.as_mut() else {
-            return Vec::new();
-        };
-        let update = match state.apply_frame(frame.clone()) {
-            Ok(update) => update,
-            Err(error) => return self.apply_failure(&error),
-        };
+        self.session_state = Some(state);
         // A frame the client accepted is the evidence that this stream carries
         // the session's traffic: the one reconnect a later loss is owed is
         // restored here, and never by a subscription that only opened.
@@ -171,7 +171,7 @@ impl AppState {
             }
             SessionFrameDto::TextDelta(delta) => {
                 // The channel carries every run of the session, so a delta of a
-                // run this state does not project is another window's text: it
+                // run the client did not advance is another window's text: it
                 // never colours the projected run's phase.
                 if !matches!(update, FrameUpdate::Delta { .. }) {
                     return Vec::new();

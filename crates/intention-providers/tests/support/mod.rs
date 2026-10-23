@@ -4,10 +4,8 @@
 //! needs a builder includes it with `mod support;`.
 
 #![allow(
-    clippy::expect_used,
-    clippy::panic,
     dead_code,
-    reason = "The shared provider fixtures use expect and panic for impossible local failures, and each suite uses its own subset of the builders."
+    reason = "Each suite uses its own subset of the shared provider fixture builders."
 )]
 
 use std::{
@@ -16,9 +14,7 @@ use std::{
 };
 
 use futures_util::{Stream, task::noop_waker_ref};
-use intention_config::{
-    ConfigPathDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial,
-};
+use intention_config::{RawConfigInputDto, ResolvedConfigDto, StartupProviderMaterial};
 use intention_proto::RunId;
 use intention_providers::{
     ModelEventDto, ModelEventStream, ModelMessageDto, ModelRequestDto, ModelRoleDto,
@@ -29,19 +25,10 @@ use intention_providers::{
 pub const FAKE_CREDENTIAL: &str = "fixture-credential-not-real-12345";
 
 /// Builds startup provider material from one `[provider]` table body.
-pub fn startup_material(provider_body: &str, file_name: &str) -> StartupProviderMaterial {
-    ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-        format!("schema_version = 1\n[provider]\n{provider_body}"),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join(file_name)
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("fixture path is absolute"),
-        ),
-    ))
+pub fn startup_material(provider_body: &str) -> StartupProviderMaterial {
+    ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\n{provider_body}"
+    )))
     .expect("fixture config resolves")
 }
 

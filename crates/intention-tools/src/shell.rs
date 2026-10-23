@@ -27,17 +27,20 @@ pub fn command(command_text: &str) -> Command {
 /// Classifies one failed shell spawn safely.
 ///
 /// A missing platform shell is an availability outcome the model can act on;
-/// every other spawn failure keeps the generic safe failure.
+/// every other spawn failure keeps the generic safe failure. Both report the
+/// underlying OS error verbatim and never the command text.
 pub fn spawn_failure(error: &std::io::Error) -> intention_proto::ErrorDto {
     if error.kind() == std::io::ErrorKind::NotFound {
-        intention_proto::ErrorDto::unavailable(
+        intention_proto::ErrorDto::owned_message(
             "tool_shell_unavailable",
-            "the platform shell interpreter is unavailable",
+            intention_proto::ErrorCategoryDto::Unavailable,
+            format!("the platform shell interpreter is unavailable: {error}"),
         )
     } else {
-        intention_proto::ErrorDto::validation(
+        intention_proto::ErrorDto::owned_message(
             "tool_execute_spawn_failed",
-            "unable to spawn workspace command",
+            intention_proto::ErrorCategoryDto::Validation,
+            format!("unable to spawn the workspace command: {error}"),
         )
     }
 }
@@ -48,9 +51,13 @@ mod tests {
 
     #[test]
     fn a_missing_shell_is_an_availability_outcome() {
-        let missing = std::io::Error::from(std::io::ErrorKind::NotFound);
-        assert_eq!(spawn_failure(&missing).code(), "tool_shell_unavailable");
-        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
-        assert_eq!(spawn_failure(&denied).code(), "tool_execute_spawn_failed");
+        let missing = std::io::Error::new(std::io::ErrorKind::NotFound, "fixture shell missing");
+        let failure = spawn_failure(&missing);
+        assert_eq!(failure.code(), "tool_shell_unavailable");
+        assert!(failure.message().contains("fixture shell missing"));
+        let denied = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "fixture denial");
+        let failure = spawn_failure(&denied);
+        assert_eq!(failure.code(), "tool_execute_spawn_failed");
+        assert!(failure.message().contains("fixture denial"));
     }
 }

@@ -2,7 +2,6 @@
 //! from the six former padded coverage targets.
 
 #![allow(
-    clippy::expect_used,
     clippy::unwrap_used,
     reason = "Coverage fixtures use infallible setup values; failures indicate broken test setup."
 )]

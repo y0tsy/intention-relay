@@ -11,9 +11,12 @@
 //! the submission path expands it back into the whole text, so the session
 //! receives the paste and not its summary.
 
+use intention_proto::SessionId;
+
 use super::commands::{self, CommandMenu, MenuRow};
 use super::{
-    AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, Theme, TranscriptScroll,
+    AppState, Effect, InputCursorMove, InputHistoryMove, MenuMove, ThemePreference,
+    TranscriptScroll,
 };
 
 /// How many transcript display rows one mouse-wheel notch moves.
@@ -462,18 +465,39 @@ impl AppState {
                 return Vec::new();
             }
         };
-        match invocation.spec().action {
+        match invocation.spec().action() {
             commands::CommandAction::NewSession => self.request_new_session(),
+            commands::CommandAction::OpenSession => {
+                // `/session`'s one argument is free-form: the identifier is a
+                // durable value no declaration lists, so the transition parses
+                // the word the registry passed through.
+                match SessionId::parse(invocation.word(0).unwrap_or_default()) {
+                    Ok(session_id) => self.request_session_open(session_id),
+                    Err(_) => {
+                        self.note(format!(
+                            "{} requires a canonical session identifier",
+                            invocation.spec().typed_name()
+                        ));
+                        Vec::new()
+                    }
+                }
+            }
             commands::CommandAction::SessionsBrowser => self.request_sessions_browser(),
             commands::CommandAction::Theme => {
                 // `/theme`'s one argument is the first the command declares: a
-                // declared value selects its theme, and only the argument's
-                // absence opens the picker. The declaration is derived from
-                // `Theme::ALL`, so the value's position in it is its theme's.
+                // declared value selects its preference - `auto` included, which
+                // stores the request to follow detection - and only the
+                // argument's absence opens the picker. The declaration is
+                // derived from `ThemePreference::ALL`, so the value's position
+                // in it is its preference's.
                 match invocation.value_index(0) {
-                    Some(position) => self.apply_theme_selected(Theme::ALL[position]),
+                    Some(position) => self.apply_theme_selected(ThemePreference::ALL[position]),
                     None => self.request_theme_picker(),
                 }
+            }
+            commands::CommandAction::Quit => {
+                self.quit = true;
+                Vec::new()
             }
         }
     }

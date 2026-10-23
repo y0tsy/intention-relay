@@ -7,14 +7,12 @@
 //! overview block is pinned to the region's last rows, directly above the
 //! input block.
 //!
-//! The overview is one horizontal block of up to four sub-blocks. The product
-//! version is a compile-time fact of this binary, so it is the one real
-//! sub-block; the AGENTS.md, MCPs, and Skills sub-blocks are `@todo(core)`
-//! plates, because the client has no instruction-source, MCP, or skills
-//! support to report yet. A plate is deliberate: it carries the stub wash and
-//! the placeholder ink, and never a fabricated count or a fake tick.
+//! The overview is one horizontal block of the sub-blocks the core can fill.
+//! The product version is a compile-time fact of this binary, so it is the one
+//! sub-block: the instruction sources, MCP capabilities, and skills have no
+//! client support and no wire projection, so no sub-block names them.
 //!
-//! revue has no font sizes, so the lockup approximates one: the product word
+//! A terminal has no font sizes, so the lockup approximates one: the product word
 //! is written bold in an accent ink and the trailing word is tracked out one
 //! column per letter in the muted ink, which is the classic small-caps
 //! treatment a terminal carries. The alternatives were Unicode small caps or
@@ -23,8 +21,11 @@
 //! as one uniform line), so the tracked muted form is the one that keeps every
 //! character monochrome and every column measured through `char_width`.
 
-use revue::style::Color;
-use revue::widget::{Border, RichText, Span, Stack, Style, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::AppState;
 use crate::tui::layout::display_width;
@@ -61,26 +62,11 @@ const OVERVIEW_FRAME: usize = 2;
 /// The label of the product-version sub-block.
 const VERSION_LABEL: &str = "Version";
 
-/// The label of the project-instruction sub-block.
-const AGENTS_LABEL: &str = "AGENTS.md";
-
-/// The label of the MCP-capability sub-block.
-const MCPS_LABEL: &str = "MCPs";
-
-/// The label of the skills sub-block.
-const SKILLS_LABEL: &str = "Skills";
-
 /// The version this binary was built as.
 ///
 /// The workspace publishes no separate product version, so the lockup names
 /// the version of the binary that draws it.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The visible marker of every sub-block the client cannot fill yet.
-// @todo(core): the instruction sources (AGENTS.md loading), MCP capabilities,
-// and skills have no client support and no wire projection, so those
-// sub-blocks show this deliberate plate instead of a fabricated count or tick.
-const STUB: &str = "@todo(core)";
 
 /// Returns whether the chat shows the welcome surface.
 ///
@@ -138,23 +124,26 @@ const fn layout(rows: u16) -> WelcomeLayout {
 
 /// Returns the welcome pane: the lockup and the overview, filling exactly the
 /// rows and columns of the transcript region it replaces.
-pub(in crate::tui) fn welcome_pane(rows: u16, columns: u16, palette: &'static Palette) -> Stack {
-    let layout = layout(rows);
-    let width = usize::from(columns);
-    let mut body = vstack();
-    if layout.lead > 0 {
-        body = body.child_sized(blank_row(width, palette), layout.lead);
-    }
+pub(in crate::tui) fn welcome_pane(area: Rect, frame: &mut Frame, palette: &'static Palette) {
+    let layout = layout(area.height);
+    let width = usize::from(area.width);
+    fill(frame, area, palette);
+    let mut y = area.y.saturating_add(layout.lead);
     if layout.logo > 0 {
-        body = body.child_sized(logo_row(width, palette), layout.logo);
+        frame.render_widget(
+            Paragraph::new(logo_row(width, palette)),
+            Rect::new(area.x, y, area.width, layout.logo),
+        );
+        y = y.saturating_add(layout.logo);
     }
-    if layout.filler > 0 {
-        body = body.child_sized(blank_row(width, palette), layout.filler);
-    }
+    y = y.saturating_add(layout.filler);
     if layout.overview > 0 {
-        body = body.child_sized(overview(layout.overview, width, palette), layout.overview);
+        overview(
+            Rect::new(area.x, y, area.width, layout.overview),
+            frame,
+            palette,
+        );
     }
-    body
 }
 
 /// Returns the lockup: the product word, the documented gap, and the tracked
@@ -162,40 +151,40 @@ pub(in crate::tui) fn welcome_pane(rows: u16, columns: u16, palette: &'static Pa
 ///
 /// Every column is measured through `char_width`, so the lockup and its pads
 /// fill exactly `width` columns however a terminal renders the letters.
-fn logo_row(width: usize, palette: &'static Palette) -> RichText {
+fn logo_row(width: usize, palette: &'static Palette) -> Line<'static> {
     let trailing = tracked(TRAILING);
     let lockup = display_width(PRODUCT) + LOGO_GAP + display_width(&trailing);
     let left = width.saturating_sub(lockup) / 2;
     let right = width.saturating_sub(lockup + left);
-    let mut text = RichText::new();
+    let mut spans = Vec::new();
     if left > 0 {
-        text = text.span(padding(left, palette));
+        spans.push(padding(left, palette));
     }
-    text = text.span(Span::styled(
+    spans.push(Span::styled(
         PRODUCT,
         Style::new()
             .fg(palette.accent_deep)
             .bg(palette.panel)
-            .bold(),
+            .add_modifier(Modifier::BOLD),
     ));
-    text = text.span(padding(LOGO_GAP, palette));
-    text = text.span(Span::styled(
+    spans.push(padding(LOGO_GAP, palette));
+    spans.push(Span::styled(
         trailing,
         Style::new().fg(palette.ink_muted).bg(palette.panel),
     ));
     if right > 0 {
-        text = text.span(padding(right, palette));
+        spans.push(padding(right, palette));
     }
-    text
+    Line::from(spans)
 }
 
 /// Returns `word` with one blank column between its letters.
 ///
 /// Tracking is the size cue this front end has: every letter is still one
 /// cell wide, and the spaced word reads as the smaller half of the lockup.
-// @todo(revue): revue has no font sizes, so the lockup fakes a type scale with
-// letter tracking, and the welcome region budgets and fits its sub-blocks by
-// hand; a size or scale surface would let the lockup and the region be
+// @todo(hack): the terminal has no font sizes, so the lockup fakes a type scale
+// with letter tracking, and the welcome region budgets and fits its sub-blocks
+// by hand; a size or scale surface would let the lockup and the region be
 // expressed directly.
 fn tracked(word: &str) -> String {
     word.chars()
@@ -206,23 +195,31 @@ fn tracked(word: &str) -> String {
 
 /// Returns the overview: the sub-block row, framed while the region has room
 /// for the frame.
-fn overview(rows: u16, width: usize, palette: &'static Palette) -> Stack {
-    let framed = rows >= OVERVIEW_ROWS;
+fn overview(area: Rect, frame: &mut Frame, palette: &'static Palette) {
+    let framed = area.height >= OVERVIEW_ROWS;
+    let width = usize::from(area.width);
     let content = width.saturating_sub(if framed { OVERVIEW_FRAME } else { 0 });
     let chips = chips_row(content, palette);
-    if framed {
-        vstack().child_sized(
-            Border::rounded()
-                .min_size(as_width(width), rows)
-                .max_size(as_width(width), rows)
-                .fg(palette.border)
-                .bg(palette.panel)
-                .child(chips),
-            rows,
-        )
-    } else {
-        vstack().child_sized(chips, rows)
+    if !framed {
+        frame.render_widget(
+            Paragraph::new(chips),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+        return;
     }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(palette.border))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+    frame.render_widget(
+        Paragraph::new(chips),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
 }
 
 /// Returns the sub-block row: every sub-block that fits, in order, on its own
@@ -230,61 +227,41 @@ fn overview(rows: u16, width: usize, palette: &'static Palette) -> Stack {
 ///
 /// The row is laid out left to right and a sub-block that does not fit ends the
 /// row whole, so a narrow welcome shows fewer sub-blocks instead of half of
-/// one. That is "up to four": the overview is one block, never a wrapped one.
-fn chips_row(width: usize, palette: &'static Palette) -> RichText {
-    let mut text = RichText::new();
+/// one.
+fn chips_row(width: usize, palette: &'static Palette) -> Line<'static> {
+    let mut spans = Vec::new();
     let mut used = 0;
     for sub_block in fitted(width, palette) {
         let chip = sub_block.chip();
         let chip_width = display_width(&chip);
         if used > 0 {
-            text = text.span(padding(1, palette));
+            spans.push(padding(1, palette));
             used += 1;
         }
-        text = text.span(Span::styled(
+        spans.push(Span::styled(
             chip,
             Style::new().fg(sub_block.ink).bg(sub_block.wash),
         ));
         used += chip_width;
     }
     if used < width {
-        text = text.span(padding(width - used, palette));
+        spans.push(padding(width - used, palette));
     }
-    text
+    Line::from(spans)
 }
 
 /// Returns the sub-blocks of the overview, in display order.
-const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 4] {
-    [
-        SubBlock {
-            label: VERSION_LABEL,
-            state: VERSION,
-            ink: palette.badge_ink,
-            wash: palette.badge_bg,
-        },
-        SubBlock {
-            label: AGENTS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-        SubBlock {
-            label: MCPS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-        SubBlock {
-            label: SKILLS_LABEL,
-            state: STUB,
-            ink: palette.todo_ink,
-            wash: palette.stub_bg,
-        },
-    ]
+const fn sub_blocks(palette: &'static Palette) -> [SubBlock; 1] {
+    [SubBlock {
+        label: VERSION_LABEL,
+        state: VERSION,
+        ink: palette.badge_ink,
+        wash: palette.badge_bg,
+    }]
 }
 
 /// Returns the leading sub-blocks that fit in `width` columns, in order.
-// @todo(revue): revue has no wrap-and-clip container, so the overview's chips
+// @todo(hack): no layout container wraps and clips here, so the overview's chips
 // are measured one by one and the first that does not fit ends the row - a
 // hand-written `flex-wrap: nowrap; overflow: hidden`, as in the sessions
 // legend.
@@ -308,7 +285,7 @@ fn fitted(width: usize, palette: &'static Palette) -> Vec<SubBlock> {
 struct SubBlock {
     /// The short label of the state the sub-block reports.
     label: &'static str,
-    /// The value or placeholder beside the label.
+    /// The value the sub-block reports.
     state: &'static str,
     /// The ink of the sub-block's text.
     ink: Color,
@@ -324,34 +301,29 @@ impl SubBlock {
 }
 
 /// Returns a blank run of `width` columns on the panel wash.
-fn padding(width: usize, palette: &'static Palette) -> Span {
+fn padding(width: usize, palette: &'static Palette) -> Span<'static> {
     Span::styled(" ".repeat(width), Style::new().bg(palette.panel))
 }
 
-/// Returns one blank row of `width` columns on the panel wash.
-fn blank_row(width: usize, palette: &'static Palette) -> RichText {
-    RichText::new().span(padding(width, palette))
-}
-
-/// Returns one column count as the terminal's column type.
-fn as_width(columns: usize) -> u16 {
-    u16::try_from(columns).unwrap_or(u16::MAX)
+/// Paints `area` in the panel's wash.
+fn fill(frame: &mut Frame, area: Rect, palette: &'static Palette) {
+    frame
+        .buffer_mut()
+        .set_style(area, Style::new().bg(palette.panel));
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "The pane unit tests build typed fixtures and assert rendered cells directly."
-    )]
 
-    use revue::testing::TestApp;
+    use ratatui::layout::Rect;
+    use ratatui::widgets::Paragraph;
 
     use super::{
         LOGO_GAP, OVERVIEW_ROWS, PRODUCT, TRAILING, WelcomeLayout, chips_row, display_width,
         fitted, layout, sub_blocks, tracked,
     };
     use crate::tui::palette::Palette;
+    use crate::tui::testing::Screen;
 
     /// The light palette every fixture renders with.
     const LIGHT: &Palette = &crate::tui::palette::LIGHT;
@@ -404,65 +376,46 @@ mod tests {
     }
 
     #[test]
-    fn the_overview_shows_the_sub_blocks_in_order_and_drops_whole_ones() {
+    fn the_overview_lists_only_the_sub_block_the_core_fills() {
         let blocks = sub_blocks(LIGHT);
         let all = fitted(usize::MAX, LIGHT);
         assert_eq!(
             all.iter().map(|block| block.label).collect::<Vec<_>>(),
-            vec!["Version", "AGENTS.md", "MCPs", "Skills"],
-            "the overview lists the version, the instructions, the MCPs, and the skills"
+            vec!["Version"],
+            "the version is the one fact the core carries"
         );
         assert_eq!(
             all.iter().map(|block| block.state).collect::<Vec<_>>(),
-            vec![
-                env!("CARGO_PKG_VERSION"),
-                "@todo(core)",
-                "@todo(core)",
-                "@todo(core)"
-            ],
-            "only the version is a fact; the rest are deliberate plates"
+            vec![env!("CARGO_PKG_VERSION")],
+            "the sub-block reports the version this binary was built as"
         );
         let chips: Vec<usize> = blocks
             .iter()
             .map(|block| display_width(&block.chip()))
             .collect();
-        let total = chips.iter().sum::<usize>() + blocks.len() - 1;
-        assert_eq!(fitted(total, LIGHT).len(), 4, "the full row holds all four");
-        assert_eq!(
-            fitted(total - 1, LIGHT).len(),
-            3,
-            "one column short drops the last sub-block whole"
-        );
         assert_eq!(
             fitted(chips[0], LIGHT).len(),
             1,
-            "the first sub-block alone fits"
+            "the sub-block fits its own columns"
         );
         assert_eq!(
             fitted(chips[0] - 1, LIGHT).len(),
             0,
-            "nothing fits below it"
+            "a column short drops it whole"
         );
     }
 
     #[test]
-    fn the_version_carries_the_badge_surface_and_a_stub_carries_the_stub_plate() {
-        let app = TestApp::with_size(chips_row(80, LIGHT), 80, 1);
-        let version = app.buffer().get(0, 0).expect("the version chip paints");
-        assert_eq!(version.fg, Some(LIGHT.badge_ink));
-        assert_eq!(version.bg, Some(LIGHT.badge_bg));
-        let (stub_x, stub_row) = app
-            .find_text("Skills @todo(core)")
-            .expect("the skills stub renders");
-        let stub = app
-            .buffer()
-            .get(stub_x, stub_row)
-            .expect("the stub chip paints");
-        assert_eq!(stub.fg, Some(LIGHT.todo_ink));
-        assert_eq!(
-            stub.bg,
-            Some(LIGHT.stub_bg),
-            "a stub carries the deliberate @todo plate, not a status wash"
+    fn the_version_carries_the_badge_surface() {
+        let app = Screen::widget(80, 1, |frame| {
+            frame.render_widget(Paragraph::new(chips_row(80, LIGHT)), Rect::new(0, 0, 80, 1));
+        });
+        let version = app.cell(0, 0).expect("the version chip paints");
+        assert_eq!(version.fg, LIGHT.badge_ink);
+        assert_eq!(version.bg, LIGHT.badge_bg);
+        assert!(
+            app.find_text("AGENTS.md").is_none(),
+            "no sub-block names a fact the core cannot report"
         );
     }
 }

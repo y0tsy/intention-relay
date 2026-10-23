@@ -1,32 +1,27 @@
 # Goal Domain and Verification
 
 **Approved future design. Not implemented; activation requires an activating specification.** Architecture 28 owns the
-future Goal aggregate domain: Goal identity, scope, and tree; Goal lifecycle, readiness, and user decision; leading-goal
-run selection; verification gates and evidence; working memory, roles, and templates;
-model proposals and user confirmation; the conversation-compaction working form; and Goal-domain bounds and closed safe
-failures.
+future Goal aggregate domain: Goal identity, scope, and links; Goal status; leading-goal run selection; verification
+evidence; roles; model proposals and user confirmation; and Goal-domain bounds and closed safe failures.
 
 Owner: architecture 28.
 
 ## Ownership and non-authorities
 
-The removed run-execution meaning layer (its canonical codec was removed under [architecture
-02](02-dto-and-contract-policy.md)) leaves no live path. Architecture 15 owns tool identity and the tool loop, architecture 18
-MCP lifecycle, architecture 21 context selection and projection (Goal context selection, Skills, memory/compaction
-selection), and architecture 03 activity-journal and notification projections.
+Run execution carries no meaning layer of its own ([architecture
+02](02-dto-and-contract-policy.md)). Architecture 15 owns tool identity and the tool loop, architecture 18
+MCP connection records, architecture 21 context selection and projection (Goal context selection, Skills, and compaction),
+and architecture 03 activity-journal and notification projections.
 
-This document owns the Goal aggregate domain and its verification semantics. A Goal, revision, link, gate, memory
-record, role, template, proposal, or summary creates no `RunId` except through the ordinary admission path, lifecycle
-transition, tool permission, tool selection, child, MCP capability, bridge grant, kernel epoch, branch, or reconciliation
-result, and is not a second runtime, registry, persistence authority, or sandbox.
+A Goal, revision, link, role, proposal, or summary creates no `RunId` except through the ordinary admission path,
+lifecycle transition, tool permission, tool selection, child, MCP connection, kernel epoch, branch, or reconciliation
+result.
 
-## Goal identity, scope, and tree
+## Goal identity, scope, and links
 
 The daemon assigns `GoalId`, `GoalRevisionId`, and `GoalLinkId`; one immutable scope belongs to each Goal. A project
 Goal enters a session only through an explicit durable link, never by implication; a session Goal belongs only to its
-one session. A project Goal may own project or session children; a session child is allowed only when the owner session
-has the explicit link (created atomically if absent); a session Goal cannot own a project child; no crossing of project
-or `WorkspaceId`.
+one session.
 
 ```text
 GoalScopeDto
@@ -37,26 +32,17 @@ GoalDto
   goal_id
   scope
   active_revision
-  lifecycle_state
-  readiness_state
-  user_decision_state
+  status
+  accepted
+  parent_goal_id_when_present
 
 GoalRevisionDto
   goal_id
   revision
   title
   objective
-  inherited_rule_references
   local_rule_references
-  required_gate_references
   revision_identity
-
-GoalParentLinkDto
-  parent_goal_id
-  child_goal_id
-  child_revision_at_link
-  required = true
-  link_identity
 
 GoalSessionLinkDto
   project_goal_id
@@ -65,191 +51,115 @@ GoalSessionLinkDto
   link_identity
 ```
 
-The tree is a DAG; every child is an obligatory component, and a parent is not technically ready until every obligatory
-child reaches a terminal user-decision state. Self-link, cycle, duplicate direct child, cross-project link, or
-out-of-link session child fails before partial record. A revision is credential-free, typed, bounded, and immutable;
-edits create new revisions and never rewrite admitted-run meaning. A child may add a stricter rule, remove an optional
-presentation item, or narrow a limit, but cannot widen a tool subset, class, quota, scope, required gate, or hard
-policy; the effective result is recorded in the child revision.
+Goals are flat: `parent_goal_id_when_present` is a display-only reference to another Goal, and it grants no
+inheritance, readiness, or requirement in either direction. It still shapes a tree, so the tree's depth and each node's
+direct children are bounded by the registry entries in
+[architecture 09](09-configuration-security-and-observability.md), and self-link and cycles fail before partial record.
+A revision is credential-free, typed, bounded, and immutable; edits create new revisions and never rewrite
+admitted-run meaning.
 
-## Goal lifecycle, readiness, and user decision
+## Goal status
 
 ```text
-GoalLifecycleStateDto
+GoalStatusDto
   Active
-  NeedsRework
-  Paused
+  Done
   Stopped
-  Archived
-
-GoalReadinessStateDto
-  NotReady
-  Ready { verified_evidence_set }
-
-GoalUserDecisionStateDto
-  Unaccepted
-  Accepted
-  AcceptedWithException { exception_evidence_set }
 ```
 
-`Ready` means the exact effective revision plus every obligatory child plus every required gate has selected successful
-evidence; it is not a model statement and not synonymous with acceptance. An exception names only a known failed,
-unavailable, expired, or externally ambiguous **gate** and its safe evidence; it never creates success or `Ready`.
-`AcceptedWithException` is terminal for the parent's component calculation but carries exception evidence upward; a
-parent can be accepted only with an exception set that explicitly includes each inherited child exception, and an
-exception cannot omit, cancel, or bypass an active obligatory child.
-
-Required-gate failure moves the Goal to `NeedsRework` (retaining the gate result and prior evidence), and a successful
-gate is valid only until a new revision of the Goal, gate, template, or obligatory child invalidates it. `PauseGoal` and
-`StopGoal` prevent new ordinary and verification runs, cascade through the non-terminal subtree, interrupt active runs
-under the cooperative signal, and commit a bounded `Partial` result with its notice for a started external
-effect that cannot be proven terminal. Pause is reversible via explicit resume; stop is terminal. Archiving is explicit
-and reversible only for a terminal idle Goal; it retains all history as readable, and restore changes presentation only,
-never launching a run.
+A Goal holds exactly one status. `Active` is the only status that admits a new goal-directed run; `Done` and `Stopped`
+are terminal for new runs. `accepted` is an independent boolean recording explicit user acceptance of the exact active
+revision's evidenced outcome, and a new active revision resets it. Stop prevents new runs,
+interrupts active runs under the cooperative signal, and commits a bounded `Partial` result with its notice for a
+started external effect that cannot be proven terminal.
 
 ## Leading-goal run selection and durable transactions
 
 A run is ordinary (no leading Goal) or goal-directed (exactly one leading Goal), never multiple coequal Goals after
-admission. A verification run has that one Goal with kind `VerificationOnly`; it may collect gate evidence but cannot
-alter Goal, memory, Skill, role, template, or connection state.
+admission. Verification evidence attaches to the leading Goal revision it attests, and the run that collects it is an
+ordinary goal-directed run: no run kind exists for verification.
 
-A run's immutable selections are typed serde JSON records rather than one canonical execution-meaning envelope; the
-former `run-execution-meaning-v4` carrier was removed with the canonical codec under [architecture
-02](02-dto-and-contract-policy.md). The applicable records are `GoalRunSelectionV1` and
-`McpMethodCatalogSelectionV1`; an absent record means the feature does not apply, and historical M4 records gain
-nothing.
+A run's immutable selection is a typed serde JSON record rather than one canonical execution-meaning envelope
+([architecture 02](02-dto-and-contract-policy.md)). A goal-directed run's selection records the leading `GoalId` and
+its exact revision; an absent selection means the run is ordinary, and historical M4 records gain nothing.
 
-`GoalRunSelectionV1` contains the leading `GoalId`, exact revision, scope/session-link provenance, ordered parent
-revision chain, effective obligatory-component references, selected gate/template revisions and valid evidence
-references, selected memory/Skill/role cards and revisions, already-revealed full-record references, run kind, the
-target-snapshot reference, and immutable bounds. It holds no full
-memory/Skill/role/summary, credential, provider value, current machine state, raw transcript, grant, process resource,
-or handle. Factory Skills use the exact `SkillSelectionV1` under the frozen snapshot.
+The goal-directed selection also carries the session-link provenance, the
+target-snapshot reference, immutable bounds, and the one frozen `SkillSelectionV1` defined by [architecture
+21](21-goals-skills-context-memory-and-compaction.md). It holds no full Skill/role/summary,
+credential, provider value, current machine state, raw transcript, process resource, or handle.
 
 The admission transaction validates the Goal and session link, the complete target snapshot, all references and bounds,
-provider selection, tool-selection revision, and applicable policy, then commits the run, selection, and audit evidence in one
-transaction; no external action occurs inside it. An active run retains its frozen
-selection, and edits create newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or
-over-limit selected records block dependent operations before external work; retry, child
-admission, fork, and recovery never substitute current state. `McpMethodCatalogSelectionV1` is `Disabled` when `mcp` is
-absent from the frozen model-tool selection; each `mcp` call records the exact one method reference and typed input
-identity before external action.
+provider selection, tool-selection revision, and applicable policy, then commits the run, selection, and audit evidence
+in one transaction; no external action occurs inside it. An active run retains its frozen selection, and edits create
+newer revisions for future admission only. Unknown, corrupt, unavailable, incompatible, or over-limit selected records
+block dependent operations before external work; retry, child admission, fork, and recovery never substitute current
+state. MCP work is admitted only through the run's frozen architecture-15 tool selection: `mcp` is unavailable when
+absent from it, and every `mcp` call is an ordinary frozen-selection tool call recorded under architecture 15's tool
+loop.
 
-## Verification gates and evidence
+## Verification evidence
 
-```text
-VerificationGateDto
-  ReferenceGate { evidence_contract_revision, accepted_reference_kinds }
-  ExecutableGate { template_id, template_revision }
-```
+Verification evidence is one exact durable reference — a terminal run result or an accepted user declaration —
+validated against the exact goal revision it attests. There is no gate DTO, no template, no `ExecutableGate`, no
+create/edit/archive/restore surface, and no template proposal. Evidence is collected in the terminal verification
+phase of an ordinary leading-goal run, or recorded by the accepted user declaration itself; failure, timeout,
+cancellation, interruption, an output bound, a missing reference, or a stale revision are known typed outcomes, there
+is no hidden retry, retries occur only before the first irreversible durable fact, and a started external action is
+never repeated.
 
-A `ReferenceGate` validates an exact durable reference (terminal child result, accepted user declaration, or terminal
-registered-tool result). An `ExecutableGate` names a user-created typed template at one exact revision; no raw shell
-text, arbitrary path/URL/header map, executable code, opaque JSON, or model-supplied provider resource. A template uses
-a registered capability plus one closed typed input family; the owner validates effect profile, mode, required
-confirmation, and selected class before execution. Gate templates have `Project`/`Goal`/`Session` scope, immutable
-revisions, safe cards, explicit user create/edit/archive/restore, and typed provenance; a model may only prepare a
-template proposal under the proposal rules. An executable gate runs in the terminal verification phase of an ordinary
-leading-goal run or a separately user-admitted `VerificationOnly` run, using the same typed evidence family with
-distinct provenance. Failure, timeout, cancellation, interruption, output bound, missing reference, stale revision, or
-unavailable template are known typed outcomes; no hidden retry, no next-phase readiness claim; retries occur only before
-the first irreversible durable fact and never repeat a started external action.
+## Roles
 
-## Working memory, roles, and templates
-
-```text
-MemoryKindDto
-  Fact
-  Decision
-  Preference
-  PastFailure
-```
-
-Records are first-class typed durable records with scopes `Project`/`Goal`/`Session`; session scope stays in its
-session, and project/Goal records reach a session only via the selected Goal/session link and frozen target snapshot.
-Every record has a daemon-assigned identity, owner scope, immutable revisions, a typed record identity, safe card,
-lifecycle state, source/provenance, bounded typed references, and explicit archive/restore and replacement/rollback
-relation. The daemon never decides two texts conflict; a newer record replaces an older one only via an explicit typed
-replacement link (identity and revision), without it both cards are visible, and rollback creates a new immutable
-revision linked to an earlier record and never rewrites a historical selection. Every applicable active card (project,
-selected Goal chain, current session) enters the target snapshot; a card includes only kind, title, scope, bounded safe
-purpose, exact revision, and typed retained-content reference. Full content is revealed only by explicit `retrieve`
-against that reference (no new `ToolId`, no body in the snapshot, no replacement of a historical reference); an
-unavailable or incompatible full record blocks only the dependent disclosure/model step.
-
-A Skill is a bounded textual procedure with typed references to memory, roles, gate templates, and registered
-capabilities; no binary, executable, install, plug-in, dynamic registration, arbitrary MCP schema, or hidden external
-action. A Role is a named reusable `sub_agent` template (task, permitted class, tool subset, contextual limits, typed
+A Role is a named reusable `sub_agent` template (task, permitted class, tool subset, contextual limits, typed
 references); a concrete use may only narrow task, class, context/result limits, and tool subset and cannot add a tool,
-increase a class, widen scope, bypass a gate, change a provider, or weaken policy. Skill and role cards are discovered
-first; full records require explicit disclosure.
+increase a class, widen scope, change a provider, or weaken policy. Role cards are discovered first; a full role record
+requires explicit selection. Skill discovery, selection, and record semantics are owned by [architecture
+21](21-goals-skills-context-memory-and-compaction.md).
 
 ## Model proposals and user confirmation
 
-After one of these durable Goal milestones the model may prepare at most one coalesced proposal of a particular owner
-scope and record kind: technical readiness; user acceptance, acceptance with exception, or stop; required-gate failure;
-or a terminal outcome of an obligatory child. `RefinementDraftDto` contains a daemon-assigned identity, selected source
-run/Goal and milestone, exact base revisions, bounded typed edit set, evidence references, safe rationale, and a typed
-record identity. It is not a current record, does not appear in cards or model context, cannot be used by a
-child/Skill/role/gate/MCP method, and grants no execution authority. A later equal proposal adds evidence to the
-one pending draft rather than producing an unbounded queue. The daemon records the proposal durably before asking the
-user; via the normal `ask_user` path the user may accept, edit-and-accept, or reject, and the draft remains pending
-until an explicit decision. Acceptance validates the exact base revision and creates a new immutable record revision; a
-stale base is a typed conflict, and rejection changes no active record.
+After one of these durable Goal milestones the model may prepare one proposal: user acceptance or stop of a goal, or
+recording of a verification evidence reference. A proposal is one pending `ask_user` question whose payload names the
+target record identity, that record's exact base revision, and the proposed change as text. It is not a current record,
+does not appear in cards or model context, cannot be used by a child/Skill/role/MCP method, and grants no execution
+authority. A run makes one proposal at a time, so at most one proposal is pending per run. The run continues while the
+question stays pending, and the user may accept, edit-and-accept, or reject it whenever they return. Acceptance is an
+ordinary command that validates the exact base revision and creates a new immutable record revision; a stale base is
+`goal_revision_conflict`, and rejection changes no active record.
 
-## Conversation compaction and progressive context disclosure
+## Conversation compaction
 
-Compaction is a versioned model-context projection, not a replacement for the source transcript, model facts, tool
-facts, reasoning, kernel checkpoint, child dossier, or Goal evidence. `ConversationSummaryDto`
-covers one continuous completed durable-history range and contains schema/contract version, start/end references, a
-previous-summary reference when present, bounded safe content, identity, and provenance; original facts remain readable.
-The working form is one cumulative current summary plus the later uncompacted suffix. A new revision made inside an
-already active run uses the previous selected summary plus the next bounded completed source range and becomes part of
-the next model step in the same run; it executes no registered tool, creates no service run, and cannot run before a
-user-admitted run, after terminalization, or after restart. A user or model may request it in an active run; if the
-selected model-context bound would be exceeded, the daemon requires it in that same run rather than silently creating
-another. Correcting a summary creates a separately immutable later revision with exact source and predecessor
-references, and the earlier summary remains historical evidence. Fork creation stores only exact compatible selected
-summary references in the frozen projection and never reads a current ancestor or imports a future summary. Headroom,
-VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
+Compaction is a versioned model-context projection over one continuous completed durable-history range, never a
+replacement for the source transcript, model facts, tool facts, reasoning, kernel checkpoint, child dossier, or Goal
+evidence. The summary record, its failures, and the frozen summary-reference semantics are
+owned by [architecture 21](21-goals-skills-context-memory-and-compaction.md). A fork stores only the exact compatible
+selected summary references that document freezes and never reads a current ancestor or imports a future summary.
+Headroom, VFR, and `retrieve` retain their own semantics and never turn source content into summary text implicitly.
 
 ## Branches, children, interruption, and recovery
 
-A new session fork receives a frozen copy of applicable project-Goal links, session memory/Skill/role/template cards,
-exact revisions, and the selected current summary reference in an independent fork snapshot. It does not receive a new
-session Goal, active Goal run, grant, kernel namespace, current ancestor record, local MCP process, external connection
-resource, or future source change; the user explicitly creates any new session Goal in the branch.
+A new session fork receives a frozen copy of applicable project-Goal links, selected role cards, exact revisions,
+and the selected current summary reference in an independent fork snapshot. It does not receive a new session Goal,
+active Goal run, kernel namespace, current ancestor record, local MCP process, external connection resource, or future
+source change; the user explicitly creates any new session Goal in the branch.
 
 An admitted child agent receives a frozen Goal context: parent task, leading-Goal identity and revision, effective
 required constraints, applicable cards, selected role when any, and only the required safe references; not a full parent
 transcript or live target context. Later
-parent/Goal/memory/Skill/role/activity edits do not change the child snapshot. A child uses independently assigned
+parent/Goal/Skill/role/activity edits do not change the child snapshot. A child uses independently assigned
 session/run/class/tool/provider selections and its own interruption and no-resume rules. An interruption stops
 only the in-flight call: it commits a bounded `Partial` result with its notice and the child continues with its next
 model step.
-On failure or daemon restart, no provider request, gate, tool, MCP request, process, kernel action, child, or external
-effect is retried, reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known
-pre-effect evidence or a bounded partial result. Goals, records, summaries, proposals, and readable history survive
-recovery; a later user attempt obtains a new run identity and target snapshot.
+On failure or daemon restart, no provider request, tool, MCP request, process, kernel action, child, or external effect
+is retried, reattached, resumed, or rerun; unfinished work becomes `Interrupted` with already selected known pre-effect
+evidence or a bounded partial result. Goals, summaries, and readable history survive recovery; a later user
+attempt obtains a new run identity and target snapshot.
 
 ## Bounds and closed safe failures
 
-The first scope uses these code-owned limits:
-
-| Subject | Selected limit |
-| --- | ---: |
-| Goals in one project | 256 |
-| Goals in one session | 64 |
-| Goal-tree depth | 16 |
-| Direct children of one goal | 32 |
-| Session links of one project goal | 64 |
-| Gates of one goal | 32 |
-| Active applicable memory cards in one run | 128 |
-| Selected skills and roles in one run | 32 |
-| Full memory, skill, role, template, summary, draft, or safe gate result | 512 KiB |
-| Canonical goal target snapshot | 1 MiB |
-| Goal context, revealed records, and summaries in one run | 4 MiB |
-| Pending proposal per owner scope and record kind | 1, with evidence coalescing |
+The Goal-domain bounds are registry entries, not local constants: their subjects, values, and classification are the
+Goal-domain row of the limits registry in
+[architecture 09](09-configuration-security-and-observability.md), where every numeric bound in the system is recorded
+with the reason it exists.
 
 No content is truncated or partly committed to satisfy a bound. The Goal-domain closed safe failures through `ErrorDto`
 are:
@@ -264,34 +174,17 @@ goal_not_active
 goal_revision_conflict
 goal_snapshot_too_large
 goal_snapshot_unavailable
-goal_gate_limit_exceeded
-goal_gate_unavailable
-goal_gate_failed
-goal_not_ready
-goal_acceptance_exception_invalid
-goal_archive_not_terminal
-memory_entry_limit_exceeded
-memory_entry_too_large
-memory_reference_unavailable
-memory_replacement_conflict
-skill_entry_too_large
-skill_reference_unavailable
 delegation_role_invalid
 delegation_role_widening_forbidden
-compaction_summary_too_large
-compaction_summary_unavailable
-compaction_history_unavailable
-refinement_draft_conflict
-refinement_draft_too_large
 ```
 
-They disclose no credential, path, raw external response, private process resource, grant, full
-memory/Skill/role/template content, model proposal text, provider resource, or implementation detail.
+They disclose no credential, path, raw external response, private process resource, full Skill/role content, model
+proposal text, provider resource, or implementation detail.
 
 ## Compatibility and historical preservation
 
-No historical record gains synthetic Goal, gate, memory, proposal, or compaction state. Goals are acceptance/evidence
-records, not a work-authorization plane. All directions affect fresh runs only.
+No record carries state it did not record, and no current state reconstructs meaning a record never had. Goals are
+acceptance/evidence records, not a work-authorization plane. All directions affect fresh runs only.
 
 ## Dependencies and non-goals
 
@@ -303,5 +196,3 @@ rich-MIME input, dynamic extensions and installation, dynamic tool registration,
 long-lived-worker administration (leases, attach/detach, force-kill, supervisor recovery). Work/continuation/requeue
 after client disconnection is an accepted post-M5 future direction under an explicit durable contract that never
 silently resumes old external work.
-
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).

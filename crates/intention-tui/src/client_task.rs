@@ -10,8 +10,8 @@
 
 use intention_client::{IntentionClient, SessionStreamClient, SessionStreamSubscription};
 use intention_proto::{
-    CreateSessionCommandDto, CreateSessionFirstTurnDto, ErrorDto, IdempotencyKey, ProjectId,
-    RunModeDto, SessionId, SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
+    CreateSessionCommandDto, CreateSessionFirstTurnDto, ErrorDto, ProjectId, RunModeDto, SessionId,
+    SubscribeSessionCommandDto, WorkspaceId, WorkspaceRootDto,
 };
 use intention_transport::LocalEndpoint;
 
@@ -49,22 +49,17 @@ pub async fn perform(
             .await
             .map(Action::SessionSnapshotLoaded)
             .map_err(|error| (Action::SessionSnapshotFailed(error.clone()), error)),
-        Effect::LoadSettings => client
-            .tui_settings()
-            .await
-            .map(|settings| Action::SettingsReceived(settings.theme()))
-            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
-        Effect::PersistTheme(theme) => client
-            .set_tui_theme(theme.into())
-            .await
-            .map(|accepted| Action::SettingsReceived(accepted.theme()))
-            .map_err(|error| (Action::SettingsFailed(error.clone()), error)),
+        Effect::PersistTheme(_) => {
+            // The local settings file is the fullscreen front end's own work:
+            // no client call carries a theme, and no other terminal mode has a
+            // theme to write.
+            return None;
+        }
         Effect::CreateSession { first_turn } => {
             let carried_first_turn = first_turn.is_some();
             let first_turn = match first_turn {
                 Some(content) => {
-                    let turn = match CreateSessionFirstTurnDto::new(IdempotencyKey::new(), content)
-                    {
+                    let turn = match CreateSessionFirstTurnDto::new(content) {
                         Ok(turn) => turn,
                         Err(error) => {
                             return Some(Err((
@@ -106,7 +101,7 @@ pub async fn perform(
             session_id,
             content,
         } => client
-            .send_user_turn(session_id, IdempotencyKey::new(), content)
+            .send_user_turn(session_id, content)
             .await
             .map(Action::TurnAccepted)
             .map_err(|error| (Action::TurnFailed(error.clone()), error)),

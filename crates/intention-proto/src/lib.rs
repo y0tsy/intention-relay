@@ -8,6 +8,7 @@
 
 use std::fmt::{Display, Formatter};
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de};
 use uuid::Uuid;
 
@@ -25,13 +26,12 @@ pub use projection::{
     SessionProjectionDto, WorkspaceBindingDto,
 };
 pub use protocol::{
-    ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, DaemonReadinessDto,
-    ProtocolDaemonMessageDto, ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto,
-    SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto, SessionSummariesDto,
-    SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, decode_request_line,
-    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
+    ClientRequestDto, CreateSessionAcceptedDto, DaemonHealthDto, ProtocolDaemonMessageDto,
+    ProtocolRejectionDto, ProtocolReplyDto, ProtocolRequestDto, ProtocolResultDto,
+    RunCancelledAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto,
+    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, SubscribeSessionCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, decode_request_line, decode_response, encode_reply,
+    encode_request, parse_daemon_message, parse_session_frame,
 };
 pub use run::{
     RunModeDto, RunProjectionDto, RunStatusDto, run_status_is_terminal,
@@ -46,7 +46,7 @@ pub use tool::{
 };
 pub use turn::{
     CancelRunCommandDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
-    GetSessionSnapshotQueryDto, RemoveTurnCommandDto, SendUserTurnCommandDto,
+    GetSessionSnapshotQueryDto, SendUserTurnCommandDto,
 };
 pub use workspace::WorkspaceRootDto;
 
@@ -124,14 +124,6 @@ define_id!(TurnId, "A stable identity for one conversational turn.");
 define_id!(ProjectId, "A stable identity for one logical user project.");
 define_id!(WorkspaceId, "A stable identity for one declared workspace.");
 define_id!(ToolCallId, "A stable identity for one tool invocation.");
-define_id!(
-    ConfigRevisionId,
-    "A stable identity for one accepted configuration revision."
-);
-define_id!(
-    IdempotencyKey,
-    "A caller-supplied identity that makes one mutating operation repeatable."
-);
 
 /// A stable identity for one durable transcript row.
 ///
@@ -179,33 +171,6 @@ impl MessageId {
 impl Display for MessageId {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         Display::fmt(&self.0, formatter)
-    }
-}
-
-/// The schema version carried by configuration and persisted DTOs.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct SchemaVersionDto {
-    major: u16,
-    minor: u16,
-}
-
-impl SchemaVersionDto {
-    /// Creates an explicit major/minor schema version.
-    #[must_use]
-    pub const fn new(major: u16, minor: u16) -> Self {
-        Self { major, minor }
-    }
-
-    /// Returns the incompatible-on-change schema component.
-    #[must_use]
-    pub const fn major(self) -> u16 {
-        self.major
-    }
-
-    /// Returns the additive-compatible schema component.
-    #[must_use]
-    pub const fn minor(self) -> u16 {
-        self.minor
     }
 }
 
@@ -279,58 +244,147 @@ impl ErrorCategoryDto {
     }
 }
 
-/// A safe retry instruction for a boundary error.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ErrorRetryDto {
-    /// Retrying will not change the result without user or state changes.
-    Never,
-    /// Retrying immediately may succeed.
-    Immediate,
-    /// Retrying after a delay may succeed.
-    Delayed,
-    /// A user must explicitly resolve the error before retrying.
-    Manual,
+/// A safe, structured error usable at crate and process boundaries.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ErrorDto {
+    code: String,
+    category: ErrorCategoryDto,
+    message: String,
+    retryable: bool,
 }
 
-/// An opaque correlation identifier that cannot disclose diagnostic content.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize)]
-#[serde(transparent)]
-pub struct CorrelationIdDto(Uuid);
-
-impl<'de> Deserialize<'de> for CorrelationIdDto {
+impl<'de> Deserialize<'de> for ErrorDto {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(&value).map_err(de::Error::custom)
+        #[derive(Deserialize)]
+        struct RawErrorDto {
+            code: String,
+            category: ErrorCategoryDto,
+            message: String,
+            retryable: bool,
+        }
+
+        let raw = RawErrorDto::deserialize(deserializer)?;
+        Self::build(raw.code, raw.category, raw.message, raw.retryable).map_err(de::Error::custom)
     }
 }
 
-impl CorrelationIdDto {
-    /// Creates a new opaque diagnostic correlation identifier.
-    #[allow(
-        clippy::new_without_default,
-        reason = "A random diagnostic correlation identifier has no meaningful default value."
-    )]
-    #[must_use]
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    /// Parses the canonical UUID representation of a correlation identifier.
+impl ErrorDto {
+    /// Creates a safe error after validating its stable code and human message.
+    ///
+    /// `retryable` says a retry after a delay may succeed; every other failure
+    /// is retried only after the state it names changes.
     ///
     /// # Errors
     ///
-    /// Returns a safe validation error if `value` is not a canonical UUID.
-    pub fn parse(value: &str) -> DtoResult<Self> {
-        parse_canonical_uuid(value, "invalid_correlation_id").map(Self)
+    /// Returns a validation error when the code or message is blank.
+    pub fn new(
+        code: impl Into<String>,
+        category: ErrorCategoryDto,
+        message: impl Into<String>,
+        retryable: bool,
+    ) -> DtoResult<Self> {
+        Self::build(code.into(), category, message.into(), retryable)
+    }
+
+    fn build(
+        code: String,
+        category: ErrorCategoryDto,
+        message: String,
+        retryable: bool,
+    ) -> DtoResult<Self> {
+        if code.trim().is_empty() || message.trim().is_empty() {
+            return Err(Self {
+                code: "invalid_error_dto".to_owned(),
+                category: ErrorCategoryDto::Validation,
+                message: "error code and message must not be empty".to_owned(),
+                retryable: false,
+            });
+        }
+        Ok(Self {
+            code,
+            category,
+            message,
+            retryable,
+        })
+    }
+
+    /// Creates a stable validation error from trusted internal constants.
+    #[must_use]
+    pub fn validation(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code: code.to_owned(),
+            category: ErrorCategoryDto::Validation,
+            message: message.to_owned(),
+            retryable: false,
+        }
+    }
+
+    /// Creates a stable error from a trusted internal code and an owned message.
+    ///
+    /// The caller builds the message from data it has already classified as
+    /// safe to report, such as a workspace-relative path and its OS error.
+    #[must_use]
+    pub fn owned_message(code: &'static str, category: ErrorCategoryDto, message: String) -> Self {
+        Self {
+            code: code.to_owned(),
+            category,
+            message,
+            retryable: false,
+        }
+    }
+
+    /// Creates a stable unavailable error from trusted internal constants.
+    #[must_use]
+    pub fn unavailable(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code: code.to_owned(),
+            category: ErrorCategoryDto::Unavailable,
+            message: message.to_owned(),
+            retryable: false,
+        }
+    }
+
+    /// Creates a stable unavailable error asking the caller to retry after a delay.
+    #[must_use]
+    pub fn unavailable_delayed(code: &'static str, message: &'static str) -> Self {
+        Self {
+            code: code.to_owned(),
+            category: ErrorCategoryDto::Unavailable,
+            message: message.to_owned(),
+            retryable: true,
+        }
+    }
+
+    /// Returns the stable machine-readable error code.
+    #[must_use]
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Returns the safe error category.
+    #[must_use]
+    pub const fn category(&self) -> ErrorCategoryDto {
+        self.category
+    }
+
+    /// Returns the safe human-readable message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// Returns whether a retry after a delay may succeed.
+    #[must_use]
+    pub const fn retryable(&self) -> bool {
+        self.retryable
     }
 }
 
 /// A normalized logical path relative to an already-authorized workspace root.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct WorkspaceRelativePathDto(String);
 
@@ -378,152 +432,6 @@ impl WorkspaceRelativePathDto {
     }
 }
 
-/// A safe, structured error usable at crate and process boundaries.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ErrorDto {
-    code: String,
-    category: ErrorCategoryDto,
-    message: String,
-    retry: ErrorRetryDto,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    correlation_id: Option<CorrelationIdDto>,
-}
-
-impl<'de> Deserialize<'de> for ErrorDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct RawErrorDto {
-            code: String,
-            category: ErrorCategoryDto,
-            message: String,
-            retry: ErrorRetryDto,
-            #[serde(default)]
-            correlation_id: Option<CorrelationIdDto>,
-        }
-
-        let raw = RawErrorDto::deserialize(deserializer)?;
-        Self::build(
-            raw.code,
-            raw.category,
-            raw.message,
-            raw.retry,
-            raw.correlation_id,
-        )
-        .map_err(de::Error::custom)
-    }
-}
-
-impl ErrorDto {
-    /// Creates a safe error after validating its stable code and human message.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the code or message is blank.
-    pub fn new(
-        code: impl Into<String>,
-        category: ErrorCategoryDto,
-        message: impl Into<String>,
-        retry: ErrorRetryDto,
-        correlation_id: Option<CorrelationIdDto>,
-    ) -> DtoResult<Self> {
-        Self::build(code.into(), category, message.into(), retry, correlation_id)
-    }
-
-    fn build(
-        code: String,
-        category: ErrorCategoryDto,
-        message: String,
-        retry: ErrorRetryDto,
-        correlation_id: Option<CorrelationIdDto>,
-    ) -> DtoResult<Self> {
-        if code.trim().is_empty() || message.trim().is_empty() {
-            return Err(Self {
-                code: "invalid_error_dto".to_owned(),
-                category: ErrorCategoryDto::Validation,
-                message: "error code and message must not be empty".to_owned(),
-                retry: ErrorRetryDto::Never,
-                correlation_id: None,
-            });
-        }
-        Ok(Self {
-            code,
-            category,
-            message,
-            retry,
-            correlation_id,
-        })
-    }
-
-    /// Creates a stable validation error from trusted internal constants.
-    #[must_use]
-    pub fn validation(code: &'static str, message: &'static str) -> Self {
-        Self {
-            code: code.to_owned(),
-            category: ErrorCategoryDto::Validation,
-            message: message.to_owned(),
-            retry: ErrorRetryDto::Manual,
-            correlation_id: None,
-        }
-    }
-
-    /// Creates a stable unavailable error from trusted internal constants.
-    #[must_use]
-    pub fn unavailable(code: &'static str, message: &'static str) -> Self {
-        Self {
-            code: code.to_owned(),
-            category: ErrorCategoryDto::Unavailable,
-            message: message.to_owned(),
-            retry: ErrorRetryDto::Manual,
-            correlation_id: None,
-        }
-    }
-
-    /// Creates a stable unavailable error asking the caller to retry after a delay.
-    #[must_use]
-    pub fn unavailable_delayed(code: &'static str, message: &'static str) -> Self {
-        Self {
-            code: code.to_owned(),
-            category: ErrorCategoryDto::Unavailable,
-            message: message.to_owned(),
-            retry: ErrorRetryDto::Delayed,
-            correlation_id: None,
-        }
-    }
-
-    /// Returns the stable machine-readable error code.
-    #[must_use]
-    pub fn code(&self) -> &str {
-        &self.code
-    }
-
-    /// Returns the safe error category.
-    #[must_use]
-    pub const fn category(&self) -> ErrorCategoryDto {
-        self.category
-    }
-
-    /// Returns the safe human-readable message.
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    /// Returns the caller guidance for retry behavior.
-    #[must_use]
-    pub const fn retry(&self) -> ErrorRetryDto {
-        self.retry
-    }
-
-    /// Returns an opaque safe diagnostic reference when one was provided.
-    #[must_use]
-    pub const fn correlation_id(&self) -> Option<CorrelationIdDto> {
-        self.correlation_id
-    }
-}
-
 impl Display for ErrorDto {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}: {}", self.code, self.message)
@@ -534,24 +442,11 @@ impl std::error::Error for ErrorDto {}
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
 
     #[test]
-    fn schema_and_temporal_values_validate_their_boundaries() {
-        let current = SchemaVersionDto::new(1, 2);
-        assert_eq!(current.major(), 1);
-        assert_eq!(current.minor(), 2);
-        // Schema versions compare by exact equality: a differing minor is
-        // rejected exactly like a differing major (no same-major tolerance).
-        assert_ne!(current, SchemaVersionDto::new(1, 9));
-        assert_ne!(current, SchemaVersionDto::new(2, 0));
-        assert_eq!(current, SchemaVersionDto::new(1, 2));
-
+    fn temporal_values_validate_their_boundaries() {
         assert_eq!(
             TimestampDto::from_unix_seconds(4)
                 .expect("positive timestamp is valid")
@@ -611,50 +506,27 @@ mod tests {
         for (category, expected) in categories {
             assert_eq!(category.as_str(), expected);
         }
-        let correlation = CorrelationIdDto::parse("11111111-1111-4111-8111-111111111111")
-            .expect("fixture correlation identifier is valid");
-        let error = ErrorDto::new(
-            "fixture",
-            ErrorCategoryDto::Policy,
-            "safe message",
-            ErrorRetryDto::Delayed,
-            Some(correlation),
-        )
-        .expect("complete safe error is valid");
+        let error = ErrorDto::new("fixture", ErrorCategoryDto::Policy, "safe message", true)
+            .expect("complete safe error is valid");
         assert_eq!(error.code(), "fixture");
         assert_eq!(error.category(), ErrorCategoryDto::Policy);
         assert_eq!(error.message(), "safe message");
-        assert_eq!(error.retry(), ErrorRetryDto::Delayed);
-        assert_eq!(error.correlation_id(), Some(correlation));
+        assert!(error.retryable());
         assert_eq!(error.to_string(), "fixture: safe message");
         assert_eq!(
-            ErrorDto::new(
-                "",
-                ErrorCategoryDto::Internal,
-                "message",
-                ErrorRetryDto::Never,
-                None
-            )
-            .expect_err("blank code must fail")
-            .code(),
+            ErrorDto::new("", ErrorCategoryDto::Internal, "message", false)
+                .expect_err("blank code must fail")
+                .code(),
             "invalid_error_dto"
         );
         assert_eq!(
-            ErrorDto::new(
-                "code",
-                ErrorCategoryDto::Internal,
-                "",
-                ErrorRetryDto::Never,
-                None
-            )
-            .expect_err("blank message must fail")
-            .code(),
+            ErrorDto::new("code", ErrorCategoryDto::Internal, "", false)
+                .expect_err("blank message must fail")
+                .code(),
             "invalid_error_dto"
         );
-        assert_eq!(
-            ErrorDto::validation("validation", "message").retry(),
-            ErrorRetryDto::Manual
-        );
+        assert!(!ErrorDto::validation("validation", "message").retryable());
+        assert!(ErrorDto::unavailable_delayed("unavailable", "message").retryable());
         assert_eq!(
             ErrorDto::unavailable("unavailable", "message").category(),
             ErrorCategoryDto::Unavailable

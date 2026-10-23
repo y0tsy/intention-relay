@@ -1,7 +1,7 @@
 # intention-tui
 
 The terminal application over the shared `intention-client`: one binary with
-the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
+the ratatui fullscreen UI (`tui`), the interactive `repl`, and the headless
 `run <PROMPT>` mode over one render-free state machine and the same client calls.
 
 ## Module map
@@ -9,18 +9,23 @@ the revue fullscreen UI (`tui`), the interactive `repl`, and the headless
 - `src/app/` — `action.rs` (`Action`/`Effect` vocabulary), `state.rs` (state,
   accessors, `update`), `commands.rs` (the one command registry with its
   declared arguments, the command and argument word, and the menu's filter and
-  ranking), `theme.rs` (the theme vocabulary, the settings round trip, and the
-  picker transitions), `sessions.rs`/`browser.rs`/`run.rs`/
+  ranking), `theme.rs` (the palette and preference vocabularies and the picker
+  transitions),
+  `sessions.rs`/`browser.rs`/`run.rs`/
   `input.rs` and the layered `ctrl_c.rs`/`escape.rs` (transitions), `tests.rs`.
 - `src/client_task.rs` — the one async `Effect` to client-call mapper.
 - `src/tui/` — `mod.rs` (`run_blocking`, event handler, wheel mapping, wiring,
-  the turn clock), `layout.rs` (the neutral row model and the transcript layout
+  the turn clock), `theme.rs` (the local theme file, the launch resolution and
+  its precedence, and the terminal's background probe), `layout.rs` (the neutral
+  row model and the transcript layout
   cache the front end owns, keyed by pane width, theme, and transcript
   epochs), `palette.rs` (the one
   colour system, resolved per frame from the active theme), `screens/`
-  (`RevueView`, one file per surface: `chat.rs`, which also draws the theme
+  (`TerminalView`, one file per surface: `chat.rs`, which also draws the theme
   picker in the band region, and the `sessions.rs` docked
-  browser panel), `keymap.rs` (one mapping per state), `driver.rs` (thread,
+  browser panel), `surface.rs` (the transcript's scroll surface and the bar it
+  paints), `testing.rs` (the `TestBackend` screen the render tests draw into),
+  `keymap.rs` (one mapping per state), `driver.rs` (thread,
   runtime, select loop), and `panes/` (one file per chat pane: `transcript.rs`,
   `welcome.rs`, `input.rs`, `status.rs`, the `commands.rs` hint band, the
   `theme.rs` picker panel, the `markdown.rs` content layout, and the `tools.rs`
@@ -38,7 +43,7 @@ window, and no mode switch replaces the frame: `screen` names which surface owns
 the keyboard, not which window is drawn.
 
 The chat opens on its welcome surface while no session is open - the product
-lockup over a version/`AGENTS.md`/`MCPs`/`Skills` overview - and the interactive
+lockup over the version the binary was built as - and the interactive
 front ends open no session at all at launch, not even the most recent one: a
 session appears only for an explicit `--session`/`--continue`, `/new`, a selected
 browser row, or the first prompt, which creates the session it needs. In the
@@ -119,18 +124,26 @@ the user presses afterwards submits the line, and the run reaches the line as on
 paste.
 
 The command surface is one registry (`src/app/commands.rs`) and the hint band it
-feeds: `/new` (Session), `/sessions` (Navigation), and `/theme` (Appearance) are
-the registered commands, each carrying its name, one-line description, category,
-action, and declared arguments, and the registry is the single source for the
-submission path, the band, and every notice. `/theme` declares one optional
-argument, `theme`, whose values are the theme vocabulary itself (`light` and
-`dark`), and the parser reads only the registry: a submitted line resolves every
+feeds: `/new` (Session), `/sessions` (Navigation), `/theme` (Appearance),
+`/session` (Session), and `/quit` (Session) are the registered commands, each
+carrying its name, one-line description, category, action, and declared
+arguments, and the registry is the single source for the fullscreen submission
+path, the line REPL's parse, the band, and every notice. `/theme` declares one
+optional argument, `theme`, whose values are the preference vocabulary itself
+(`auto`, `light`, and `dark`), and `/session` declares one required free-form
+argument whose word the transition parses as a durable identifier. The parser
+reads only the registry: a submitted line
+resolves every
 word against the declarations, so an unknown value answers
-`unknown theme "purple" - expected light or dark`, a word past the last declared
+`unknown theme "purple" - expected auto or light or dark`, a word past the last declared
 argument answers `unexpected argument "now"`, and a declared value matches
 however it is spelled (`DARK` names `dark`). A slash
 is a command only as a line's *first* character: a slash anywhere else is
-ordinary text, and a line whose first character is a blank is a turn. While the
+ordinary text, and a line whose first character is a blank is a turn. The line
+REPL reads the same registry, so a line parses the same way in both front ends
+and an unknown name lists the same set in both; a command that drives a
+fullscreen surface (`/sessions`, `/theme`) is known there and answers that it
+needs the fullscreen front end. While the
 input's first character is `/` and the caret sits in or immediately after a
 word, the band opens directly above the input block as one more row region of
 the one chat panel. It is one surface with two vocabularies: while the caret is
@@ -163,35 +176,63 @@ a command with a declared argument reopens the band on its argument word; a
 space after a complete value closes it. The band closes when the slash is
 removed, on `Esc`, or when nothing matches.
 
-The colour theme is the terminal's own value and the daemon's. The light palette
-is the warm off-white surface every session starts in; the dark palette is a
+The colour theme belongs to this front end: it is local presentation state, no
+wire operation carries it, and the daemon never learns it. The light palette is
+the warm off-white surface; the dark palette is a
 neutral graphite surface whose only hue is its accent pair. Both are
 the same role table resolved by `palette::of(theme)`, which the frame calls once
 per state's effective theme and hands to every pane, so a theme switch repaints
 the whole window - the transcript layout cache included, because the cache is
-keyed by the theme like the pane width. The committed theme is never the
-terminal's guess: `config.toml` supplies the default through an optional
-`[tui] theme = "light" | "dark"` (an absent section or key means light, and an
-unknown spelling is a typed validation error), the daemon answers the effective
-theme - the single-row `tui_settings` override in the state database, else the
-configuration default, else light - and only the accepted reply to a selection
-moves the committed value. `/theme light` and `/theme dark` select a theme
-through the daemon; the selection previews while the round trip is in flight, a
-rejection drops the preview and shows the error line, and a theme set records no
-configuration revision and never rewrites the credential-bearing configuration
-file.
+keyed by the theme like the pane width.
+
+A launch resolves a *preference* - `auto`, `light`, or `dark` - and paints the
+palette it names. The preference is the fullscreen UI's `--theme auto|light|dark`
+flag when it was spelled; else the local `tui.toml`'s `[tui] theme` declaration,
+the choice the user already made; else `auto`. A spelled `light` or `dark`, by
+flag or by file, beats every form of environment detection; `auto` - and an
+absent file, section, or key - paints what detection answers: the `COLORFGBG`
+variable a terminal exports when it exists, else a foreground-free `OSC 11`
+query of the terminal background with a 15 ms deadline, and the zero-configuration
+route that needs no platform theme lookup, else the dark palette. The dark
+fallback is deliberate: a terminal that reports neither its background nor
+`COLORFGBG` is usually a dark one, which is the profile terminal emulators and
+terminal applications ship by default. Detection runs once per launch even when a
+spelled palette wins, because the picker's `Auto` row previews what returning to
+detection would paint, and the probe is skipped when standard input or output is
+not a terminal.
+
+The local file is `tui.toml` beside the
+configuration directory's `config.toml` (Linux `$XDG_CONFIG_HOME` or
+`~/.config`, macOS `~/Library/Application Support`, Windows `%APPDATA%`), it
+carries one `[tui] theme` declaration, and an unknown spelling is a typed
+validation error rather than a silent fallback. `/theme auto`, `/theme light`,
+and `/theme dark` select a preference; the selection commits in memory at once
+and asks for one rewrite
+of the local file after the frame it produced, so the next launch reads the same
+preference and no daemon round trip gates the repaint. A stored `auto` is what
+clears a spelled-out palette. A failed rewrite reports its
+typed error while the committed selection stands, and a selection that matches
+the committed preference writes nothing. The theme lives in the front end's own
+local file: a theme change never touches the credential-bearing daemon
+configuration file.
 
 `/theme` with no argument opens the theme picker as `Screen::Theme`: a small
 panel in the same one-window layout, drawn in the chat panel's band region above
 the input block (the region the command band uses), so the input block and the
 detail line keep their rows instead of the panel docking at the window's bottom.
-Its rounded frame carries the `Theme` title, one row per theme with the theme's
-name and one-line description, the committed row marked with the sessions
+Its rounded frame carries the `Theme` title, one row per preference - `Auto`,
+`Light`, `Dark`, the first being the way back to detection without editing the
+file by hand - with the preference's name and one-line description, the
+highlighted row marked with the sessions
 browser's `> ` cursor and selected wash, and its own last inner row carries the
 `enter apply | esc revert` legend. `Up`/`Down` preview the candidate they land
-on: the whole window, transcript included, repaints through it and nothing is
-persisted. `Enter` commits the highlighted theme through the daemon and closes;
-`Esc` drops the preview, restores the committed theme, and closes. The picker's
+on: the whole window, transcript included, repaints through the palette that
+preference names (`Auto` through the palette detection answered at this launch)
+and nothing is
+persisted. `Enter` commits the highlighted preference, writes the local file the
+next
+launch reads, and closes;
+`Esc` drops the preview, restores the committed preference, and closes. The picker's
 `Esc` is its own layer, so the Esc layering is the open band, then the picker,
 then a live run's cancel, then the input-clear arm, then the exit.
 
@@ -209,7 +250,7 @@ business, and the crate carries no clipboard path at all.
 
 Rules the panes keep:
 
-- User and assistant text both go through revue's `markdown` feature: a user row
+- User and assistant text both go through `tui-markdown`: a user row
   is a framed, padded card labelled `❯ you`, an assistant row is its reasoning
   block plus the markdown answer when the step answered, and a reasoning-only
   row - a step that reasoned and called a tool without answering - is its
@@ -242,30 +283,28 @@ Rules the panes keep:
   functions, so the live segment never looks provisional. A block longer than 15
   display rows shows its first fifteen and a marker naming the hidden ones, and
   each activation of that marker - or of `Ctrl+E` - reveals a hundred more.
-- A value the wire does not carry is an explicit `@todo(core)` placeholder
-  (the welcome overview's `AGENTS.md`, `MCPs`, and `Skills` chips), never a
-  fabricated one. The `mode` badge carries the same plate until a session
-  snapshot names the durable mode the session projection then carries. The
-  command hint band and the theme picker are the surfaces with no placeholder
-  at all: every band row - name, description, and category, or value,
-  description, and argument - is a front-end registry fact, and every picker
-  row is a theme fact, so nothing in either can be a `@todo(core)`. The model
-  badge and the usage segment are projection facts, not placeholders: the
-  badge names the effective model the session snapshot carries, and the
-  segment reads the terminal outcome's usage (`ctx in 1200 out 300`, or
-  `ctx not reported`).
-- Every `@todo(core)` marker that remains names a core fact the terminal lacks,
-  never work the front end performs for the core. The crate's `@todo(hack)`
-  markers name the work the adapter or the client still owes separately, and
-  are not part of that class.
+- Every surface reads a fact the daemon publishes, and a surface with no fact
+  to read renders nothing: the welcome overview lists the version alone, and
+  the input block draws no `mode` or `model` badge until a session snapshot
+  names them. No pane draws a placeholder for a fact the core does not carry.
+  The command hint band and the theme picker are the surfaces with no
+  placeholder at all: every band row - name, description, and category, or
+  value, description, and argument - is a front-end registry fact, and every
+  picker row is a theme fact. The model badge and the usage segment are
+  projection facts: the badge names the effective model the session snapshot
+  carries, and the segment reads the terminal outcome's usage
+  (`ctx in 1200 out 300`, or `ctx not reported`).
+- The crate's `@todo(hack)` markers name the work the adapter or the client
+  still owes.
 
 ## Palette
 
 `src/tui/palette.rs` is the single source of colours: `palette::of(theme)`
 resolves one `Palette` value once per frame from the state's effective theme,
-and every pane reads the roles of the reference it was handed. The light theme
-is the warm off-white surface every session starts in; the dark theme is a
-neutral graphite ramp whose only hue is the accent pair. No pane constructs a
+and every pane reads the roles of the reference it was handed. The light palette
+is the warm off-white surface; the dark palette is a
+neutral graphite ramp whose only hue is the accent pair, and it is what a
+terminal that reports no background is painted with. No pane constructs a
 colour of its own.
 
 | Role | Light | Dark | Used by |
@@ -276,7 +315,7 @@ colour of its own.
 | `tab_active_bg` | `#FCE2C4` | `#2F2F31` | the active tab's wash |
 | `row_selected_bg` | `#FADFC0` | `#333335` | the cursor row's wash |
 | `row_alt_bg` | `#FBF5EC` | `#0D0D0F` | every second row's zebra tint |
-| `stub_bg` | `#FBE4DF` | `#1C1C1E` | the `@todo(core)` empty state and welcome sub-blocks |
+| `stub_bg` | `#FBE4DF` | `#1C1C1E` | the empty state of a list the core reports no rows for |
 | `input_bg` | `#FFF4E2` | `#131315` | the chat input buffer rows |
 | `badge_bg` | `#EFE0C8` | `#28282A` | the badge wash of the input header and the welcome version |
 | `badge_ink` | `#5C4632` | `#CACACC` | the label ink of a badge |
@@ -304,7 +343,6 @@ colour of its own.
 | `reasoning_header` | `#6D5A44` | `#7A7A7C` | the reasoning block's glyph and header |
 | `reasoning_marker` | `#8A5A2B` | `#A2A2A4` | the expand affordance of a collapsed reasoning block |
 | `timer_ink` | `#A16207` | `#9A9A9C` | the measured elapsed value |
-| `todo_ink` | `#8B7AA8` | `#929294` | the `@todo(core)` placeholder tone |
 | `ink` | `#2A211A` | `#DADADC` | body text |
 | `ink_muted` | `#7A6A58` | `#A6A6A8` | secondary text, hints, and the welcome lockup's trailing word |
 | `ink_faint` | `#A8967F` | `#626264` | dividers and separators |
@@ -338,10 +376,11 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 ### A new pane
 
 1. Chat pane: create `src/tui/panes/<name>.rs` with a `pub(in crate::tui)`
-   builder plus private helpers, declare `pub(super) mod <name>;` in
-   `src/tui/panes/mod.rs`, and add it to the pane list in
-   `src/tui/screens/chat.rs::chat_screen`, sizing its rows in that panel's
-   budget so the transcript takes what is left.
+   paint function - the pane's `Rect`, the `Frame`, and the resolved palette -
+   plus private helpers that return the `Line`s it draws, declare
+   `pub(super) mod <name>;` in `src/tui/panes/mod.rs`, and add it to the pane
+   list in `src/tui/screens/chat.rs::chat_screen`, sizing its rows in that
+   panel's budget so the transcript takes what is left.
 2. Band-region panel: a panel that owns a screen but must not move the input
    block - the theme picker's shape - also lives in `src/tui/panes/<name>.rs`
    and is claimed by `src/tui/screens/chat.rs::hint_rows` and `hint_block` for
@@ -350,29 +389,28 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    block and the detail line keep their rows.
 3. Docked surface: add the variant to `Screen` in `src/app/mod.rs` and the
    transition that selects it, then create `src/tui/screens/<name>.rs` with a
-   pure geometry function and a builder; `RevueView::render` shrinks the chat
+   pure geometry function and a builder; `TerminalView::render` shrinks the chat
    into the rows the docked surface does not use and places that surface in the
    window's bottom rows, so the window never changes and no surface paints over
    another. A surface that shows relative times takes the `now` the view
    received instead of reading a clock.
 4. Geometry in one place: compute the surface's columns and rows from the window
-   once, clamp the frame with `min_size`/`max_size`, and hand every block the
-   inner width, so the table and the legend agree on their edges.
+   once, derive the inner area from the block's own border and padding, and hand
+   every block that inner width, so the table and the legend agree on their
+   edges.
 
 ### A new browser tab or column
 
 1. Tab: add the variant to `BrowserTab` in `src/app/browser.rs`, its `label`,
    its place in `BrowserTab::ALL`, its glyph in `ACTIVE_TAB`/`INACTIVE_TAB`
-   handling, and its neighbours in `next`/`previous`. A tab whose core fact does
-   not exist yet returns `Some(reason)` from `stub_reason`; the view renders
-   that reason as the tab's empty state.
+   handling, and its neighbours in `next`/`previous`. A tab selects rows by a
+   fact the session summary carries, so a tab whose fact the wire does not
+   publish does not exist.
 2. Column: add its share to `MODIFIED_PERCENT` and its minimum beside the
    others in `src/tui/screens/sessions.rs::columns`, then render it in
    `row_text`. Shares are percentages of the flexible width, so the table
-   stretches with the card; the title column takes what they leave. A value the
-   core does not carry yet is an explicit `@todo(core)` plate named by a
-   constant such as `EXEC_REASON`, `RENAME_NOTICE`, or `MODE_PLACEHOLDER`,
-   never a fabricated value.
+   stretches with the card; the title column takes what they leave. A column
+   renders a fact the session summary carries, never a fabricated value.
 3. Filtering, ordering, and the cursor clamp stay in
    `SessionsBrowserState::refresh`: the view lays rows out and decides nothing.
 
@@ -383,10 +421,12 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    where it is used; add it to the `roles` list in the palette tests so
    opacity, distinctness, the `error`/`scarlet` alias, and the cross-theme rule
    keep covering it.
-2. Use it through `Text::fg`/`bg`, `Border::fg`/`bg`, or `Card::background`,
-   reading it from the resolved `&'static Palette` the frame handed down, and
-   pair it with a glyph or a modifier whenever it carries a state.
-3. Never construct a colour outside the palette: `Color::rgb` is palette-only,
+2. Use it through a `Line`'s or `Span`'s `Style::fg`/`bg`, a block's
+   `border_style`, or a buffer cell's style, reading it from the resolved
+   `&'static Palette` the frame handed down, and pair it with a glyph or a
+   `Modifier` whenever it carries a state.
+3. Never construct a colour outside the palette: `Color::Rgb` is palette-only
+   apart from the sixteen-colour `COLORFGBG` table the background probe reads,
    and the views read roles, not values.
 
 ### A new key or wheel binding
@@ -403,7 +443,8 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
    on, and every other mouse event stays ignored.
 4. Handle the action in `src/app/state.rs::update` and put its transition body
    in `src/app/sessions.rs`, `browser.rs`, `run.rs`, or `input.rs`; a layered
-   key's arm lives in its own file (`ctrl_c.rs`, `escape.rs`).
+   key's arm lives in `src/app/arm.rs`, beside the key layers `ctrl_c.rs` and
+   `escape.rs`.
 
 ### A new slash command
 
@@ -412,9 +453,12 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 2. Add one `CommandSpec` entry to `COMMANDS` in `src/app/commands.rs` with its
    name, description, category, action, and declared arguments. An argument is
    an `ArgumentSpec` naming itself, its `ValueSpec` values with their one-line
-   descriptions, and whether it is required; the registry is the single source
-   for the submission path, the band, the argument completions, and every
-   notice, so nothing else spells a command name or value.
+   descriptions, and whether it is required; an argument that declares no value
+   is free-form and its word is the transition's to parse. The registry is the
+   single source for the submission path, the REPL's parse, the band, the
+   argument completions, and every notice, so nothing else spells a command
+   name or value. Both front ends dispatch `CommandAction` in an exhaustive
+   match, so a new action reaches both.
 3. Advertise it in `src/tui/panes/status.rs::DEFAULT_HINT`.
 
 ### A new client-backed behavior
@@ -442,13 +486,17 @@ file, wiring in `src/tui/` or `src/client_task.rs`.
 ### Where the tests go
 
 - `AppState` transitions: `src/app/tests.rs`, without a terminal or daemon.
-- Theme vocabulary, the settings round trip, and the picker transitions: inline
+- Theme vocabulary, the picker transitions, and the app's selection transitions:
+  inline
   `#[cfg(test)]` modules in `src/app/theme.rs`, plus the app transition tests in
   `src/app/tests.rs`.
+- The local theme file, the launch precedence, and the terminal probe: inline
+  `#[cfg(test)]` modules in `src/tui/theme.rs`.
 - Rendering and geometry: `tests/tui_render.rs` over
-  `intention_tui::tui::RevueView`. The assertions read characters, cells, and
-  rows, never colours; `Pilot::find_text` reports a byte offset, so a test that
-  needs a column converts it through the line (see `find_text` there).
+  `intention_tui::tui::testing::Screen`, which draws a view into a ratatui
+  `TestBackend` and reads the cells back. The assertions read characters, cells,
+  and rows, never colours; `Screen::find_text` reports the cell a substring
+  starts at, converting the byte offset through the line.
 - View, keymap, palette, and picker helpers: inline `#[cfg(test)]` modules in
   the screen, keymap, palette, and picker files
   (`src/tui/screens/sessions.rs`, `src/tui/keymap.rs`, `src/tui/palette.rs`,

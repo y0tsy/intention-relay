@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Session-stream client fixtures use direct assertions for diagnostics."
-)]
-
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
@@ -16,11 +10,11 @@ use intention_client::{
     FrameUpdate, RETAINED_TRANSCRIPT_MESSAGES, SessionStreamClient, SessionStreamState, StreamStep,
 };
 use intention_proto::{
-    ClientRequestDto, ConfigRevisionId, MessageKindDto, MessageProjectionDto, ProjectId,
-    ProtocolDaemonMessageDto, ProtocolResultDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SessionFrameDto, SessionId, SessionProjectionDto, SessionSnapshotDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, TurnId, WorkspaceId,
-    WorkspaceRootDto, decode_request_line, encode_reply,
+    ClientRequestDto, MessageKindDto, MessageProjectionDto, ProjectId, ProtocolDaemonMessageDto,
+    ProtocolResultDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SessionFrameDto,
+    SessionId, SessionProjectionDto, SessionSnapshotDto, SubscribeSessionCommandDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    decode_request_line, encode_reply,
 };
 use intention_transport::{AsyncLocalListener, AsyncMessageReceiver};
 
@@ -45,7 +39,6 @@ fn run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> RunProject
         run_id,
         TurnId::new(),
         status,
-        ConfigRevisionId::new(),
         None,
         started_at,
         finished_at,
@@ -64,9 +57,7 @@ fn projection(session_id: SessionId, active_run: Option<RunProjectionDto>) -> Se
         WorkspaceRootDto::parse(root.to_string_lossy().into_owned())
             .expect("fixture workspace root is absolute"),
         RunModeDto::Build,
-        None,
         active_run,
-        Vec::new(),
     )
     .expect("fixture session projection is valid")
 }
@@ -783,7 +774,7 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
     let content = subscription.receive().await.expect("content frame reads");
     assert!(matches!(
         content,
-        StreamStep::Frame(SessionFrameDto::Content(ref row)) if row.text() == "working"
+        StreamStep::Frame { frame: SessionFrameDto::Content(ref row), .. } if row.text() == "working"
     ));
     assert_eq!(subscription.state().messages().len(), 2);
 
@@ -791,7 +782,11 @@ async fn subscribe_delivers_current_state_then_live_content_and_status_frames() 
     // The frame carries the committed projection itself; the fixture builds
     // each projection with fresh turn and config identities, so the assertion
     // checks the run scope and terminal status instead of object identity.
-    let StreamStep::Frame(SessionFrameDto::Status(projection)) = status else {
+    let StreamStep::Frame {
+        frame: SessionFrameDto::Status(projection),
+        ..
+    } = status
+    else {
         unreachable!("a status frame carries the committed run projection")
     };
     assert_eq!(projection.session_id(), session_id);

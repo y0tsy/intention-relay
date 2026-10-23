@@ -1,4 +1,4 @@
-//! The blocking client task one revue front end drives.
+//! The blocking client task one terminal front end drives.
 //!
 //! The task owns the connection: it performs the request effects the core
 //! returns through the shared [`client_task`], and it owns the one live run
@@ -12,7 +12,7 @@ use intention_proto::{DtoResult, ErrorDto, RunModeDto, SessionId, WorkspaceRootD
 use intention_transport::LocalEndpoint;
 use tokio::sync::mpsc;
 
-use crate::app::{Action, Effect};
+use crate::app::{Action, Effect, ThemePreference};
 use crate::client_task;
 
 /// The startup choices the command line hands to the fullscreen front end.
@@ -22,6 +22,7 @@ pub struct TuiOptions {
     mode: Option<RunModeDto>,
     session: Option<SessionId>,
     continue_session: bool,
+    theme: Option<ThemePreference>,
 }
 
 impl TuiOptions {
@@ -32,7 +33,9 @@ impl TuiOptions {
     /// the session the caller selected; `None` opens nothing, so the launch
     /// shows the welcome state until the user asks for a session. A caller that
     /// wants the newest session opened asks for it explicitly with
-    /// [`TuiOptions::continuing`].
+    /// [`TuiOptions::continuing`]. No theme preference is spelled: the launch
+    /// resolves one from the local settings file and the environment unless the
+    /// caller spells one with [`TuiOptions::with_theme`].
     #[must_use]
     pub const fn new(
         workspace_root: WorkspaceRootDto,
@@ -44,7 +47,26 @@ impl TuiOptions {
             mode,
             session,
             continue_session: false,
+            theme: None,
         }
+    }
+
+    /// Returns these options asking for a theme preference the caller spelled.
+    ///
+    /// The spelled preference wins over every source the launch would otherwise
+    /// resolve - `auto` included, which asks detection for this launch and
+    /// ignores the local settings file for it - so one run or one script can
+    /// pick a palette without touching what the file stores.
+    #[must_use]
+    pub const fn with_theme(mut self, theme: Option<ThemePreference>) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    /// Returns the theme preference the caller spelled, if any.
+    #[must_use]
+    pub const fn theme(&self) -> Option<ThemePreference> {
+        self.theme
     }
 
     /// Returns these options asking to continue the newest session, or not.
@@ -120,10 +142,13 @@ enum Step {
     /// The next effect a front end asked for, or `None` once it left.
     Effect(Option<Effect>),
     /// The next observation of the live subscription.
-    Frame(DtoResult<StreamStep>),
+    ///
+    /// Boxed because one observation carries a whole frame: the enum merges it
+    /// with an effect a front end asked for, and every effect is far smaller.
+    Frame(Box<DtoResult<StreamStep>>),
 }
 
-/// The client task one revue front end drives through [`Effect`] values.
+/// The client task one terminal front end drives through [`Effect`] values.
 pub(super) struct Driver {
     effects: mpsc::UnboundedSender<Effect>,
     actions: mpsc::UnboundedReceiver<Action>,
@@ -195,7 +220,7 @@ async fn drive(
         let step = match live.as_mut() {
             Some(subscription) => tokio::select! {
                 effect = effects.recv() => Step::Effect(effect),
-                received = subscription.receive() => Step::Frame(received),
+                received = subscription.receive() => Step::Frame(Box::new(received)),
             },
             None => Step::Effect(effects.recv().await),
         };
@@ -217,22 +242,41 @@ async fn drive(
                     Err(error) => Some(Action::SessionStreamFailed(error)),
                 }
             }
+            Step::Effect(Some(Effect::PersistTheme(preference))) => {
+                // The theme never reaches the daemon: the selection is written
+                // to the front end's own settings file here, off the draw path.
+                // A written `auto` is what clears a spelled-out palette.
+                crate::tui::theme::rewrite(preference)
+                    .err()
+                    .map(Action::ThemePersistFailed)
+            }
             Step::Effect(Some(effect)) => {
                 client_task::perform(&client, &workspace_root, mode, effect)
                     .await
                     .map(|outcome| outcome.unwrap_or_else(|(action, _failure)| action))
             }
-            Step::Frame(Ok(StreamStep::Frame(frame))) => Some(Action::FrameReceived(frame)),
-            Step::Frame(Ok(StreamStep::Closed(error))) => {
-                // The client classified the closed connection, so the front end
-                // reports that classification instead of composing one.
-                live = None;
-                Some(Action::SessionStreamFailed(error))
-            }
-            Step::Frame(Err(error)) => {
-                live = None;
-                Some(Action::SessionStreamFailed(error))
-            }
+            Step::Frame(received) => match *received {
+                Ok(StreamStep::Frame { frame, update }) => {
+                    // The subscription derived the frame into the one session
+                    // state it exposes, so the front end takes that state
+                    // instead of replaying the frame into a copy of its own.
+                    live.as_ref().map(|subscription| Action::FrameReceived {
+                        frame,
+                        update,
+                        state: Box::new(subscription.state().clone()),
+                    })
+                }
+                Ok(StreamStep::Closed(error)) => {
+                    // The client classified the closed connection, so the front
+                    // end reports that classification instead of composing one.
+                    live = None;
+                    Some(Action::SessionStreamFailed(error))
+                }
+                Err(error) => {
+                    live = None;
+                    Some(Action::SessionStreamFailed(error))
+                }
+            },
         };
         if let Some(action) = action
             && actions.send(action).is_err()

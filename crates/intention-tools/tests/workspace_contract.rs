@@ -1,10 +1,10 @@
 #![allow(
-    clippy::expect_used,
-    reason = "Contract test setup failures are reported with local context."
-)]
-#![allow(
     clippy::unwrap_used,
     reason = "Test setup failures are reported with local context."
+)]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "This test proves the workspace service ignores the process working directory, and restores the previous one in the same scope."
 )]
 
 mod common;

@@ -1,9 +1,9 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Contract fixtures use expect to provide precise test failure messages."
-)]
-
 //! Test-first typed-wire contract evidence.
+
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
+)]
 
 #[allow(
     dead_code,
@@ -16,15 +16,14 @@ use common::{fixture_message, fixture_projection, fixture_workspace_root};
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
     CreateSessionFirstTurnDto, DaemonHealthDto, ErrorDto, GetSessionSnapshotQueryDto,
-    ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionSnapshotDto,
-    SessionSummariesDto, SessionSummaryDto, SetTuiThemeCommandDto, SubscribeSessionCommandDto,
-    TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto,
-    decode_request_line, decode_response, encode_reply, encode_request, parse_daemon_message,
-    parse_session_frame, run_status_is_terminal, validate_run_status_transition,
+    ProtocolDaemonMessageDto, ProtocolResultDto, RunCancelledAcceptedDto, RunProjectionDto,
+    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, decode_request_line,
+    decode_response, encode_reply, encode_request, parse_daemon_message, parse_session_frame,
+    run_status_is_terminal, validate_run_status_transition,
 };
-use intention_proto::{ConfigRevisionId, IdempotencyKey, MessageKindDto, ProjectId, RunId};
+use intention_proto::{MessageKindDto, ProjectId, RunId};
 use intention_proto::{RunModeDto, SessionId, TimestampDto, TurnId, WorkspaceId};
 
 /// Returns one valid fixture timestamp in whole Unix seconds.
@@ -38,7 +37,6 @@ fn fixture_run(session_id: SessionId, run_id: RunId) -> RunProjectionDto {
         run_id,
         TurnId::new(),
         RunStatusDto::Running,
-        ConfigRevisionId::new(),
         None,
         timestamp(1_726_000_000),
         None,
@@ -56,7 +54,7 @@ fn fixture_snapshot(session_id: SessionId, run_id: RunId) -> SessionSnapshotDto 
     .expect("fixture snapshot is valid")
 }
 
-fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSummaryDto {
+fn fixture_session_summary(session_id: SessionId) -> SessionSummaryDto {
     SessionSummaryDto::new(
         session_id,
         ProjectId::new(),
@@ -66,12 +64,11 @@ fn fixture_session_summary(session_id: SessionId, run_id: RunId) -> SessionSumma
         timestamp(1_726_000_100),
         fixture_workspace_root(),
         2,
-        Some(fixture_run(session_id, run_id)),
     )
 }
 
-fn fixture_session_summaries(session_id: SessionId, run_id: RunId) -> SessionSummariesDto {
-    SessionSummariesDto::new(vec![fixture_session_summary(session_id, run_id)], 3)
+fn fixture_session_summaries(session_id: SessionId) -> SessionSummariesDto {
+    SessionSummariesDto::new(vec![fixture_session_summary(session_id)], 3)
         .expect("fixture session summaries are valid")
 }
 
@@ -84,13 +81,10 @@ const fn result_kind(request: &ClientRequestDto) -> &'static str {
     match request {
         ClientRequestDto::CreateSession(_) => "session_created",
         ClientRequestDto::SendUserTurn(_) => "turn_accepted",
-        ClientRequestDto::RemoveTurn(_) => "turn_removed",
         ClientRequestDto::CancelRun(_) => "run_cancelled",
         ClientRequestDto::GetSessionSnapshot(_) => "session_snapshot",
         ClientRequestDto::GetDaemonHealth => "daemon_health",
         ClientRequestDto::ListSessions => "sessions_listed",
-        ClientRequestDto::GetTuiSettings => "tui_settings",
-        ClientRequestDto::SetTuiTheme(_) => "tui_theme_set",
         ClientRequestDto::SubscribeSession(_) => "session_subscribed",
     }
 }
@@ -106,16 +100,12 @@ fn fixture_requests(session_id: SessionId, run_id: RunId) -> Vec<ClientRequestDt
             None,
         )),
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "hello")
-                .expect("fixture turn is valid"),
+            SendUserTurnCommandDto::new(session_id, "hello").expect("fixture turn is valid"),
         ),
-        ClientRequestDto::RemoveTurn(RemoveTurnCommandDto::new(session_id, TurnId::new())),
         ClientRequestDto::CancelRun(CancelRunCommandDto::new(session_id, run_id)),
         ClientRequestDto::GetSessionSnapshot(GetSessionSnapshotQueryDto::new(session_id)),
         ClientRequestDto::GetDaemonHealth,
         ClientRequestDto::ListSessions,
-        ClientRequestDto::GetTuiSettings,
-        ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(ThemeDto::Dark)),
         ClientRequestDto::SubscribeSession(SubscribeSessionCommandDto::new(session_id)),
     ]
 }
@@ -133,13 +123,10 @@ fn fixture_results(session_id: SessionId, run_id: RunId) -> Vec<ProtocolResultDt
             TurnId::new(),
             SendUserTurnOutcomeDto::Pending,
         )),
-        ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(session_id, TurnId::new())),
         ProtocolResultDto::RunCancelled(RunCancelledAcceptedDto::new(session_id, run_id)),
         ProtocolResultDto::SessionSnapshot(fixture_snapshot(session_id, run_id)),
         ProtocolResultDto::DaemonHealth(DaemonHealthDto::ready()),
-        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id, run_id)),
-        ProtocolResultDto::TuiSettings(TuiSettingsDto::new(ThemeDto::Dark)),
-        ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Dark)),
+        ProtocolResultDto::SessionsListed(fixture_session_summaries(session_id)),
         ProtocolResultDto::SessionSubscribed(fixture_snapshot(session_id, run_id)),
     ]
 }
@@ -186,7 +173,7 @@ fn every_request_round_trips_with_its_named_result_kind() {
     }
     assert_eq!(
         kinds.len(),
-        10,
+        7,
         "the wire implements exactly one request kind per operation"
     );
 }
@@ -303,9 +290,8 @@ fn a_create_command_may_omit_its_mode() {
 #[test]
 fn a_create_command_carries_an_optional_first_turn() {
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
-    let turn = CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
-        .expect("a non-blank first turn is valid");
+    let turn =
+        CreateSessionFirstTurnDto::new("first prompt").expect("a non-blank first turn is valid");
     let declared = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
@@ -316,14 +302,9 @@ fn a_create_command_carries_an_optional_first_turn() {
     );
     let value = serde_json::to_value(&declared).expect("the command serializes");
     assert_eq!(value["first_turn"]["content"], "first prompt");
-    assert_eq!(
-        value["first_turn"]["idempotency_key"],
-        serde_json::to_value(idempotency_key).expect("the key serializes")
-    );
     let decoded: CreateSessionCommandDto =
         serde_json::from_value(value).expect("the command decodes");
     let first_turn = decoded.first_turn().expect("the turn round-trips");
-    assert_eq!(first_turn.idempotency_key(), idempotency_key);
     assert_eq!(first_turn.content(), "first prompt");
 
     // A command with no first turn omits the field entirely and decodes again.
@@ -346,11 +327,10 @@ fn a_create_command_carries_an_optional_first_turn() {
 
     // A blank first turn is never a turn: the DTO rejects it on construction.
     assert!(
-        CreateSessionFirstTurnDto::new(IdempotencyKey::new(), "   ").is_err(),
+        CreateSessionFirstTurnDto::new("   ").is_err(),
         "blank first-turn content is rejected"
     );
     let blank = serde_json::json!({
-        "idempotency_key": IdempotencyKey::new(),
         "content": " \n ",
     });
     assert!(
@@ -367,7 +347,6 @@ fn a_create_acceptance_carries_the_first_turn_evidence() {
         TurnId::new(),
         SendUserTurnOutcomeDto::Started {
             run_id: RunId::new(),
-            config_revision_id: ConfigRevisionId::new(),
         },
     );
     let accepted =
@@ -395,8 +374,7 @@ fn a_create_acceptance_carries_the_first_turn_evidence() {
 #[test]
 fn session_lists_round_trip_with_their_omitted_count() {
     let session_id = SessionId::new();
-    let run_id = RunId::new();
-    let summaries = fixture_session_summaries(session_id, run_id);
+    let summaries = fixture_session_summaries(session_id);
     assert_eq!(summaries.omitted(), 3);
     let summary = &summaries.sessions()[0];
     assert_eq!(summary.session_id(), session_id);
@@ -405,10 +383,6 @@ fn session_lists_round_trip_with_their_omitted_count() {
     assert_eq!(summary.updated_at(), timestamp(1_726_000_100));
     assert_eq!(summary.workspace_root(), &fixture_workspace_root());
     assert_eq!(summary.message_count(), 2);
-    assert_eq!(
-        summary.active_run().map(RunProjectionDto::run_id),
-        Some(run_id)
-    );
 
     let line = serde_json::to_string(&encode_request(9, ClientRequestDto::ListSessions))
         .expect("session list request serializes");
@@ -436,81 +410,6 @@ fn session_lists_round_trip_with_their_omitted_count() {
         .expect("session summaries deserialize"),
         summaries
     );
-}
-
-#[test]
-fn tui_settings_and_theme_commands_round_trip_with_presentation_spelling() {
-    let settings = TuiSettingsDto::new(ThemeDto::Dark);
-    assert_eq!(settings.theme(), ThemeDto::Dark);
-    let command = SetTuiThemeCommandDto::new(ThemeDto::Light);
-    assert_eq!(command.theme(), ThemeDto::Light);
-    let accepted = TuiThemeAcceptedDto::new(ThemeDto::Light);
-    assert_eq!(accepted.theme(), ThemeDto::Light);
-
-    let request = ClientRequestDto::SetTuiTheme(command);
-    let line =
-        serde_json::to_string(&encode_request(4, request.clone())).expect("request serializes");
-    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
-    assert_eq!(value["request"]["kind"], "set_tui_theme");
-    assert_eq!(value["request"]["data"]["theme"], "light");
-    assert_eq!(
-        decode_request_line(&line)
-            .expect("request decodes")
-            .request(),
-        &request
-    );
-
-    let request = ClientRequestDto::GetTuiSettings;
-    let line =
-        serde_json::to_string(&encode_request(5, request.clone())).expect("request serializes");
-    let value: serde_json::Value = serde_json::from_str(&line).expect("request line is JSON");
-    assert_eq!(value["request"]["kind"], "get_tui_settings");
-    assert!(
-        value["request"]["data"].is_null(),
-        "a settings read carries no payload"
-    );
-    assert_eq!(
-        decode_request_line(&line)
-            .expect("request decodes")
-            .request(),
-        &request
-    );
-
-    let reply = encode_reply(4, ProtocolResultDto::TuiSettings(settings));
-    let line = serde_json::to_string(&reply).expect("settings reply serializes");
-    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
-    assert_eq!(value["data"]["result"]["kind"], "tui_settings");
-    assert_eq!(value["data"]["result"]["data"]["theme"], "dark");
-    assert_eq!(
-        decode_response(&line, 4).expect("the correlated reply decodes"),
-        ProtocolResultDto::TuiSettings(settings)
-    );
-
-    let reply = encode_reply(5, ProtocolResultDto::TuiThemeSet(accepted));
-    let line = serde_json::to_string(&reply).expect("theme reply serializes");
-    let value: serde_json::Value = serde_json::from_str(&line).expect("reply line is JSON");
-    assert_eq!(value["data"]["result"]["kind"], "tui_theme_set");
-    assert_eq!(value["data"]["result"]["data"]["theme"], "light");
-    assert_eq!(
-        decode_response(&line, 5).expect("the correlated reply decodes"),
-        ProtocolResultDto::TuiThemeSet(accepted)
-    );
-
-    // An undeclared or absent spelling is not a current theme in either direction.
-    for malformed in [
-        r#"{"kind":"set_tui_theme","data":{"theme":"midnight"}}"#,
-        r#"{"kind":"set_tui_theme","data":{}}"#,
-        r#"{"kind":"tui_settings","data":{"theme":"midnight"}}"#,
-    ] {
-        assert!(
-            serde_json::from_str::<ClientRequestDto>(malformed).is_err(),
-            "{malformed} is not a current request"
-        );
-        assert!(
-            serde_json::from_str::<ProtocolResultDto>(malformed).is_err(),
-            "{malformed} is not a current result"
-        );
-    }
 }
 
 #[test]
@@ -589,28 +488,9 @@ fn session_summaries_and_text_deltas_validate_their_required_shape() {
     let run_id = RunId::new();
     assert_eq!(
         SessionSummariesDto::new(
-            vec![SessionSummaryDto::new(
-                SessionId::new(),
-                ProjectId::new(),
-                WorkspaceId::new(),
-                RunModeDto::Build,
-                timestamp(1_726_000_000),
-                timestamp(1_726_000_000),
-                fixture_workspace_root(),
-                0,
-                Some(fixture_run(session_id, run_id)),
-            )],
-            0,
-        )
-        .expect_err("an active run must belong to its summary session")
-        .code(),
-        "invalid_session_summaries"
-    );
-    assert_eq!(
-        SessionSummariesDto::new(
             vec![
-                fixture_session_summary(session_id, run_id),
-                fixture_session_summary(session_id, run_id),
+                fixture_session_summary(session_id),
+                fixture_session_summary(session_id),
             ],
             0,
         )
@@ -649,7 +529,7 @@ fn malformed_wire_lines_fail_closed() {
     );
     assert!(
         serde_json::from_str::<ClientRequestDto>(
-            r#"{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","idempotency_key":"11111111-1111-4111-8111-111111111111","content":" "}}"#
+            r#"{"kind":"send_user_turn","data":{"session_id":"11111111-1111-4111-8111-111111111111","content":" "}}"#
         )
         .is_err(),
         "a blank turn command fails closed"
@@ -671,7 +551,7 @@ fn malformed_wire_lines_fail_closed() {
         parse_daemon_message("{")
             .expect_err("foreign bytes are a stale-peer failure")
             .code(),
-        "stale_daemon_protocol"
+        "invalid_local_protocol_response"
     );
 
     // A current envelope whose payload does not decode is this wire's own
@@ -679,7 +559,7 @@ fn malformed_wire_lines_fail_closed() {
     // daemon against the peer that answered.
     assert_eq!(
         parse_daemon_message(
-            r#"{"kind":"reply","data":{"id":1,"result":{"kind":"daemon_health","data":{}}}}"#
+            r#"{"kind":"reply","data":{"id":1,"result":{"kind":"unknown","data":{}}}}"#
         )
         .expect_err("a current envelope with an invalid payload fails closed")
         .code(),
@@ -694,7 +574,7 @@ fn malformed_wire_lines_fail_closed() {
             parse_daemon_message(foreign)
                 .expect_err("foreign bytes are a stale-peer failure")
                 .code(),
-            "stale_daemon_protocol",
+            "invalid_local_protocol_response",
             "{foreign} is not an envelope of the current wire"
         );
     }
@@ -737,14 +617,6 @@ fn durable_enum_spellings_match_their_wire_spelling() {
             "the wire spelling of {kind:?} is its durable spelling"
         );
         assert_eq!(MessageKindDto::parse(kind.as_str()).ok(), Some(kind));
-    }
-    for theme in [ThemeDto::Light, ThemeDto::Dark] {
-        assert_eq!(
-            serde_json::to_value(theme).expect("theme serializes"),
-            serde_json::json!(theme.as_str()),
-            "the wire spelling of {theme:?} is its durable spelling"
-        );
-        assert_eq!(ThemeDto::parse(theme.as_str()).ok(), Some(theme));
     }
 }
 

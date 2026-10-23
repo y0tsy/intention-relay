@@ -15,7 +15,7 @@ use std::{
 };
 
 use futures_core::Stream;
-use intention_proto::{DtoResult, ErrorDto, ErrorRetryDto, RunId, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto, RunId, ToolCallId};
 pub use intention_proto::{FinishReasonDto, ProviderErrorDto, ToolCallDto, UsageDto};
 use serde::Serialize;
 
@@ -189,11 +189,26 @@ impl ModelMessageDto {
 ///
 /// The bound caps the reasoning text one provider response may attach to its
 /// tool calls for the same-run tool-loop continuation.
+///
+/// @todo(provider): a gateway with the DeepSeek contract also requires the
+/// session's earlier steps back once the request carries `tools`, which needs a
+/// message-scoped attachment instead of a tool-call set.
 const MAX_MODEL_ASSISTANT_REASONING_BYTES: usize = 512 * 1024;
 
 /// Transient assistant reasoning attached to the tool calls of one provider
 /// response; preserved only for the same-run tool-loop continuation, never
 /// durable, never message content.
+///
+/// The attachment is what the generic chat driver needs to satisfy the
+/// provider contract for a tool-carrying request: once the request advertises
+/// `tools`, a provider validates that the earlier assistant tool-call message
+/// carries its own reasoning back. The attachment carries exactly the two
+/// facts that round trip - the reasoning text and the tool-call identities it
+/// belongs to.
+///
+/// @todo(provider): the DeepSeek contract also requires the session's earlier
+/// steps once the request carries `tools`, where the attachment belongs to the
+/// assistant message rather than to a set of tool-call identities.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct AssistantReasoningDto {
     tool_call_ids: Vec<ToolCallId>,
@@ -205,27 +220,22 @@ impl AssistantReasoningDto {
     ///
     /// The text may be empty: a provider can carry the reasoning channel with
     /// no textual content, and that presence alone must round-trip into the
-    /// continuation request.
+    /// continuation request. The identities are the round's own tool calls, so
+    /// the attachment binds to them without a further rule: an attachment that
+    /// names no identity binds to no message and simply never reaches the wire.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when no tool-call identity is attached, a
-    /// tool-call identity repeats, or the text exceeds 512 KiB or carries a
+    /// Returns a validation error when the text exceeds 512 KiB or carries a
     /// control character other than a line break or tab.
     pub fn new(tool_call_ids: Vec<ToolCallId>, text: impl Into<String>) -> DtoResult<Self> {
         let text = text.into();
-        if !valid_assistant_reasoning_tool_call_ids(&tool_call_ids) {
-            return Err(ErrorDto::validation(
-                "invalid_model_assistant_reasoning",
-                "assistant reasoning requires at least one unique tool-call identity",
-            ));
-        }
         if text.len() > MAX_MODEL_ASSISTANT_REASONING_BYTES
             || text.chars().any(forbidden_reasoning_text_character)
         {
             return Err(ErrorDto::validation(
-                "invalid_model_assistant_reasoning_text",
-                "assistant reasoning text must be at most 512 KiB without invalid control characters",
+                "invalid_model_assistant_reasoning",
+                "assistant reasoning carries at most 512 KiB of text without invalid control characters",
             ));
         }
         Ok(Self {
@@ -247,12 +257,6 @@ impl AssistantReasoningDto {
     }
 }
 
-/// Whether the attached tool-call identities are present and unique.
-fn valid_assistant_reasoning_tool_call_ids(tool_call_ids: &[ToolCallId]) -> bool {
-    let mut seen = std::collections::HashSet::with_capacity(tool_call_ids.len());
-    !tool_call_ids.is_empty() && tool_call_ids.iter().all(|id| seen.insert(*id))
-}
-
 /// Whether `character` must be rejected in round-tripped reasoning text.
 ///
 /// Line breaks and tabs are ordinary reasoning text; every other control
@@ -261,107 +265,55 @@ const fn forbidden_reasoning_text_character(character: char) -> bool {
     character.is_control() && !matches!(character, '\n' | '\r' | '\t')
 }
 
-/// The explicit capabilities declared by a selected provider driver.
+/// The explicit capability declaration of a selected provider driver.
+///
+/// The runtime builds every request as streamed text with tool calls, so the
+/// declaration states the one capability provider selection checks.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelCapabilitiesDto {
-    text: bool,
-    reasoning: bool,
-    tool_calls: bool,
-    multimodal: bool,
-    vendor_extensions: bool,
-    streaming: bool,
+    streamed_text_with_tool_calls: bool,
 }
 
 impl ModelCapabilitiesDto {
-    /// Creates an explicit capability declaration.
+    /// Creates a capability declaration for a driver that does or does not
+    /// serve streamed text with tool calls.
     #[must_use]
-    pub const fn new(
-        text: bool,
-        reasoning: bool,
-        tool_calls: bool,
-        multimodal: bool,
-        vendor_extensions: bool,
-        streaming: bool,
-    ) -> Self {
+    pub const fn new(streamed_text_with_tool_calls: bool) -> Self {
         Self {
-            text,
-            reasoning,
-            tool_calls,
-            multimodal,
-            vendor_extensions,
-            streaming,
+            streamed_text_with_tool_calls,
         }
-    }
-
-    /// Returns whether text input/output is supported.
-    #[must_use]
-    pub const fn supports_text(self) -> bool {
-        self.text
-    }
-
-    /// Returns whether reasoning output is supported.
-    #[must_use]
-    pub const fn supports_reasoning(self) -> bool {
-        self.reasoning
-    }
-
-    /// Returns whether tool calls are supported.
-    #[must_use]
-    pub const fn supports_tool_calls(self) -> bool {
-        self.tool_calls
-    }
-
-    /// Returns whether multimodal input/output is supported.
-    #[must_use]
-    pub const fn supports_multimodal(self) -> bool {
-        self.multimodal
-    }
-
-    /// Returns whether provider-specific extensions are supported.
-    #[must_use]
-    pub const fn supports_vendor_extensions(self) -> bool {
-        self.vendor_extensions
-    }
-
-    /// Returns whether streaming is supported.
-    #[must_use]
-    pub const fn supports_streaming(self) -> bool {
-        self.streaming
     }
 
     /// Verifies this declaration can serve every request the runtime builds.
     ///
-    /// The runtime streams text with tool calls, so a driver that cannot
-    /// declare both cannot serve any run. The check runs once when the
-    /// configuration-selected provider is composed. A test-support facade that
-    /// injects its own driver is exempt: it carries the injected driver's own
-    /// declaration instead of a configuration-selected one.
+    /// The runtime streams text with tool calls, so a driver that does not
+    /// declare that capability cannot serve any run. The check runs once when
+    /// the configuration-selected provider is composed. A test-support facade
+    /// that injects its own driver is exempt: it carries the injected driver's
+    /// own declaration instead of a configuration-selected one.
     ///
     /// # Errors
     ///
-    /// Returns a policy error when text or tool-call support is not declared.
+    /// Returns a policy error when streamed text with tool calls is not declared.
     pub fn ensure_runtime_requirements(self) -> DtoResult<()> {
-        if self.text && self.tool_calls {
+        if self.streamed_text_with_tool_calls {
             Ok(())
         } else {
             Err(ErrorDto::new(
                 "unsupported_model_capability",
                 intention_proto::ErrorCategoryDto::Policy,
                 "the selected provider cannot serve streamed text with tool calls",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?)
         }
     }
 }
 
-/// Maximum characters of one tool-definition name (provider function-name constraint).
-const MAX_TOOL_DEFINITION_NAME_CHARS: usize = 64;
-
-/// Maximum bytes of one tool-definition JSON parameter document.
-const MAX_TOOL_DEFINITION_PARAMETERS_BYTES: usize = 65_536;
-
-/// A validated model tool definition advertised to a provider.
+/// A model tool definition advertised to a provider.
+///
+/// The definitions and their input JSON Schema text are code-owned: the
+/// composition builds them from `intention_tools::model_visible_descriptors()`,
+/// so construction carries no validation failure mode.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelToolDefinitionDto {
     name: String,
@@ -370,49 +322,18 @@ pub struct ModelToolDefinitionDto {
 }
 
 impl ModelToolDefinitionDto {
-    /// Creates a validated tool definition with object-shaped JSON parameters.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the name is not an ASCII `[A-Za-z0-9_-]`
-    /// token of at most 64 characters, the description is blank, or the
-    /// parameters are empty, larger than 64 KiB, or not a JSON object.
+    /// Creates a tool definition with its code-owned name, description, and JSON Schema text.
+    #[must_use]
     pub fn new(
         name: impl Into<String>,
         description: impl Into<String>,
         parameters_json: impl Into<String>,
-    ) -> DtoResult<Self> {
-        let name = name.into();
-        let description = description.into();
-        let parameters_json = parameters_json.into();
-        if name.trim().is_empty()
-            || name.len() > MAX_TOOL_DEFINITION_NAME_CHARS
-            || !name.bytes().all(is_tool_definition_name_byte)
-        {
-            return Err(ErrorDto::validation(
-                "invalid_tool_definition_name",
-                "tool definition name must be an ASCII [A-Za-z0-9_-] token of at most 64 characters",
-            ));
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters_json: parameters_json.into(),
         }
-        if description.trim().is_empty() {
-            return Err(ErrorDto::validation(
-                "invalid_tool_definition_description",
-                "tool definition description must not be empty",
-            ));
-        }
-        if parameters_json.is_empty()
-            || parameters_json.len() > MAX_TOOL_DEFINITION_PARAMETERS_BYTES
-        {
-            return Err(invalid_tool_definition_parameters());
-        }
-        let _: std::collections::BTreeMap<String, serde::de::IgnoredAny> =
-            serde_json::from_str(&parameters_json)
-                .map_err(|_| invalid_tool_definition_parameters())?;
-        Ok(Self {
-            name,
-            description,
-            parameters_json,
-        })
     }
 
     /// Returns the advertised function name.
@@ -427,24 +348,11 @@ impl ModelToolDefinitionDto {
         &self.description
     }
 
-    /// Returns the validated JSON object text describing the tool parameters.
+    /// Returns the code-owned JSON object text describing the tool parameters.
     #[must_use]
     pub fn parameters_json(&self) -> &str {
         &self.parameters_json
     }
-}
-
-/// Whether `byte` is one provider function-name character (`[A-Za-z0-9_-]`).
-const fn is_tool_definition_name_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')
-}
-
-/// The validation error for invalid tool-definition JSON parameters.
-fn invalid_tool_definition_parameters() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_tool_definition_parameters",
-        "tool definition parameters must be a non-empty JSON object of at most 64 KiB",
-    )
 }
 
 /// A validated provider-neutral model request.
@@ -530,6 +438,9 @@ impl ModelRequestDto {
 
     /// Returns the transient reasoning attachments carried into the same-run
     /// tool-loop continuation.
+    ///
+    /// @todo(provider): the DeepSeek contract extends the same field to every
+    /// earlier step of the session once the request carries `tools`.
     #[must_use]
     pub fn assistant_reasoning(&self) -> &[AssistantReasoningDto] {
         &self.assistant_reasoning
@@ -701,69 +612,6 @@ impl ModelEventDto {
     }
 }
 
-/// Validates normalized model-stream ordering without owning runtime delivery.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ModelStreamLifecycleDto {
-    started: bool,
-    terminal: bool,
-    usage_seen: bool,
-}
-
-impl ModelStreamLifecycleDto {
-    /// Creates a stream validator before the provider emits a start fact.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            started: false,
-            terminal: false,
-            usage_seen: false,
-        }
-    }
-
-    /// Accepts one ordered normalized event.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error if the event cannot occur at this stream position.
-    pub fn accept(&mut self, event: &ModelEventDto) -> DtoResult<()> {
-        match event {
-            ModelEventDto::Started if !self.started && !self.terminal => {
-                self.started = true;
-                Ok(())
-            }
-            ModelEventDto::Started => Err(stream_order_error()),
-            ModelEventDto::Finished { .. } if self.started && !self.terminal => {
-                self.terminal = true;
-                Ok(())
-            }
-            ModelEventDto::Usage { .. } if self.started && !self.terminal && !self.usage_seen => {
-                self.usage_seen = true;
-                Ok(())
-            }
-            ModelEventDto::TextDelta { .. }
-            | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ToolCall { .. }
-                if self.started && !self.terminal =>
-            {
-                Ok(())
-            }
-            ModelEventDto::Usage { .. } | ModelEventDto::Finished { .. } => {
-                Err(stream_order_error())
-            }
-            ModelEventDto::TextDelta { .. }
-            | ModelEventDto::ReasoningDelta { .. }
-            | ModelEventDto::ToolCall { .. } => Err(stream_order_error()),
-        }
-    }
-}
-
-fn stream_order_error() -> ErrorDto {
-    ErrorDto::validation(
-        "invalid_model_stream_order",
-        "model stream event order is invalid",
-    )
-}
-
 /// Provider-neutral cancellation state shared with a model execution stream.
 #[derive(Clone, Default)]
 pub struct ModelCancellationSignal {
@@ -772,7 +620,7 @@ pub struct ModelCancellationSignal {
 
 #[derive(Default)]
 struct CancellationState {
-    cancelled: AtomicBool,
+    cancelled: Arc<AtomicBool>,
     next_waiter_id: AtomicUsize,
     waiters: Mutex<Vec<(usize, Waker)>>,
 }
@@ -782,6 +630,16 @@ impl ModelCancellationSignal {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns the shared flag this signal observes.
+    ///
+    /// A run has one cancellation state: the blocking tool path observes this
+    /// same flag through its own signal rather than a second flag kept in step
+    /// with it.
+    #[must_use]
+    pub fn shared_flag(&self) -> Arc<AtomicBool> {
+        self.state.cancelled.clone()
     }
 
     /// Returns whether cancellation has been requested.

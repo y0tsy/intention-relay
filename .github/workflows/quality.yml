@@ -24,85 +24,65 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Per-phase toolchain/tool scoping keeps every job lean: each phase
-          # installs and validates only what it runs. The union of all CI
-          # scopes covers every pinned toolchain and tool; components are
-          # validated by the phase that installs them, and the unscoped local
-          # run validates the complete pinned set.
+          # Every job installs only the tools its phase runs; `make ci-<phase>`
+          # validates exactly that set through `quality/check_tools.py`, so no
+          # job pays for a tool it does not use.
           #
-          # lint-arch and test run on both Linux and Windows; coverage and deps
-          # run on Linux only. Those phases are platform-invariant: coverage
-          # measures the same source and toolchain, and the dependency gates
-          # read the same lockfile and registries. The Windows coverage jobs
-          # dominated the CI critical path at roughly twenty minutes while
-          # running identical work about 1.7x slower than Linux; Windows
-          # correctness stays covered by the test job's named-pipe and
-          # platform-native symlink fixtures.
+          # Three Linux jobs and one Windows job carry the gate. lint-arch lints
+          # the native target and the Windows target (through the MinGW cross
+          # compiler), runs the doctests, and builds the rustdoc. Linux test
+          # execution belongs to coverage-default, which runs the same
+          # instrumented suite, so no separate Linux test job duplicates it. The
+          # test phase runs on Windows, where the named-pipe and platform-native
+          # symlink fixtures live. Coverage and deps stay on Linux: those phases
+          # are platform-invariant, they measure the same source and toolchain,
+          # and the Windows coverage jobs dominated the CI critical path at
+          # roughly twenty minutes while running identical work about 1.7x
+          # slower than Linux.
+          #
+          # Caching follows what each phase actually reuses. lint-arch, test,
+          # and coverage-default build a target tree and keep it warm across
+          # runs; the coverage job's instrumented tree survives its own run
+          # because the coverage gate no longer removes it. deps compiles
+          # nothing and needs only the crate sources. Only the coverage and
+          # lint jobs link with mold, and only they pass the flag that selects
+          # it; the test job links with LLD instead of link.exe.
           - os: ubuntu-24.04
             phase: lint-arch
             stable: true
-            nightly: false
             stable_components: "rustfmt, clippy"
-            nightly_components: ""
             tools: ""
-            scope: lint-arch
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
-          - os: ubuntu-24.04
-            phase: test
-            stable: true
-            nightly: false
-            stable_components: ""
-            nightly_components: ""
-            tools: "cargo-nextest@0.9.140"
-            scope: test
-            rustflags: "-C link-arg=-fuse-ld=mold"
-            uses_mold: true
+            uses_rust_cache: true
           - os: ubuntu-24.04
             phase: coverage-default
-            stable: false
-            nightly: true
-            stable_components: ""
-            nightly_components: "llvm-tools-preview"
+            stable: true
+            stable_components: "llvm-tools-preview"
             tools: "cargo-nextest@0.9.140,cargo-llvm-cov@0.8.7"
-            scope: coverage
             rustflags: "-C link-arg=-fuse-ld=mold"
             uses_mold: true
+            uses_rust_cache: true
           - os: ubuntu-24.04
             phase: deps
             stable: true
-            nightly: true
             stable_components: ""
-            nightly_components: ""
-            tools: "cargo-deny@0.20.2,cargo-audit@0.22.2,cargo-about@0.9.1,cargo-outdated@0.19.0,cargo-machete@0.9.2,cargo-udeps@0.1.61"
-            scope: deps
-            rustflags: "-C link-arg=-fuse-ld=mold"
-            uses_mold: true
-          - os: windows-2025
-            phase: lint-arch
-            stable: true
-            nightly: false
-            stable_components: "rustfmt, clippy"
-            nightly_components: ""
-            tools: ""
-            scope: lint-arch
+            tools: "cargo-deny@0.20.2,cargo-machete@0.9.2"
             rustflags: ""
             uses_mold: false
+            uses_rust_cache: false
           - os: windows-2025
             phase: test
             stable: true
-            nightly: false
             stable_components: ""
-            nightly_components: ""
             tools: "cargo-nextest@0.9.140"
-            scope: test
             rustflags: ""
             uses_mold: false
+            uses_rust_cache: true
     env:
       CARGO_TERM_COLOR: never
       CARGO_INCREMENTAL: "0"
       RUSTFLAGS: ${{ matrix.rustflags }}
-      CI_TOOLS_SCOPE: ${{ matrix.scope }}
     defaults:
       run:
         shell: bash
@@ -110,56 +90,107 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Restore Cargo and build caches
+        # The three jobs that compile a target tree reuse it across runs. The
+        # coverage job's target is its instrumented tree, which `--no-report`
+        # leaves in place precisely so this cache can carry it. The deps job
+        # compiles nothing at all.
+        #
+        # `add-job-id-key` is off because the prefix already separates the
+        # phases: leaving it on gives every run a fresh key, so each run writes
+        # a new copy instead of replacing the previous one and the repository
+        # cache fills with generations of the same four trees.
+        if: matrix.uses_rust_cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ matrix.phase }}
+          add-job-id-key: false
+
+      - name: Restore the Cargo registry cache
+        # The deps job builds nothing, so it needs only the crate sources.
+        if: matrix.uses_rust_cache == false
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-registry-
 
       - name: Install stable Rust toolchain
         if: matrix.stable
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: 1.97.1
           components: ${{ matrix.stable_components }}
 
-      - name: Install nightly Rust toolchain
-        if: matrix.nightly
-        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
-        with:
-          toolchain: nightly-2026-07-31
-          components: ${{ matrix.nightly_components }}
-
       - name: Install pinned quality tools
         if: matrix.tools != ''
-        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8
         with:
           tool: ${{ matrix.tools }}
           fallback: cargo-binstall
 
       - name: Enable sccache object cache for coverage builds
-        if: matrix.scope == 'coverage'
+        if: matrix.phase == 'coverage-default'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: "v0.17.0"
 
       - name: Route coverage builds through the sccache object cache
-        if: matrix.scope == 'coverage'
+        if: matrix.phase == 'coverage-default'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           # cargo-llvm-cov installs its own RUSTC_WRAPPER; a pre-existing
           # wrapper is honored only from the cargo build.rustc_wrapper
-          # config, so sccache is wired through that config key. Rustup
-          # resolves the chained `rustc` through RUSTUP_TOOLCHAIN, which
-          # cargo +nightly keeps set for its child processes.
+          # config, so sccache is wired through that config key.
           echo "CARGO_BUILD_RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          # The Rust side is cached by the wrapper above; the native builds
+          # are not, and they are the longest single steps of the instrumented
+          # build. `cc` and `cmake` read these variables, so the bundled
+          # SQLite, mimalloc, and aws-lc-sys builds join the same cache.
+          echo "CC=sccache gcc" >> "$GITHUB_ENV"
+          echo "CXX=sccache g++" >> "$GITHUB_ENV"
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
 
       - name: Install mold linker
-        # Only Linux jobs that actually link with mold install it; the
-        # version check verifies the install without hiding its failure.
+        # The version check verifies the install without hiding its failure.
+        # Only the Linux jobs that link with mold install it, and only those
+        # jobs pass `-fuse-ld=mold`, so the binary is never made the system
+        # default linker.
         if: runner.os == 'Linux' && matrix.uses_mold
+        uses: rui314/setup-mold@339e96b4ff1f3bd865856ba4cbbe8818a7acb038
+        with:
+          mold-version: 2.30.0
+          make-default: false
+
+      - name: Verify the mold linker
+        if: runner.os == 'Linux' && matrix.uses_mold
+        run: mold --version
+
+      - name: Select the LLD linker
+        # The test job links 44 test binaries, and LLD links each of them
+        # faster than link.exe. `-C link-arg=-fuse-ld=lld-link` is not the
+        # mechanism: that flag is a GCC driver option, and rustc's MSVC path
+        # invokes the linker directly, so the argument would reach link.exe
+        # unparsed. `-C linker=` is what selects the linker, and rustc gives it
+        # MSVC-style arguments for this target.
+        #
+        # Both candidates are bare names resolved through PATH because
+        # RUSTFLAGS splits on whitespace and the LLVM install path contains a
+        # space. `lld-link` comes from the runner's LLVM; `rust-lld` ships with
+        # the toolchain, so one of the two always resolves.
+        if: matrix.phase == 'test'
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq mold
-          mold --version
+          set -euo pipefail
+          if command -v lld-link >/dev/null 2>&1; then
+            linker=lld-link
+          else
+            linker=rust-lld
+          fi
+          echo "RUSTFLAGS=-C linker=$linker" >> "$GITHUB_ENV"
+          echo "LLD linker: $linker ($(command -v "$linker"))"
+          "$linker" --version
 
       - name: Set canonical Rust homes
         run: |
@@ -167,15 +198,23 @@ jobs:
           echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Install the Windows cross target and MinGW toolchain
+        # Version checks verify both installs without hiding their failure. The
+        # target is declared in rust-toolchain.toml; the explicit install is
+        # needed because CI installs the toolchain by literal name. MinGW
+        # supplies the target C compiler the bundled C dependencies
+        # (libsqlite3-sys, libmimalloc-sys, aws-lc-sys) build through `cc`, and
+        # nasm is the assembler ring's Windows assembly path expects.
+        if: matrix.phase == 'lint-arch'
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-mingw-w64-x86-64 nasm
+          x86_64-w64-mingw32-gcc --version
+          nasm --version
+
       - name: Report disk space before the quality gate
         run: df -h . "$HOME"
-
-      - name: Run the quality-checker self-tests
-        # Pure-Python decisions over synthetic reports and metadata;
-        # platform-invariant, so it runs on the Linux lint-arch entry like the
-        # other source gates.
-        if: matrix.phase == 'lint-arch' && runner.os == 'Linux'
-        run: make quality-tests
 
       - name: Run repository quality gate (${{ matrix.phase }})
         run: make ci-${{ matrix.phase }}

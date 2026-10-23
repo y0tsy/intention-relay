@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Shared protocol fixtures use expect for precise test diagnostics."
-)]
-
 use intention_proto::{
     MessageId, MessageKindDto, MessageProjectionDto, ProjectId, RunId, RunModeDto, SessionId,
     SessionProjectionDto, WorkspaceId, WorkspaceRootDto,
@@ -28,8 +23,6 @@ pub fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         fixture_workspace_root(),
         RunModeDto::Build,
         None,
-        None,
-        Vec::new(),
     )
     .expect("fixture projection is valid")
 }

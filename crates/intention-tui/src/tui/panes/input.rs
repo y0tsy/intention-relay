@@ -10,10 +10,14 @@
 //! visible. The buffer itself keeps every line and every character: neither its
 //! line count nor a line's length is ever capped.
 
-use revue::text::char_width;
-use revue::widget::{Border, Card, RichText, Span, Stack, Style, vstack};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::AppState;
+use crate::tui::layout::char_width;
 use crate::tui::palette::Palette;
 use crate::tui::panes::status;
 
@@ -26,13 +30,9 @@ const CONTINUATION_INDENT: &str = "  ";
 
 /// The marker rendered at the input cursor position.
 ///
-/// `RichText` styles one run at a time, so the cursor is a block glyph rather
-/// than a reversed cell: `█` occupies the character cell the cursor points at,
-/// and the cell after the last character at the line's end.
-// @todo(revue): revue has no editable text surface - no cell cursor, no buffer
-// scrolling, no clipping - so this pane hand-rolls the block-glyph cursor, the
-// horizontal window around it, and the row arithmetic; a real text widget
-// would own all three.
+/// The buffer is the core's, so the front end owns the cursor: it is a block
+/// glyph rather than a reversed cell, occupying the character cell the cursor
+/// points at and the cell after the last character at the line's end.
 const CURSOR: char = '█';
 
 /// The columns and rows the block's own frame takes.
@@ -54,12 +54,6 @@ pub(in crate::tui) const CHROME_ROWS: u16 = BLOCK_FRAME + BADGE_ROWS + STATUS_RO
 /// The rows the block occupies for a one-line buffer: its chrome and that line.
 pub(in crate::tui) const MIN_BLOCK_ROWS: u16 = CHROME_ROWS + 1;
 
-/// The mode badge before a session snapshot has named the mode.
-///
-/// The mode is durable session state and arrives with the snapshot, so the
-/// badge waits for it rather than guessing `build`.
-const MODE_PLACEHOLDER: &str = "mode @todo(core)";
-
 /// Returns the rows the input block needs for the state's buffer.
 ///
 /// A one-line buffer takes [`MIN_BLOCK_ROWS`] and every line break adds one
@@ -77,59 +71,72 @@ pub(in crate::tui) fn block_rows(state: &AppState) -> u16 {
     MIN_BLOCK_ROWS.saturating_add(u16::try_from(breaks).unwrap_or(u16::MAX))
 }
 
-/// Returns the input block: one focused frame around the badge header, the
+/// Paints the input block: one focused frame around the badge header, the
 /// buffer's lines, and the run status row under them.
 ///
-/// `rows` is the block's exact row count, decided by the chat panel: one row
+/// `area` is the block's exact rectangle, decided by the chat panel: one row
 /// per buffer line beside the fixed chrome. A buffer taller than the rows left
 /// for lines shows the window that keeps the cursor's line visible.
 pub(in crate::tui) fn input_block(
     state: &AppState,
-    width: u16,
-    rows: u16,
+    area: Rect,
+    frame: &mut Frame,
     palette: &'static Palette,
-) -> Border {
-    let content = usize::from(width.saturating_sub(BLOCK_FRAME + BLOCK_PADDING * 2));
-    let line_rows = rows.saturating_sub(BLOCK_FRAME + BADGE_ROWS + STATUS_ROWS);
-    Border::rounded()
-        .min_size(width, rows)
-        .max_size(width, rows)
-        .fg(palette.accent)
-        .bg(palette.panel)
-        .child(
-            Card::new()
-                .flat()
-                .padding(BLOCK_PADDING)
-                .background(palette.panel)
-                .body(
-                    vstack()
-                        .child_sized(badge_row(state, content, palette), BADGE_ROWS)
-                        .child_sized(
-                            input_lines(state, content, usize::from(line_rows), palette),
-                            line_rows,
-                        )
-                        .child_sized(status::status_row(state, palette), STATUS_ROWS),
-                ),
-        )
+) {
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(palette.accent))
+        .style(Style::new().bg(palette.panel));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.is_empty() {
+        return;
+    }
+    let content_width = inner.width.saturating_sub(BLOCK_PADDING * 2);
+    let text = Rect::new(
+        inner.x.saturating_add(BLOCK_PADDING),
+        inner.y,
+        content_width,
+        inner.height,
+    );
+    let content = usize::from(content_width);
+    let line_rows = inner.height.saturating_sub(BADGE_ROWS + STATUS_ROWS);
+    frame.render_widget(
+        Paragraph::new(badge_row(state, content, palette)),
+        Rect::new(text.x, inner.y, text.width, BADGE_ROWS),
+    );
+    for (offset, row) in input_lines(state, content, usize::from(line_rows), palette)
+        .into_iter()
+        .enumerate()
+    {
+        let Ok(offset) = u16::try_from(offset) else {
+            break;
+        };
+        let y = inner.y.saturating_add(BADGE_ROWS).saturating_add(offset);
+        frame.render_widget(Paragraph::new(row), Rect::new(text.x, y, text.width, 1));
+    }
+    let status_y = inner.bottom().saturating_sub(STATUS_ROWS);
+    frame.render_widget(
+        Paragraph::new(status::status_row(state, palette)),
+        Rect::new(text.x, status_y, text.width, STATUS_ROWS),
+    );
 }
 
 /// Returns the badge header: the session's real run mode and its effective
 /// provider model, each on its own badge wash.
 ///
-/// The model is the daemon's resolved configuration selection and arrives with
-/// the snapshot, so a session the daemon has named shows it. A session no
-/// snapshot has named yet shows no model chip rather than a fabricated model.
-fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> RichText {
-    let (mode, mode_ink) = state
-        .session_mode()
-        .map_or((MODE_PLACEHOLDER, palette.todo_ink), |mode| {
-            (mode.as_str(), palette.badge_ink)
-        });
-    let mut badges = vec![(mode, mode_ink)];
+/// The mode is durable session state and the model is the daemon's resolved
+/// configuration selection; both arrive with the snapshot, so a session no
+/// snapshot has named yet shows no badge rather than a fabricated one.
+fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> Line<'static> {
+    let mut badges = Vec::new();
+    if let Some(mode) = state.session_mode() {
+        badges.push((mode.as_str(), palette.badge_ink));
+    }
     if let Some(model) = state.session_model() {
         badges.push((model, palette.badge_ink));
     }
-    let mut text = RichText::new();
+    let mut spans = Vec::new();
     let mut used = 0;
     for (label, ink) in badges {
         let chip = format!(" {label} ");
@@ -139,38 +146,48 @@ fn badge_row(state: &AppState, width: usize, palette: &'static Palette) -> RichT
             break;
         }
         if gap > 0 {
-            text = text.span(Span::styled(
+            spans.push(Span::styled(
                 " ",
                 Style::new().fg(palette.ink).bg(palette.panel),
             ));
             used += 1;
         }
-        text = text.span(Span::styled(
+        spans.push(Span::styled(
             chip,
             Style::new().fg(ink).bg(palette.badge_bg),
         ));
         used += chip_width;
     }
     if used < width {
-        text = text.span(Span::styled(
+        spans.push(Span::styled(
             " ".repeat(width - used),
             Style::new().bg(palette.panel),
         ));
     }
-    text
+    Line::from(spans)
 }
 
 /// Returns the buffer's visible rows: one row per line, windowed so the
 /// cursor's line is always rendered.
-fn input_lines(state: &AppState, width: usize, visible: usize, palette: &'static Palette) -> Stack {
+fn input_lines(
+    state: &AppState,
+    width: usize,
+    visible: usize,
+    palette: &'static Palette,
+) -> Vec<Line<'static>> {
     let buffer = BufferLines::of(state.input(), state.cursor());
     let start = window_start(buffer.cursor_line, visible);
-    let mut body = vstack();
-    for (index, line) in buffer.lines.iter().enumerate().skip(start).take(visible) {
-        let cursor = (index == buffer.cursor_line).then_some(buffer.cursor_column);
-        body = body.child_sized(input_row(index, line, cursor, width, palette), 1);
-    }
-    body
+    buffer
+        .lines
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible)
+        .map(|(index, line)| {
+            let cursor = (index == buffer.cursor_line).then_some(buffer.cursor_column);
+            input_row(index, line, cursor, width, palette)
+        })
+        .collect()
 }
 
 /// Returns one buffer line's row: its prompt or indent, its characters, and the
@@ -187,40 +204,45 @@ fn input_row(
     cursor: Option<usize>,
     width: usize,
     palette: &'static Palette,
-) -> RichText {
+) -> Line<'static> {
     let first = index == 0;
     let prefix = if first { PROMPT } else { CONTINUATION_INDENT };
     let prefix_width = display_width(prefix);
     let prefix_style = if first {
-        Style::new().fg(palette.accent).bg(palette.input_bg).bold()
+        Style::new()
+            .fg(palette.accent)
+            .bg(palette.input_bg)
+            .add_modifier(ratatui::style::Modifier::BOLD)
     } else {
         Style::new().bg(palette.input_bg)
     };
     let columns = width.saturating_sub(prefix_width);
-    let mut text = RichText::new().span(Span::styled(prefix, prefix_style));
+    let mut spans = vec![Span::styled(prefix, prefix_style)];
     let used = match cursor {
         Some(cursor) => {
             let (before, after) = cursor_window(line, cursor, columns);
             let used = prefix_width + display_width(&before) + 1 + display_width(&after);
-            text = text
-                .span(Span::styled(
-                    before,
-                    Style::new().fg(palette.ink).bg(palette.input_bg),
-                ))
-                .span(Span::styled(
-                    CURSOR.to_string(),
-                    Style::new().fg(palette.accent).bg(palette.input_bg).bold(),
-                ))
-                .span(Span::styled(
-                    after,
-                    Style::new().fg(palette.ink).bg(palette.input_bg),
-                ));
+            spans.push(Span::styled(
+                before,
+                Style::new().fg(palette.ink).bg(palette.input_bg),
+            ));
+            spans.push(Span::styled(
+                CURSOR.to_string(),
+                Style::new()
+                    .fg(palette.accent)
+                    .bg(palette.input_bg)
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            ));
+            spans.push(Span::styled(
+                after,
+                Style::new().fg(palette.ink).bg(palette.input_bg),
+            ));
             used
         }
         None => {
             let (clipped, clipped_width) = clip(line, columns);
             let used = prefix_width + clipped_width;
-            text = text.span(Span::styled(
+            spans.push(Span::styled(
                 clipped,
                 Style::new().fg(palette.ink).bg(palette.input_bg),
             ));
@@ -228,23 +250,23 @@ fn input_row(
         }
     };
     if used < width {
-        text = text.span(Span::styled(
+        spans.push(Span::styled(
             " ".repeat(width - used),
             Style::new().bg(palette.input_bg),
         ));
     }
-    text
+    Line::from(spans)
 }
 
 /// Returns one line's characters on either side of the cursor.
 ///
 /// The window is measured in display columns, so a wide character occupies the
-/// columns revue renders it in. The cursor carries one column of its own; when
-/// the text before it does not fit, the window starts so that the cursor is the
-/// last column of the window.
-// @todo(revue): revue has no editable text surface, so this window - which
-// characters of the line before and after the cursor fit, measured in display
-// columns - is computed by hand here instead of by a text widget.
+/// columns the terminal renders it in. The cursor carries one column of its own;
+/// when the text before it does not fit, the window starts so that the cursor is
+/// the last column of the window.
+// @todo(hack): the buffer is the core's and this front end draws no editable
+// surface of its own, so this window - which characters of the line before and
+// after the cursor fit, measured in display columns - is computed by hand here.
 fn cursor_window(line: &str, cursor: usize, columns: usize) -> (String, String) {
     let characters: Vec<char> = line.chars().collect();
     let cursor = cursor.min(characters.len());
@@ -352,10 +374,6 @@ fn display_width(text: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "The pane unit tests assert typed fixture values directly."
-    )]
 
     use super::{BufferLines, MIN_BLOCK_ROWS, block_rows, clip, window_start};
     use crate::app::{Action, AppState};

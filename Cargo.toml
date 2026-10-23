@@ -16,10 +16,6 @@ default-members = [
   "crates/intention-proto",
   "crates/intention-config",
 ]
-# `vendor/revue` is a locally patched third-party crate consumed through
-# `[patch.crates-io]`; excluding it keeps it out of the workspace so workspace
-# lint, format, coverage, and architecture policy stay scoped to our crates.
-exclude = ["vendor/revue"]
 resolver = "3"
 
 [workspace.package]
@@ -34,22 +30,29 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "deny"
-nursery = "deny"
+# The two restriction lints below carry the DTO-first and working-directory
+# source rules at the compiler level through `clippy.toml`, not by scanning text.
+disallowed_types = "deny"
+disallowed_methods = "deny"
+# The nursery group is unstable and churns between releases, so it is not denied
+# wholesale. The group sits at a lower priority than the individual lints below,
+# which keep the five nursery lints chosen for readability, logic, and clarity.
+nursery = { level = "allow", priority = -1 }
+use_self = "deny"
+redundant_clone = "deny"
+option_if_let_else = "deny"
+suspicious_operation_groupings = "deny"
+unused_peekable = "deny"
 must_use_candidate = "deny"
 missing_errors_doc = "deny"
 missing_panics_doc = "deny"
 return_self_not_must_use = "deny"
-use_self = "deny"
 allow_attributes_without_reason = "deny"
 as_underscore = "deny"
 dbg_macro = "deny"
 else_if_without_else = "deny"
 exit = "deny"
-expect_used = "deny"
 mem_forget = "deny"
-panic = "deny"
-print_stdout = "deny"
-print_stderr = "deny"
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
@@ -65,11 +68,3 @@ debug = 1
 # coverage, and fixture passes in CI.
 [profile.dev.package."*"]
 opt-level = 2
-
-# `revue` is patched to a locally vendored 3.9.1 copy; see
-# `vendor/revue/PATCH.md`. The copy stays only until a release replaces the
-# unmaintained `unic-emoji-char` source (hawk90/revue#950): the upgrade to
-# 3.10.0 or newer, the terminal's switch to `App::prevent_default`, and the
-# deletion of this patch land together.
-[patch.crates-io]
-revue = { path = "vendor/revue" }

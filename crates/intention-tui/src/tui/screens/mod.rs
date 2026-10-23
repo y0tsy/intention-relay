@@ -1,48 +1,53 @@
-//! One file per surface of the revue view.
+//! One file per surface of the terminal view.
 //!
-//! [`RevueView`] is the pure function of one [`AppState`] the terminal renders.
-//! The window has exactly one base - the chat panel on the canvas - and while
-//! the core's screen carries the sessions browser, that browser is a layout row
-//! docked to the bottom of the same window: the chat container shrinks to the
-//! rows the browser leaves, its own bottom canvas margin row is the blank gap
-//! between the two, and the browser's bottom edge is the window's last row. No
-//! surface ever paints over another. The theme picker is not a second docked
-//! surface: its screen keeps the one chat panel and spends the transcript's
-//! rows on a panel directly above the input block, so the input block and the
-//! detail line never move. Each module here owns the builders only its surface
-//! reads, so a new surface is a module beside them and one arm in
-//! [`RevueView::render`].
+//! [`TerminalView`] is the pure function of one [`AppState`] the terminal
+//! renders. The window has exactly one base - the chat panel on the canvas -
+//! and while the core's screen carries the sessions browser, that browser is a
+//! layout row docked to the bottom of the same window: the chat container
+//! shrinks to the rows the browser leaves, its own bottom canvas margin row is
+//! the blank gap between the two, and the browser's bottom edge is the window's
+//! last row. No surface ever paints over another. The theme picker is not a
+//! second docked surface: its screen keeps the one chat panel and spends the
+//! transcript's rows on a panel directly above the input block, so the input
+//! block and the detail line never move. Each module here owns the builders
+//! only its surface reads, so a new surface is a module beside them and one arm
+//! in [`TerminalView::render`].
 
 pub(super) mod chat;
 pub(super) mod sessions;
 
-use std::cell::RefCell;
-
-use revue::layout::Rect;
-use revue::widget::{RenderContext, Text, View, vstack};
+use ratatui::Frame;
+use ratatui::layout::{Constraint, Layout};
+use ratatui::style::Style;
 
 use crate::app::{AppState, Screen};
 use crate::tui::layout::TranscriptLayoutCache;
 use crate::tui::palette;
+use crate::tui::surface::TranscriptSurface;
 
-/// The revue view: a pure function of one [`AppState`].
+/// The terminal view: a pure function of one [`AppState`].
 ///
-/// Every screen derives its content from the state on each call and mutates
-/// nothing, so the same state renders identically in a revue test app and in a
-/// terminal. The one cell the view can fill is the transcript's layout cache:
-/// a front end owns it and renders every frame through it, while a view built
-/// without one lays the transcript out through a cache of its own.
-pub struct RevueView<'a> {
+/// Every screen derives its content from the state on each frame and mutates
+/// nothing of it, so the same state paints identically in a render test and in
+/// a terminal. The two things a frame carries over are the front end's own: the
+/// transcript's layout cache and the scroll surface the transcript is painted
+/// into.
+pub struct TerminalView<'a> {
     state: &'a AppState,
     now: i64,
-    cache: Option<&'a RefCell<TranscriptLayoutCache>>,
+    cache: &'a mut TranscriptLayoutCache,
+    surface: &'a mut TranscriptSurface,
 }
 
-impl<'a> RevueView<'a> {
+impl<'a> TerminalView<'a> {
     /// Creates the view of one application state, reading the system clock.
     #[must_use]
-    pub fn new(state: &'a AppState) -> Self {
-        Self::with_now(state, system_now())
+    pub(in crate::tui) fn new(
+        state: &'a AppState,
+        cache: &'a mut TranscriptLayoutCache,
+        surface: &'a mut TranscriptSurface,
+    ) -> Self {
+        Self::with_now(state, system_now(), cache, surface)
     }
 
     /// Creates the view of one application state at a fixed wall-clock second.
@@ -50,89 +55,47 @@ impl<'a> RevueView<'a> {
     /// `now` is the whole Unix second the view measures relative times from, so
     /// a render test fixes the clock instead of reading it.
     #[must_use]
-    pub const fn with_now(state: &'a AppState, now: i64) -> Self {
-        Self {
-            state,
-            now,
-            cache: None,
-        }
-    }
-
-    /// Creates the view of one application state through `cache`.
-    ///
-    /// The cache outlives the view, so the frames a front end draws reuse the
-    /// rows it already laid out; this is the one constructor a running front
-    /// end uses.
-    #[must_use]
-    pub(in crate::tui) fn cached(
-        state: &'a AppState,
-        cache: &'a RefCell<TranscriptLayoutCache>,
-    ) -> Self {
-        Self::with_cache(state, system_now(), cache)
-    }
-
-    /// Creates the view of one application state at a fixed wall-clock second,
-    /// rendered through `cache`.
-    ///
-    /// A front end hands in the cache it owns, so its frames reuse the rows it
-    /// already laid out; a view built without one renders through a cache of
-    /// its own and lays the transcript out per render.
-    #[must_use]
-    pub(in crate::tui) const fn with_cache(
+    pub(in crate::tui) const fn with_now(
         state: &'a AppState,
         now: i64,
-        cache: &'a RefCell<TranscriptLayoutCache>,
+        cache: &'a mut TranscriptLayoutCache,
+        surface: &'a mut TranscriptSurface,
     ) -> Self {
         Self {
             state,
             now,
-            cache: Some(cache),
+            cache,
+            surface,
         }
     }
-}
 
-impl View for RevueView<'_> {
-    /// Renders the one window: the canvas, the chat panel on it, and - while
-    /// the core's screen carries the browser - the browser docked as the
-    /// window's bottom rows, with the chat container above it.
+    /// Paints the one window: the canvas, the chat panel on it, and - while the
+    /// core's screen carries the browser - the browser docked as the window's
+    /// bottom rows, with the chat container above it.
     ///
     /// The window never changes: docking or closing the browser, and selecting
     /// the session it points at, all repaint this same frame, so the chat keeps
     /// its transcript, its input, and its session while it reflows into the
     /// rows the browser leaves.
-    fn render(&self, ctx: &mut RenderContext) {
-        ctx.fill_box_background(palette::of(self.state.effective_theme()).canvas);
-        let window = ctx.area;
-        // @todo(revue): `View::render` takes `&self`, so the layout cache must
-        // live behind a `RefCell`, and a view built without one - the test
-        // constructor - allocates a throwaway cache on every render to paint
-        // the same rows; render-time mutable state in the trait would remove
-        // the fallback and the `Option`.
-        let fresh = RefCell::new(TranscriptLayoutCache::new());
-        let cache = self.cache.unwrap_or(&fresh);
+    pub fn render(self, frame: &mut Frame) {
+        let window = frame.area();
+        frame.buffer_mut().set_style(
+            window,
+            Style::new().bg(palette::of(self.state.effective_theme()).canvas),
+        );
         let panel = (self.state.screen() == Screen::Sessions)
             .then(|| sessions::geometry(self.state, window))
             .flatten();
         let Some(geometry) = panel else {
-            chat::chat_screen(self.state, window, cache).render(ctx);
+            chat::chat_screen(self.state, window, self.cache, self.surface, frame);
             return;
         };
-        // @todo(revue): revue has no docking or overlay primitive, so this view
-        // slices the window into the chat area and the panel's rows by hand,
-        // with a blank `vstack` child as the gap; a dock or overlay layout
-        // would express the same frame directly.
         // The chat container keeps every row the panel does not use, and its
         // own bottom canvas margin row is the one gap row above the panel.
-        let chat_rows = window.height.saturating_sub(geometry.rows);
-        let chat_area = Rect::new(window.x, window.y, window.width, chat_rows);
-        chat::chat_screen(self.state, chat_area, cache).render(ctx);
-        vstack()
-            .child_sized(Text::new(""), chat_rows)
-            .child_sized(
-                sessions::panel(self.state, self.now, geometry),
-                geometry.rows,
-            )
-            .render(ctx);
+        let [chat_area, panel_area] =
+            Layout::vertical([Constraint::Min(0), Constraint::Length(geometry.rows)]).areas(window);
+        chat::chat_screen(self.state, chat_area, self.cache, self.surface, frame);
+        sessions::panel(self.state, self.now, geometry, panel_area, frame);
     }
 }
 

@@ -19,150 +19,23 @@
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, NewMessageDto,
-    PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto, RunStatusDto,
-    SessionProjectionDto, SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto,
-    WorkspaceRootDto,
+    PendingTurnProjectionDto, RunProjectionDto, RunStatusDto, SessionProjectionDto,
+    SessionSnapshotDto, SessionSummariesDto, WorkspaceBindingDto, WorkspaceRootDto,
 };
 use intention_proto::{
-    DtoResult, ErrorDto, FinishReasonDto, IdempotencyKey, RunId, SessionId, ThemeDto, TimestampDto,
-    ToolCallId, ToolResultMetadataEntryDto, ToolResultStatusDto, UsageDto, run_status_is_terminal,
+    DtoResult, ErrorDto, FinishReasonDto, RunId, SessionId, TimestampDto, UsageDto,
+    run_status_is_terminal,
 };
 
 mod sqlite;
 
 pub use sqlite::{SqliteDatabaseLocationDto, SqliteStorageRepository};
 
-/// The maximum durable tool result content size in bytes.
-const MAX_TOOL_RESULT_CONTENT_BYTES: usize = 512 * 1024;
-
 /// The maximum durable user turn content size in bytes.
 ///
 /// A turn is admitted with a bound so the session projection that carries its
 /// pending rows can never be permanently larger than one transport envelope.
 const MAX_TURN_CONTENT_BYTES: usize = 512 * 1024;
-
-/// The maximum encoded pending-turn projection content kept in one session
-/// projection, in bytes.
-///
-/// It equals the admission bound, so the newest queued turn always fits and a
-/// projection always reports at least one pending turn; older turns beyond it
-/// are reported through the projection's omitted count instead of being
-/// materialised.
-const MAX_PENDING_TURN_PROJECTION_BYTES: usize = MAX_TURN_CONTENT_BYTES;
-
-/// Typed durable evidence of one committed local tool result.
-///
-/// `content` carries the bounded canonical projection of the typed result as
-/// selected by the caller; it never carries credentials, absolute workspace
-/// roots, or backend resources. `metadata` carries approved credential-free
-/// structured entries such as truncation or process-exit evidence.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ToolResultEvidenceDto {
-    session_id: SessionId,
-    run_id: RunId,
-    call_id: ToolCallId,
-    tool_id: String,
-    status: ToolResultStatusDto,
-    content: String,
-    metadata: Vec<ToolResultMetadataEntryDto>,
-    occurred_at: TimestampDto,
-}
-
-impl ToolResultEvidenceDto {
-    /// Creates typed tool result evidence with bounded canonical content.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation error when the tool identity is blank, the content
-    /// is blank, oversized, or contains interior NUL bytes, or the metadata keys
-    /// are duplicated.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The flat durable tool-result payload keeps one validating constructor."
-    )]
-    pub fn new(
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-        tool_id: impl Into<String>,
-        status: ToolResultStatusDto,
-        content: impl Into<String>,
-        metadata: Vec<ToolResultMetadataEntryDto>,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<Self> {
-        let tool_id = tool_id.into();
-        let content = content.into();
-        if tool_id.trim().is_empty() || content.trim().is_empty() || content.contains('\0') {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "tool result needs a tool identity and non-empty safe content",
-            ));
-        }
-        if content.len() > MAX_TOOL_RESULT_CONTENT_BYTES {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result",
-                "tool result content exceeds the durable canonical size limit",
-            ));
-        }
-        let mut seen_keys = std::collections::HashSet::with_capacity(metadata.len());
-        if metadata.iter().any(|entry| !seen_keys.insert(entry.key())) {
-            return Err(ErrorDto::validation(
-                "invalid_tool_result_metadata",
-                "tool result metadata keys must be unique",
-            ));
-        }
-        Ok(Self {
-            session_id,
-            run_id,
-            call_id,
-            tool_id,
-            status,
-            content,
-            metadata,
-            occurred_at,
-        })
-    }
-    /// Returns the owning durable session.
-    #[must_use]
-    pub const fn session_id(&self) -> SessionId {
-        self.session_id
-    }
-    /// Returns the run that executed the tool call.
-    #[must_use]
-    pub const fn run_id(&self) -> RunId {
-        self.run_id
-    }
-    /// Returns the identified tool invocation.
-    #[must_use]
-    pub const fn call_id(&self) -> ToolCallId {
-        self.call_id
-    }
-    /// Returns the wire tool identity that produced the result.
-    #[must_use]
-    pub fn tool_id(&self) -> &str {
-        &self.tool_id
-    }
-    /// Returns the terminal outcome recorded for the result.
-    #[must_use]
-    pub const fn status(&self) -> ToolResultStatusDto {
-        self.status
-    }
-    /// Returns the bounded canonical durable result content.
-    #[must_use]
-    pub fn content(&self) -> &str {
-        &self.content
-    }
-    /// Returns the approved structured metadata entries.
-    #[must_use]
-    pub fn metadata(&self) -> &[ToolResultMetadataEntryDto] {
-        &self.metadata
-    }
-    /// Returns the durable evidence event time.
-    #[must_use]
-    pub const fn occurred_at(&self) -> TimestampDto {
-        self.occurred_at
-    }
-}
 
 /// Immutable outcome for an accepted user turn after committing it durably.
 #[expect(
@@ -286,16 +159,15 @@ impl StartingRunModelContextDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the configuration is not persistable,
-    /// the context is empty, a message belongs to another session, or the final
-    /// message is not the starting run's user turn.
+    /// Returns a validation error when the context is empty, a message belongs
+    /// to another session, or the final message is not the starting run's user
+    /// turn.
     pub fn new(
         session_id: SessionId,
         run_id: RunId,
         safe_config: ConfigSnapshotDto,
         messages: Vec<MessageProjectionDto>,
     ) -> DtoResult<Self> {
-        safe_config.validate_for_persistence()?;
         let ends_with_user = messages.last().is_some_and(|message| {
             message.kind() == MessageKindDto::User && message.run_id() == Some(run_id)
         });
@@ -359,42 +231,23 @@ pub trait StorageRepositoryDto {
 
     /// Accepts a turn and atomically records whether it starts a run or becomes a pending message.
     ///
-    /// `proposed_run_id` and `config_snapshot` are committed if this turn starts
-    /// immediately, or retained as the immutable future-run selection if queued.
-    /// Repeating an accepted `idempotency_key` replays the current durable
-    /// outcome instead of recording a second turn.
+    /// `config_snapshot` is the immutable credential-free configuration the
+    /// accepted turn froze: a turn that starts a run commits it on that run's
+    /// row, and a turn that stays pending commits no configuration of its own.
     ///
     /// # Errors
     ///
     /// Returns a validation error when content is blank or exceeds the durable
-    /// turn-content bound (512 KiB), a validation, not-found, or conflict error
-    /// when the turn cannot be accepted for its session, or an unavailable error
-    /// when storage fails.
+    /// turn-content bound (512 KiB), a validation or not-found error when the
+    /// turn cannot be accepted for its session, or an unavailable error when
+    /// storage fails.
     fn accept_user_turn(
         &self,
         session_id: SessionId,
-        idempotency_key: IdempotencyKey,
         content: &str,
-        proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
     ) -> DtoResult<AcceptedTurnOutcomeDto>;
-
-    /// Removes a not-yet-seen pending turn and returns its committed projection.
-    ///
-    /// `occurred_at` is intentionally unrecorded: a removed pending turn keeps
-    /// no durable removal time, and the caller-supplied value never enters a
-    /// stored column.
-    ///
-    /// # Errors
-    ///
-    /// Returns a not-found or conflict error when the pending turn cannot be
-    /// removed, or an unavailable error when durable storage fails.
-    fn remove_turn(
-        &self,
-        command: RemoveTurnCommandDto,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<PendingTurnProjectionDto>;
 
     /// Appends every pending user turn to one active run context in insertion order.
     ///
@@ -462,45 +315,13 @@ pub trait StorageRepositoryDto {
         occurred_at: TimestampDto,
     ) -> DtoResult<MessageProjectionDto>;
 
-    /// Commits one tool result with its answering transcript row in one
-    /// transaction and returns the committed row.
+    /// Loads the credential-free configuration frozen on one run's row.
     ///
     /// # Errors
     ///
-    /// Returns a validation error when the answering row is not a `tool_result`
-    /// row for the same session, run, call, and tool identity, a not-found or
-    /// conflict error when the scoped call cannot record its result, or an
-    /// unavailable error when storage fails.
-    fn write_tool_result(
-        &self,
-        evidence: ToolResultEvidenceDto,
-        message: NewMessageDto,
-    ) -> DtoResult<MessageProjectionDto>;
-
-    /// Loads typed evidence durably recorded for one tool call.
-    ///
-    /// # Errors
-    ///
-    /// Returns `tool_result_not_found` when no durable evidence exists for the
-    /// supplied identity, or `tool_result_unavailable` when durable evidence
-    /// cannot be read. No partial evidence, credentials, or backend resources
-    /// cross this DTO-only boundary on failure.
-    fn load_tool_result(
-        &self,
-        session_id: SessionId,
-        run_id: RunId,
-        call_id: ToolCallId,
-    ) -> DtoResult<ToolResultEvidenceDto>;
-
-    /// Loads the persisted credential-free configuration selected for a matching run.
-    ///
-    /// # Errors
-    ///
-    /// Returns `run_configuration_not_found` only when the durable run row is
-    /// genuinely absent for the supplied identity, `storage_unavailable` when the
-    /// durable backend cannot be read at all, `run_configuration_unavailable`
-    /// when the persisted safe selection row is absent, and
-    /// `storage_decode_failed` when the selection is present but cannot be
+    /// Returns `storage_record_not_found` only when the durable run row is
+    /// genuinely absent for the supplied identity, and `storage_unavailable`
+    /// when the durable backend cannot be read or the frozen snapshot cannot be
     /// decoded. Credentials, raw TOML, configuration paths, and backend
     /// resources never cross this boundary.
     fn load_run_config_snapshot(
@@ -517,8 +338,8 @@ pub trait StorageRepositoryDto {
     ///
     /// # Errors
     ///
-    /// Returns `run_model_context_unavailable` when the run is unknown,
-    /// cross-session, no longer starting, or durable context cannot be read.
+    /// Returns `storage_unavailable` when the run is unknown, cross-session, no
+    /// longer starting, or durable context cannot be read.
     /// No partial context, credentials, raw TOML, configuration paths, or backend
     /// resources cross this DTO-only boundary on failure.
     fn load_starting_run_model_context(
@@ -631,32 +452,4 @@ pub trait StorageRepositoryDto {
         let messages = self.load_recent_messages(session_id, message_limit)?;
         SessionSnapshotDto::with_projection(session_id, projection, messages)
     }
-
-    /// Loads the durable terminal theme override.
-    ///
-    /// `None` means no override was ever stored: the caller answers from the
-    /// resolved configuration instead.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when durable storage cannot be read.
-    fn load_tui_theme(&self) -> DtoResult<Option<ThemeDto>>;
-
-    /// Commits the durable terminal theme override in exactly one transaction.
-    ///
-    /// The settings row is a singleton, so a later set replaces the earlier
-    /// value instead of recording a second row.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the override cannot be committed.
-    fn save_tui_theme(&self, theme: ThemeDto) -> DtoResult<()>;
-
-    /// Records an already credential-free configuration revision snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation or conflict error when the revision cannot be
-    /// recorded, or an unavailable error when durable storage fails.
-    fn accept_configuration_revision(&self, snapshot: ConfigSnapshotDto) -> DtoResult<()>;
 }

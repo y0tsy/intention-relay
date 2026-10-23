@@ -1,13 +1,11 @@
 //! Session, workspace-binding, pending-turn, and transcript projections shared
 //! across boundaries.
 
-use std::collections::BTreeSet;
-
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{
-    ConfigRevisionId, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, MessageId, ProjectId,
-    RunId, SessionId, ToolCallId, ToolIdentityDto, ToolRowDto, TurnId, WorkspaceId,
+    DtoResult, ErrorCategoryDto, ErrorDto, MessageId, ProjectId, RunId, SessionId, ToolCallId,
+    ToolIdentityDto, ToolRowDto, TurnId, WorkspaceId,
 };
 use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
@@ -90,13 +88,9 @@ pub struct SessionProjectionDto {
     workspace_root: WorkspaceRootDto,
     mode: RunModeDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    config_revision_id: Option<ConfigRevisionId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     active_run: Option<RunProjectionDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     provider_model: Option<String>,
-    pending_turns: Vec<PendingTurnProjectionDto>,
-    pending_turns_omitted: u32,
 }
 
 impl<'de> Deserialize<'de> for SessionProjectionDto {
@@ -112,14 +106,9 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             workspace_root: WorkspaceRootDto,
             mode: RunModeDto,
             #[serde(default)]
-            config_revision_id: Option<ConfigRevisionId>,
-            #[serde(default)]
             active_run: Option<RunProjectionDto>,
             #[serde(default)]
             provider_model: Option<String>,
-            pending_turns: Vec<PendingTurnProjectionDto>,
-            #[serde(default)]
-            pending_turns_omitted: u32,
         }
 
         let raw = RawSessionProjectionDto::deserialize(deserializer)?;
@@ -129,12 +118,9 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
             raw.workspace_id,
             raw.workspace_root,
             raw.mode,
-            raw.config_revision_id,
             raw.active_run,
-            raw.pending_turns,
         )
         .map_err(de::Error::custom)?;
-        projection.pending_turns_omitted = raw.pending_turns_omitted;
         if let Some(model) = raw.provider_model {
             projection = projection
                 .with_provider_model(model)
@@ -147,37 +133,22 @@ impl<'de> Deserialize<'de> for SessionProjectionDto {
 impl SessionProjectionDto {
     /// Creates a coherent safe public session projection.
     ///
-    /// The projection reports no omitted pending turns; a bounded read that left
-    /// turns out records its own count with
-    /// [`SessionProjectionDto::with_pending_turns_omitted`].
-    ///
     /// # Errors
     ///
-    /// Returns a validation error when a nested run or pending turn belongs to a
-    /// different session, or pending turn identities are not unique.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "This public wire constructor preserves the established eight-field session projection contract."
-    )]
+    /// Returns a validation error when the nested run belongs to a different
+    /// session.
     pub fn new(
         project_id: ProjectId,
         session_id: SessionId,
         workspace_id: WorkspaceId,
         workspace_root: WorkspaceRootDto,
         mode: RunModeDto,
-        config_revision_id: Option<ConfigRevisionId>,
         active_run: Option<RunProjectionDto>,
-        pending_turns: Vec<PendingTurnProjectionDto>,
     ) -> DtoResult<Self> {
-        let mut unique_turn_ids = BTreeSet::new();
-        if active_run.is_some_and(|run| run.session_id() != session_id)
-            || pending_turns.iter().any(|turn| {
-                turn.session_id() != session_id || !unique_turn_ids.insert(turn.turn_id())
-            })
-        {
+        if active_run.is_some_and(|run| run.session_id() != session_id) {
             return Err(ErrorDto::validation(
                 "invalid_session_projection",
-                "nested session state must belong to its session with unique pending turn identities",
+                "nested session state must belong to its session",
             ));
         }
         Ok(Self {
@@ -186,11 +157,8 @@ impl SessionProjectionDto {
             workspace_id,
             workspace_root,
             mode,
-            config_revision_id,
             active_run,
             provider_model: None,
-            pending_turns,
-            pending_turns_omitted: 0,
         })
     }
 
@@ -214,22 +182,6 @@ impl SessionProjectionDto {
         }
         self.provider_model = Some(model);
         Ok(self)
-    }
-
-    /// Returns the same projection reporting how many pending turns were omitted.
-    ///
-    /// The count is informational: it says how many pending turns a bounded read
-    /// left out, and it is not part of the projection's coherence rules.
-    #[must_use]
-    pub const fn with_pending_turns_omitted(mut self, omitted: u32) -> Self {
-        self.pending_turns_omitted = omitted;
-        self
-    }
-
-    /// Returns how many pending turns a bounded read omitted from this projection.
-    #[must_use]
-    pub const fn pending_turns_omitted(&self) -> u32 {
-        self.pending_turns_omitted
     }
 
     /// Returns the owning project identity.
@@ -257,11 +209,6 @@ impl SessionProjectionDto {
     pub const fn mode(&self) -> RunModeDto {
         self.mode
     }
-    /// Returns the latest accepted configuration revision, if one exists.
-    #[must_use]
-    pub const fn config_revision_id(&self) -> Option<ConfigRevisionId> {
-        self.config_revision_id
-    }
     /// Returns the sole active run, if one exists.
     #[must_use]
     pub const fn active_run(&self) -> Option<RunProjectionDto> {
@@ -271,11 +218,6 @@ impl SessionProjectionDto {
     #[must_use]
     pub fn provider_model(&self) -> Option<&str> {
         self.provider_model.as_deref()
-    }
-    /// Returns pending turns in durable insertion order.
-    #[must_use]
-    pub fn pending_turns(&self) -> &[PendingTurnProjectionDto] {
-        &self.pending_turns
     }
 }
 
@@ -363,8 +305,7 @@ impl MessageKindDto {
                 "invalid_message_kind",
                 ErrorCategoryDto::Internal,
                 "the durable message kind is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -689,8 +630,8 @@ mod tests {
             Some(ErrorCategoryDto::Internal)
         );
         assert_eq!(
-            rejected.as_ref().err().map(ErrorDto::retry),
-            Some(ErrorRetryDto::Never)
+            rejected.as_ref().err().map(ErrorDto::retryable),
+            Some(false)
         );
     }
 }

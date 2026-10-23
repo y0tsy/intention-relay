@@ -7,12 +7,21 @@
 //! core. Around the driver the module owns the wait deadline, the two output
 //! formats, and the mapping of a driven run to one process status.
 
+// The one production site the untyped-JSON rule allows: the headless line
+// writer emits one JSON record per line by construction, and the typed record
+// above it is the boundary. See the quality-gate policy.
+#![expect(
+    clippy::disallowed_types,
+    reason = "The headless line writer emits one JSON record per line by construction; the typed record enum above it is the DTO boundary."
+)]
+
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use intention_client::{
-    IntentionClient, SessionStreamClient, SessionStreamSubscription, StreamStep,
+    FrameUpdate, IntentionClient, SessionStreamClient, SessionStreamState,
+    SessionStreamSubscription, StreamStep,
 };
 use intention_proto::{
     ErrorDto, MessageId, MessageKindDto, MessageProjectionDto, RunId, RunModeDto, RunStatusDto,
@@ -254,8 +263,15 @@ impl Deadline {
 )]
 #[derive(Debug)]
 enum Received {
-    /// One committed or transient frame arrived.
-    Frame(SessionFrameDto),
+    /// One committed or transient frame arrived, already derived.
+    Frame {
+        /// The frame as the daemon sent it.
+        frame: SessionFrameDto,
+        /// What the frame changed in the state beside it.
+        update: FrameUpdate,
+        /// The subscription's committed session state after the frame.
+        state: Box<SessionStreamState>,
+    },
     /// The subscription ended or failed; the core holds the reported reason.
     Closed,
     /// No live subscription is open.
@@ -501,13 +517,23 @@ impl Driver {
                 return Ok(Some(outcome));
             }
             match self.next(deadline, interrupts).await {
-                Received::Frame(frame) => {
+                Received::Frame {
+                    frame,
+                    update,
+                    state,
+                } => {
                     if let SessionFrameDto::TextDelta(delta) = &frame {
                         events
                             .delta(delta.step(), delta.channel(), delta.text())
                             .map_err(PumpFailure::Output)?;
                     }
-                    let _failure = self.apply(Action::FrameReceived(frame)).await;
+                    let _failure = self
+                        .apply(Action::FrameReceived {
+                            frame,
+                            update,
+                            state,
+                        })
+                        .await;
                 }
                 Received::Interrupted => {
                     // The signal reaches the loop that owns the state, which
@@ -561,8 +587,17 @@ impl Driver {
                 _ = interrupts.recv() => return Received::Interrupted,
             },
         };
+        // The client applied the frame to this subscription's own state, so the
+        // front end takes that state rather than replaying the frame into a
+        // copy of its own. The clone is taken before the match because the
+        // other arms drop the subscription.
+        let state = subscription.state().clone();
         match received {
-            Ok(StreamStep::Frame(frame)) => Received::Frame(frame),
+            Ok(StreamStep::Frame { frame, update }) => Received::Frame {
+                frame,
+                update,
+                state: Box::new(state),
+            },
             Ok(StreamStep::Closed(error)) => {
                 // The client classified the closed connection: the front end
                 // ends the observation, and the classification is the failure a
@@ -1022,11 +1057,6 @@ impl<W: Write> Report for JsonReport<W> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Format and deadline tests assert written bytes and instants directly."
-    )]
 
     use super::*;
     use std::sync::atomic::{AtomicI64, Ordering};
@@ -1036,6 +1066,35 @@ mod tests {
     };
     use intention_proto::MessageId;
     use intention_test_support::daemon_process;
+
+    /// Applies one frame the way the live subscription does.
+    ///
+    /// The client applies every frame to the one session state it exposes and
+    /// hands the frame, what it changed, and its result to the front end, so a
+    /// test derives a frame through the same entry the production pump uses.
+    fn receive(state: &mut AppState, frame: SessionFrameDto) -> Vec<Effect> {
+        let mut derived = state
+            .session_state()
+            .cloned()
+            .unwrap_or_else(|| SessionStreamState::new(frame_session(&frame)));
+        let update = derived
+            .apply_frame(frame.clone())
+            .expect("the fixture frame belongs to the state's own session");
+        state.update(Action::FrameReceived {
+            frame,
+            update,
+            state: Box::new(derived),
+        })
+    }
+
+    /// Returns the session one frame belongs to.
+    fn frame_session(frame: &SessionFrameDto) -> SessionId {
+        match frame {
+            SessionFrameDto::Content(row) => row.session_id(),
+            SessionFrameDto::Status(run) => run.session_id(),
+            SessionFrameDto::TextDelta(delta) => delta.session_id(),
+        }
+    }
 
     /// Returns one fresh durable row identity for a committed fixture row.
     fn row_id() -> MessageId {
@@ -1068,9 +1127,14 @@ mod tests {
             session_id,
         )));
         for index in 0..count {
-            state.update(Action::FrameReceived(SessionFrameDto::Content(
-                committed_row(session_id, run_id, &format!("row {index}")),
-            )));
+            receive(
+                &mut state,
+                SessionFrameDto::Content(committed_row(
+                    session_id,
+                    run_id,
+                    &format!("row {index}"),
+                )),
+            );
         }
         (state, session_id)
     }
@@ -1115,9 +1179,7 @@ mod tests {
         let reported = state.transcript().first().expect("rows remain").id();
         let run_id = RunId::new();
         let newest = committed_row(session_id, run_id, "the newest row");
-        state.update(Action::FrameReceived(SessionFrameDto::Content(
-            newest.clone(),
-        )));
+        receive(&mut state, SessionFrameDto::Content(newest.clone()));
         assert!(
             state.transcript().iter().all(|row| row.id() != reported),
             "the bound drained the reported row"

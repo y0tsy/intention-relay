@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Provider contract fixtures use explicit failure messages for impossible pending local streams."
-)]
-
 mod support;
 
 use intention_config::StartupProviderMaterial;
@@ -13,19 +7,15 @@ use intention_providers::{
 use support::{FAKE_CREDENTIAL, collect_ready, plain_request, startup_material};
 
 fn generic_material() -> StartupProviderMaterial {
-    startup_material(
-        &format!(
-            "kind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
-        ),
-        "intention-relay-generic.toml",
-    )
+    startup_material(&format!(
+        "kind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\nendpoint = \"https://example.invalid/v1\"\ncredential = \"{FAKE_CREDENTIAL}\""
+    ))
 }
 
 fn openrouter_material() -> StartupProviderMaterial {
-    startup_material(
-        &format!("kind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""),
-        "intention-relay-openrouter.toml",
-    )
+    startup_material(&format!(
+        "kind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
+    ))
 }
 
 /// One configured adapter under the mirrored adapter contract cases.
@@ -55,18 +45,13 @@ fn adapters() -> Vec<Adapter> {
 }
 
 #[test]
-fn adapters_declare_the_supported_subset() {
+fn adapters_declare_the_runtime_requirement() {
     for adapter in adapters() {
-        let capabilities = adapter.driver.capabilities();
-        assert!(capabilities.supports_text(), "{}", adapter.name);
-        assert!(capabilities.supports_tool_calls(), "{}", adapter.name);
-        assert!(capabilities.supports_reasoning(), "{}", adapter.name);
-        assert!(!capabilities.supports_multimodal(), "{}", adapter.name);
-        assert!(
-            !capabilities.supports_vendor_extensions(),
-            "{}",
-            adapter.name
-        );
+        adapter
+            .driver
+            .capabilities()
+            .ensure_runtime_requirements()
+            .expect(adapter.name);
     }
 }
 
@@ -89,10 +74,9 @@ fn adapters_cancel_before_stream_creation_without_network_work() {
 
 #[test]
 fn generic_chat_rejects_wrong_kind_and_missing_endpoint_safely() {
-    let wrong_kind = startup_material(
-        &format!("kind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""),
-        "intention-relay-generic-wrong-kind.toml",
-    );
+    let wrong_kind = startup_material(&format!(
+        "kind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
+    ));
     assert_eq!(
         GenericChatDriver::from_startup_material(wrong_kind)
             .expect_err("wrong provider kind fails")
@@ -100,12 +84,9 @@ fn generic_chat_rejects_wrong_kind_and_missing_endpoint_safely() {
         "invalid_generic_chat_provider_config"
     );
 
-    let missing_endpoint = startup_material(
-        &format!(
-            "kind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
-        ),
-        "intention-relay-generic-no-endpoint.toml",
-    );
+    let missing_endpoint = startup_material(&format!(
+        "kind = \"generic-chat-completion-api\"\nmodel = \"fixture\"\ncredential = \"{FAKE_CREDENTIAL}\""
+    ));
     assert_eq!(
         GenericChatDriver::from_startup_material(missing_endpoint)
             .expect_err("missing endpoint fails")

@@ -11,150 +11,25 @@
 use std::collections::BTreeSet;
 
 use crate::{
-    CancelRunCommandDto, ConfigRevisionId, CreateSessionCommandDto, DtoResult, ErrorCategoryDto,
-    ErrorDto, ErrorRetryDto, GetSessionSnapshotQueryDto, MessageProjectionDto, ProjectId,
-    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto, SessionId,
-    SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
+    CancelRunCommandDto, CreateSessionCommandDto, DtoResult, ErrorDto, GetSessionSnapshotQueryDto,
+    MessageProjectionDto, ProjectId, RunId, RunModeDto, RunProjectionDto, SendUserTurnCommandDto,
+    SessionId, SessionProjectionDto, TimestampDto, TurnId, WorkspaceId, WorkspaceRootDto,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
-/// The daemon's readiness for requests.
+/// A version-free, credential-free health projection from the daemon authority.
 ///
 /// A daemon answers health only after durable recovery completed and it can
-/// serve requests, so this is the only readiness state a production path
-/// produces; another state is added when a drain path exists.
+/// serve requests, so the answer itself is the readiness fact: there is no
+/// second readiness state to report until a drain path exists.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DaemonReadinessDto {
-    /// The daemon can serve requests.
-    Ready,
-}
-
-/// A version-free, credential-free health projection from the daemon authority.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct DaemonHealthDto {
-    readiness: DaemonReadinessDto,
-}
+pub struct DaemonHealthDto {}
 
 impl DaemonHealthDto {
     /// Creates the ready health projection a serving daemon answers with.
     #[must_use]
     pub const fn ready() -> Self {
-        Self {
-            readiness: DaemonReadinessDto::Ready,
-        }
-    }
-
-    /// Returns the daemon readiness state.
-    #[must_use]
-    pub const fn readiness(self) -> DaemonReadinessDto {
-        self.readiness
-    }
-}
-
-/// One presentation theme a client can read and select.
-///
-/// The theme is presentation-only: the daemon answers and stores it, and it
-/// never enters a run's immutable configuration selection.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ThemeDto {
-    /// The light terminal palette.
-    Light,
-    /// The dark terminal palette.
-    Dark,
-}
-
-impl ThemeDto {
-    /// Returns the canonical durable string representation of this theme.
-    ///
-    /// The representation is persisted verbatim, so it must stay byte-identical
-    /// across releases.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Light => "light",
-            Self::Dark => "dark",
-        }
-    }
-
-    /// Parses the canonical durable string representation of a theme.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe internal error when `value` is not a declared durable theme.
-    pub fn parse(value: &str) -> DtoResult<Self> {
-        match value {
-            "light" => Ok(Self::Light),
-            "dark" => Ok(Self::Dark),
-            _ => Err(ErrorDto::new(
-                "invalid_theme",
-                ErrorCategoryDto::Internal,
-                "the durable theme is not declared",
-                ErrorRetryDto::Never,
-                None,
-            )?),
-        }
-    }
-}
-
-/// The effective terminal settings a client renders with.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TuiSettingsDto {
-    theme: ThemeDto,
-}
-
-impl TuiSettingsDto {
-    /// Creates one effective terminal settings value.
-    #[must_use]
-    pub const fn new(theme: ThemeDto) -> Self {
-        Self { theme }
-    }
-
-    /// Returns the effective terminal theme.
-    #[must_use]
-    pub const fn theme(self) -> ThemeDto {
-        self.theme
-    }
-}
-
-/// One command selecting the terminal theme.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SetTuiThemeCommandDto {
-    theme: ThemeDto,
-}
-
-impl SetTuiThemeCommandDto {
-    /// Creates one theme-selection command.
-    #[must_use]
-    pub const fn new(theme: ThemeDto) -> Self {
-        Self { theme }
-    }
-
-    /// Returns the requested theme.
-    #[must_use]
-    pub const fn theme(self) -> ThemeDto {
-        self.theme
-    }
-}
-
-/// Typed acceptance evidence for one stored theme.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TuiThemeAcceptedDto {
-    theme: ThemeDto,
-}
-
-impl TuiThemeAcceptedDto {
-    /// Creates the acceptance evidence for one stored theme.
-    #[must_use]
-    pub const fn new(theme: ThemeDto) -> Self {
-        Self { theme }
-    }
-
-    /// Returns the accepted theme.
-    #[must_use]
-    pub const fn theme(self) -> ThemeDto {
-        self.theme
+        Self {}
     }
 }
 
@@ -415,15 +290,16 @@ pub struct SessionSummaryDto {
     updated_at: TimestampDto,
     workspace_root: WorkspaceRootDto,
     message_count: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    active_run: Option<RunProjectionDto>,
 }
 
 impl SessionSummaryDto {
     /// Creates the bounded public summary of one durable session.
+    ///
+    /// A summary carries no active run: a caller that needs one reads the
+    /// session's run projection.
     #[expect(
         clippy::too_many_arguments,
-        reason = "This public wire constructor preserves the established nine-field session summary contract."
+        reason = "This public wire constructor preserves the established eight-field session summary contract."
     )]
     #[must_use]
     pub const fn new(
@@ -435,7 +311,6 @@ impl SessionSummaryDto {
         updated_at: TimestampDto,
         workspace_root: WorkspaceRootDto,
         message_count: u64,
-        active_run: Option<RunProjectionDto>,
     ) -> Self {
         Self {
             session_id,
@@ -446,7 +321,6 @@ impl SessionSummaryDto {
             updated_at,
             workspace_root,
             message_count,
-            active_run,
         }
     }
 
@@ -497,12 +371,6 @@ impl SessionSummaryDto {
     pub const fn message_count(&self) -> u64 {
         self.message_count
     }
-
-    /// Returns the sole active run, if one exists.
-    #[must_use]
-    pub const fn active_run(&self) -> Option<RunProjectionDto> {
-        self.active_run
-    }
 }
 
 /// One bounded list of current session summaries.
@@ -542,19 +410,16 @@ impl SessionSummariesDto {
     ///
     /// # Errors
     ///
-    /// Returns a validation error when one summary's active run belongs to a
-    /// different session or session identities are not unique.
+    /// Returns a validation error when session identities are not unique.
     pub fn new(sessions: Vec<SessionSummaryDto>, omitted: u32) -> DtoResult<Self> {
         let mut unique_session_ids = BTreeSet::new();
-        if sessions.iter().any(|summary| {
-            summary
-                .active_run()
-                .is_some_and(|run| run.session_id() != summary.session_id())
-                || !unique_session_ids.insert(summary.session_id())
-        }) {
+        if sessions
+            .iter()
+            .any(|summary| !unique_session_ids.insert(summary.session_id()))
+        {
             return Err(ErrorDto::validation(
                 "invalid_session_summaries",
-                "session summaries must carry unique sessions with their own active runs",
+                "session summaries must carry unique sessions",
             ));
         }
         Ok(Self { sessions, omitted })
@@ -582,8 +447,6 @@ pub enum ClientRequestDto {
     CreateSession(CreateSessionCommandDto),
     /// Sends an accepted user turn to the daemon authority.
     SendUserTurn(SendUserTurnCommandDto),
-    /// Requests removal of a not-yet-seen pending user turn.
-    RemoveTurn(RemoveTurnCommandDto),
     /// Requests that an active daemon-owned run stop for good.
     CancelRun(CancelRunCommandDto),
     /// Obtains the latest durable session projection.
@@ -592,10 +455,6 @@ pub enum ClientRequestDto {
     GetDaemonHealth,
     /// Obtains the bounded current session list.
     ListSessions,
-    /// Obtains the effective terminal settings.
-    GetTuiSettings,
-    /// Selects and stores the terminal theme.
-    SetTuiTheme(SetTuiThemeCommandDto),
     /// Begins a dedicated session-stream subscription.
     SubscribeSession(SubscribeSessionCommandDto),
 }
@@ -641,8 +500,6 @@ pub enum ProtocolResultDto {
     SessionCreated(CreateSessionAcceptedDto),
     /// A user turn was accepted and either started a run or became a pending message.
     TurnAccepted(SendUserTurnAcceptedDto),
-    /// A pending user turn was removed.
-    TurnRemoved(RemoveTurnAcceptedDto),
     /// A stop request was accepted for a run.
     RunCancelled(RunCancelledAcceptedDto),
     /// A current durable session projection.
@@ -651,10 +508,6 @@ pub enum ProtocolResultDto {
     DaemonHealth(DaemonHealthDto),
     /// A bounded current list of session summaries.
     SessionsListed(SessionSummariesDto),
-    /// The effective terminal settings.
-    TuiSettings(TuiSettingsDto),
-    /// A theme selection was stored.
-    TuiThemeSet(TuiThemeAcceptedDto),
     /// The current session state of a new subscription.
     SessionSubscribed(SessionSnapshotDto),
 }
@@ -718,11 +571,8 @@ impl CreateSessionAcceptedDto {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SendUserTurnOutcomeDto {
-    /// The accepted turn started a run with its immutable configuration revision.
-    Started {
-        run_id: RunId,
-        config_revision_id: ConfigRevisionId,
-    },
+    /// The accepted turn started a run.
+    Started { run_id: RunId },
     /// The accepted turn is a pending message that joins the active run context.
     Pending,
 }
@@ -766,36 +616,6 @@ impl SendUserTurnAcceptedDto {
     #[must_use]
     pub const fn outcome(self) -> SendUserTurnOutcomeDto {
         self.outcome
-    }
-}
-
-/// Typed acceptance evidence for a removed pending turn.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveTurnAcceptedDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-}
-
-impl RemoveTurnAcceptedDto {
-    /// Creates complete pending-turn removal acceptance evidence.
-    #[must_use]
-    pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
-        Self {
-            session_id,
-            turn_id,
-        }
-    }
-
-    /// Returns the owning session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the removed turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
     }
 }
 
@@ -956,39 +776,15 @@ pub const fn encode_reply(id: u64, result: ProtocolResultDto) -> ProtocolDaemonM
     ProtocolDaemonMessageDto::reply(id, result)
 }
 
-/// The envelope kinds of the current daemon wire.
-const DAEMON_MESSAGE_KINDS: [&str; 3] = ["reply", "rejection", "frame"];
-
 /// Parses one daemon line.
 ///
 /// # Errors
 ///
-/// Returns a typed `stale_daemon_protocol` unavailable error when the line is
-/// not an envelope of the current wire, so an adapter can offer a safe
-/// restart/reconnect action instead of reinterpreting foreign bytes. A line
-/// that names a current envelope kind whose payload does not decode is this
-/// wire's own failure, so it returns the typed
-/// `invalid_local_protocol_response` error instead of blaming a stale peer.
+/// Returns the typed `invalid_local_protocol_response` error when the line is
+/// not a current envelope of this wire, so a peer that answers with bytes this
+/// build cannot decode fails closed instead of being reached as compatible.
 pub fn parse_daemon_message(line: &str) -> DtoResult<ProtocolDaemonMessageDto> {
-    serde_json::from_str(line).map_err(|_| match envelope_kind(line) {
-        Some(kind) if DAEMON_MESSAGE_KINDS.contains(&kind) => invalid_wire_response(),
-        _ => ErrorDto::unavailable(
-            "stale_daemon_protocol",
-            "the local daemon does not speak the current local wire protocol",
-        ),
-    })
-}
-
-/// Returns the envelope kind one daemon line names, when it names one.
-fn envelope_kind(line: &str) -> Option<&str> {
-    #[derive(Deserialize)]
-    struct EnvelopeKindDto<'a> {
-        kind: &'a str,
-    }
-
-    serde_json::from_str::<EnvelopeKindDto<'_>>(line)
-        .ok()
-        .map(|envelope| envelope.kind)
+    serde_json::from_str(line).map_err(|_| invalid_wire_response())
 }
 
 /// Decodes the correlated answer to one request.
@@ -1039,10 +835,6 @@ fn invalid_wire_response() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
     use crate::MessageKindDto;
@@ -1065,8 +857,6 @@ mod tests {
             fixture_workspace_root(),
             crate::RunModeDto::Build,
             None,
-            None,
-            Vec::new(),
         )
         .expect("fixture projection is valid")
     }
@@ -1090,7 +880,6 @@ mod tests {
             run_id,
             TurnId::new(),
             crate::RunStatusDto::Running,
-            ConfigRevisionId::new(),
             None,
             crate::TimestampDto::from_unix_seconds(1_726_000_000)
                 .expect("fixture timestamp is valid"),
@@ -1128,23 +917,6 @@ mod tests {
             )
             .expect("subscription result deserializes"),
             result
-        );
-
-        // A bounded read reports its omitted pending turns, and the nested
-        // projection carries that count across the wire.
-        let trimmed = SessionSnapshotDto::with_projection(
-            session_id,
-            fixture_projection(session_id).with_pending_turns_omitted(3),
-            Vec::new(),
-        )
-        .expect("a snapshot with a trimmed projection is valid");
-        assert_eq!(trimmed.projection().pending_turns_omitted(), 3);
-        assert_eq!(
-            serde_json::from_str::<SessionSnapshotDto>(
-                &serde_json::to_string(&trimmed).expect("snapshot serializes")
-            )
-            .expect("snapshot deserializes"),
-            trimmed
         );
     }
 
@@ -1225,7 +997,7 @@ mod tests {
             parse_daemon_message(&line)
                 .expect_err("a request line is not a daemon message")
                 .code(),
-            "stale_daemon_protocol"
+            "invalid_local_protocol_response"
         );
     }
 

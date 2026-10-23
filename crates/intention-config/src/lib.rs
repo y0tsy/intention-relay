@@ -8,54 +8,19 @@
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
-use intention_proto::{
-    ConfigRevisionId, DtoResult, ErrorDto, SchemaVersionDto, ThemeDto, TimestampDto, TuiSettingsDto,
-};
+use intention_proto::{DtoResult, ErrorDto, TimestampDto};
 use serde::{Deserialize, Serialize};
 
-const CURRENT_SCHEMA_MAJOR: u16 = 1;
-const CURRENT_SCHEMA_MINOR: u16 = 0;
+/// The one live configuration schema version the TOML parser accepts.
+const CURRENT_SCHEMA_VERSION: u16 = 1;
 const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 250_000;
 
-/// Requires a schema version exactly equal to the current configuration schema.
+/// The validated absolute location of the one configuration file.
 ///
-/// # Errors
-///
-/// Returns an unavailable error when the schema version differs from the
-/// current configuration schema (no same-major tolerance).
-fn require_current_schema_version(schema_version: SchemaVersionDto) -> DtoResult<()> {
-    if schema_version != SchemaVersionDto::new(CURRENT_SCHEMA_MAJOR, CURRENT_SCHEMA_MINOR) {
-        return Err(ErrorDto::unavailable(
-            "incompatible_schema_version",
-            "schema version must equal the current configuration schema",
-        ));
-    }
-    Ok(())
-}
-
-/// Decodes one snapshot schema version and requires it to be the current one.
-fn deserialize_current_schema_version<'de, D>(deserializer: D) -> Result<SchemaVersionDto, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let schema_version = SchemaVersionDto::deserialize(deserializer)?;
-    require_current_schema_version(schema_version).map_err(serde::de::Error::custom)?;
-    Ok(schema_version)
-}
-
-/// A validated, absolute configuration path with semantic configuration intent.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+/// The location never crosses a wire and never appears in a projection: it is
+/// a local startup input for reading the configuration document.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ConfigPathDto(String);
-
-impl<'de> Deserialize<'de> for ConfigPathDto {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::parse(value).map_err(serde::de::Error::custom)
-    }
-}
 
 impl ConfigPathDto {
     /// Parses an absolute non-empty path used only for configuration access.
@@ -82,75 +47,19 @@ impl ConfigPathDto {
     }
 }
 
-/// Identifies how a configuration location was selected without disclosing it.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSourceKindDto {
-    /// A caller explicitly selected the configuration file location.
-    Explicit,
-    /// The location came from the operating system's standard config directory.
-    PlatformDefault,
-}
-
-impl ConfigSourceKindDto {
-    /// Returns the stable safe representation for diagnostics and snapshots.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Explicit => "explicit",
-            Self::PlatformDefault => "platform_default",
-        }
-    }
-}
-
-impl Display for ConfigSourceKindDto {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-
-/// Identifies how the configuration file location was selected.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSourceDto {
-    /// A caller explicitly selected the configuration file location.
-    Explicit(ConfigPathDto),
-    /// The location came from the operating system's standard config directory.
-    PlatformDefault(ConfigPathDto),
-}
-
-impl ConfigSourceDto {
-    /// Returns the validated configuration location.
-    #[must_use]
-    pub const fn path(&self) -> &ConfigPathDto {
-        match self {
-            Self::Explicit(path) | Self::PlatformDefault(path) => path,
-        }
-    }
-
-    /// Returns the safe source category without disclosing the path.
-    #[must_use]
-    pub const fn kind(&self) -> ConfigSourceKindDto {
-        match self {
-            Self::Explicit(_) => ConfigSourceKindDto::Explicit,
-            Self::PlatformDefault(_) => ConfigSourceKindDto::PlatformDefault,
-        }
-    }
-}
-
 /// Selects the standard platform config location or a caller-supplied override.
 pub struct ConfigPathResolver;
 
 impl ConfigPathResolver {
-    /// Resolves an explicit configuration path or the standard platform location.
+    /// Resolves the caller's override or the one standard platform location.
     ///
     /// # Errors
     ///
     /// Returns an unavailable error if the operating system has no usable config
     /// directory for the current user, or a validation error for an invalid override.
-    pub fn resolve(explicit_path: Option<ConfigPathDto>) -> DtoResult<ConfigSourceDto> {
-        if let Some(path) = explicit_path {
-            return Ok(ConfigSourceDto::Explicit(path));
+    pub fn resolve(override_path: Option<ConfigPathDto>) -> DtoResult<ConfigPathDto> {
+        if let Some(path) = override_path {
+            return Ok(path);
         }
         let path = platform_config_path().ok_or_else(|| {
             ErrorDto::unavailable(
@@ -158,8 +67,7 @@ impl ConfigPathResolver {
                 "a platform configuration directory could not be determined",
             )
         })?;
-        let path = ConfigPathDto::parse(path)?;
-        Ok(ConfigSourceDto::PlatformDefault(path))
+        ConfigPathDto::parse(path)
     }
 }
 
@@ -197,23 +105,19 @@ fn platform_config_path() -> Option<String> {
     }
 }
 
-/// Raw configuration text paired with a validated selection source.
+/// Raw configuration text.
 ///
 /// This input intentionally has no `Debug`, serialization, or content accessor
 /// because it may contain an open-text credential by explicit product decision.
 pub struct RawConfigInputDto {
     text: String,
-    source: ConfigSourceDto,
 }
 
 impl RawConfigInputDto {
     /// Creates opaque TOML input for parse/validate/resolve processing.
     #[must_use]
-    pub fn new(text: impl Into<String>, source: ConfigSourceDto) -> Self {
-        Self {
-            text: text.into(),
-            source,
-        }
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into() }
     }
 }
 
@@ -338,8 +242,6 @@ pub struct ResolvedConfigDto {
     provider: ProviderSelectionDto,
     provider_execution: ProviderExecutionPolicyDto,
     context_window: ContextWindowPolicyDto,
-    tui: TuiSettingsDto,
-    source_kind: ConfigSourceKindDto,
 }
 
 impl ResolvedConfigDto {
@@ -350,8 +252,7 @@ impl ResolvedConfigDto {
     /// Returns only safe typed validation errors. The input TOML and any
     /// credential it contains are deliberately omitted from errors.
     pub fn parse_resolve(input: RawConfigInputDto) -> DtoResult<Self> {
-        Self::parse_document(&input.text, input.source.kind())
-            .map(|(resolved, _credential)| resolved)
+        Self::parse_document(&input.text).map(|(resolved, _credential)| resolved)
     }
 
     /// Parses configuration into opaque startup-only material and its safe projection.
@@ -360,7 +261,7 @@ impl ResolvedConfigDto {
     ///
     /// Returns only safe typed validation errors and never exposes the raw credential.
     pub fn parse_startup_material(input: RawConfigInputDto) -> DtoResult<StartupProviderMaterial> {
-        let (resolved, credential) = Self::parse_document(&input.text, input.source.kind())?;
+        let (resolved, credential) = Self::parse_document(&input.text)?;
         Ok(StartupProviderMaterial {
             resolved,
             opaque: credential,
@@ -376,7 +277,7 @@ impl ResolvedConfigDto {
     ///
     /// Returns only safe typed validation errors. The input TOML and any
     /// credential it contains are deliberately omitted from errors.
-    fn parse_document(text: &str, source_kind: ConfigSourceKindDto) -> DtoResult<(Self, String)> {
+    fn parse_document(text: &str) -> DtoResult<(Self, String)> {
         let document: toml::Value = toml::from_str(text).map_err(|_| {
             ErrorDto::validation(
                 "invalid_config_toml",
@@ -384,7 +285,8 @@ impl ResolvedConfigDto {
             )
         })?;
         match document.get("schema_version") {
-            Some(toml::Value::Integer(major)) if *major == i64::from(CURRENT_SCHEMA_MAJOR) => {}
+            Some(toml::Value::Integer(version))
+                if *version == i64::from(CURRENT_SCHEMA_VERSION) => {}
             Some(toml::Value::Integer(_)) => {
                 return Err(ErrorDto::validation(
                     "unsupported_config_schema_version",
@@ -413,7 +315,6 @@ impl ResolvedConfigDto {
         let RawV1Config {
             _schema_version,
             provider: raw_provider,
-            tui: raw_tui,
         } = raw;
         let RawProviderConfig {
             kind,
@@ -444,8 +345,6 @@ impl ResolvedConfigDto {
             provider,
             provider_execution: ProviderExecutionPolicyDto::from_raw(execution)?,
             context_window,
-            tui: resolve_tui_settings(raw_tui)?,
-            source_kind,
         };
         Ok((resolved, credential))
     }
@@ -467,63 +366,24 @@ impl ResolvedConfigDto {
     pub const fn context_window(&self) -> &ContextWindowPolicyDto {
         &self.context_window
     }
-
-    /// Returns the fully effective safe terminal settings.
-    #[must_use]
-    pub const fn tui(&self) -> &TuiSettingsDto {
-        &self.tui
-    }
-
-    /// Returns the safe source category without its local filesystem path.
-    #[must_use]
-    pub const fn source_kind(&self) -> ConfigSourceKindDto {
-        self.source_kind
-    }
 }
 
 /// An immutable, credential-free configuration selection captured for a future run.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigSnapshotDto {
-    #[serde(deserialize_with = "deserialize_current_schema_version")]
-    schema_version: SchemaVersionDto,
-    revision_id: ConfigRevisionId,
     captured_at: TimestampDto,
     resolved: ResolvedConfigDto,
 }
 
 impl ConfigSnapshotDto {
     /// Creates an immutable credential-free configuration snapshot.
-    ///
-    /// # Errors
-    ///
-    /// Returns a safe unavailable error when the snapshot schema version
-    /// differs from the current configuration schema.
-    pub fn new(
-        schema_version: SchemaVersionDto,
-        revision_id: ConfigRevisionId,
-        captured_at: TimestampDto,
-        resolved: ResolvedConfigDto,
-    ) -> DtoResult<Self> {
-        require_current_schema_version(schema_version)?;
-        Ok(Self {
-            schema_version,
-            revision_id,
+    #[must_use]
+    pub const fn new(captured_at: TimestampDto, resolved: ResolvedConfigDto) -> Self {
+        Self {
             captured_at,
             resolved,
-        })
-    }
-
-    /// Returns the snapshot contract schema version.
-    #[must_use]
-    pub const fn schema_version(&self) -> SchemaVersionDto {
-        self.schema_version
-    }
-
-    /// Returns the future durable configuration revision identity.
-    #[must_use]
-    pub const fn revision_id(&self) -> ConfigRevisionId {
-        self.revision_id
+        }
     }
 
     /// Returns the snapshot capture time.
@@ -536,16 +396,6 @@ impl ConfigSnapshotDto {
     #[must_use]
     pub const fn resolved(&self) -> &ResolvedConfigDto {
         &self.resolved
-    }
-
-    /// Verifies the already-redacted snapshot remains suitable for durable storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns an unavailable error when the snapshot schema version differs
-    /// from the current configuration schema.
-    pub fn validate_for_persistence(&self) -> DtoResult<()> {
-        require_current_schema_version(self.schema_version)
     }
 }
 
@@ -685,35 +535,6 @@ struct RawV1Config {
     #[serde(rename = "schema_version")]
     _schema_version: u16,
     provider: RawProviderConfig,
-    tui: Option<RawTuiConfig>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawTuiConfig {
-    theme: Option<String>,
-}
-
-/// Resolves the optional `[tui]` section into its effective terminal settings.
-///
-/// An absent section and an absent theme both select the light theme. A theme
-/// spelling outside the declared set is a validation error naming the accepted
-/// values, so an unknown spelling never silently falls back.
-///
-/// # Errors
-///
-/// Returns a validation error when a declared theme is not a declared spelling.
-fn resolve_tui_settings(raw: Option<RawTuiConfig>) -> DtoResult<TuiSettingsDto> {
-    let Some(theme) = raw.and_then(|tui| tui.theme) else {
-        return Ok(TuiSettingsDto::new(ThemeDto::Light));
-    };
-    let theme = ThemeDto::parse(&theme).map_err(|_| {
-        ErrorDto::validation(
-            "invalid_tui_theme",
-            "tui theme must be \"light\" or \"dark\"",
-        )
-    })?;
-    Ok(TuiSettingsDto::new(theme))
 }
 
 #[derive(Deserialize)]
@@ -734,41 +555,8 @@ struct RawProviderExecutionPolicyDto {
     max_attempts: Option<u8>,
 }
 
-#[cfg(unix)]
-/// Verifies that an existing configuration file is not group- or world-readable.
-///
-/// # Errors
-///
-/// Returns a policy error when the file mode exposes the configuration to other
-/// users, or an unavailable error if metadata cannot be inspected.
-pub fn ensure_user_only_permissions(path: &ConfigPathDto) -> DtoResult<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(path.as_str()).map_err(|_| {
-        ErrorDto::unavailable(
-            "config_permission_metadata_unavailable",
-            "configuration file permissions could not be inspected",
-        )
-    })?;
-    if metadata.permissions().mode() & 0o077 == 0 {
-        Ok(())
-    } else {
-        Err(ErrorDto::new(
-            "unsafe_config_permissions",
-            intention_proto::ErrorCategoryDto::Policy,
-            "configuration file must be readable only by its owner",
-            intention_proto::ErrorRetryDto::Manual,
-            None,
-        )?)
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
 
@@ -779,13 +567,6 @@ mod tests {
             .join(filename)
             .to_string_lossy()
             .into_owned()
-    }
-
-    fn explicit_source() -> ConfigSourceDto {
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(fixture_path("intention-relay-test.toml"))
-                .expect("fixture path is absolute"),
-        )
     }
 
     fn v1(provider: &str, model: &str, credential: &str, endpoint: Option<&str>) -> String {
@@ -806,7 +587,7 @@ credential = \"{credential}\"
     }
 
     #[test]
-    fn paths_and_sources_preserve_semantic_configuration_intent() {
+    fn configuration_path_resolution_keeps_the_override_and_platform_location() {
         let fixture_path = fixture_path("intention.toml");
         let path = ConfigPathDto::parse(fixture_path.as_str()).expect("absolute path is valid");
         assert_eq!(path.as_str(), fixture_path);
@@ -818,15 +599,10 @@ credential = \"{credential}\"
                 "invalid_config_path"
             );
         }
-        let explicit = ConfigPathResolver::resolve(Some(path.clone())).expect("override resolves");
-        assert_eq!(explicit.kind(), ConfigSourceKindDto::Explicit);
-        assert_eq!(explicit.kind().as_str(), "explicit");
-        assert_eq!(explicit.path(), &path);
+        let resolved = ConfigPathResolver::resolve(Some(path.clone())).expect("override resolves");
+        assert_eq!(resolved, path);
         let platform = ConfigPathResolver::resolve(None).expect("platform path resolves");
-        assert_eq!(platform.kind(), ConfigSourceKindDto::PlatformDefault);
-        assert_eq!(platform.kind().as_str(), "platform_default");
-        assert_eq!(platform.kind().to_string(), "platform_default");
-        assert!(platform.path().as_str().ends_with("config.toml"));
+        assert!(platform.as_str().ends_with("config.toml"));
     }
 
     #[test]
@@ -845,15 +621,12 @@ credential = \"{credential}\"
             ("openrouter", "fixture-model"),
             ("generic-chat-completion-api", "example-chat-model"),
         ] {
-            let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-                v1(
-                    provider,
-                    model,
-                    CREDENTIAL,
-                    Some("https://example.invalid/v1"),
-                ),
-                explicit_source(),
-            ))
+            let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(v1(
+                provider,
+                model,
+                CREDENTIAL,
+                Some("https://example.invalid/v1"),
+            )))
             .expect("supported provider resolves");
             assert_eq!(resolved.provider().kind().as_str(), provider);
             assert_eq!(resolved.provider().model(), model);
@@ -863,10 +636,12 @@ credential = \"{credential}\"
             );
             assert!(resolved.provider().credential_configured());
         }
-        let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("unknown", "fixture-model", CREDENTIAL, None),
-            explicit_source(),
-        ))
+        let unknown = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(v1(
+            "unknown",
+            "fixture-model",
+            CREDENTIAL,
+            None,
+        )))
         .expect_err("unknown provider must fail");
         assert_eq!(unknown.code(), "invalid_config_schema");
     }
@@ -886,24 +661,11 @@ credential = \"{credential}\"
                 v1("openrouter", "fixture-model", CREDENTIAL, Some(" ")),
                 "invalid_provider_endpoint",
             ),
-            (
-                "schema_version = 2
-"
-                .to_owned(),
-                "unsupported_config_schema_version",
-            ),
-            (
-                "schema_version = -1
-"
-                .to_owned(),
-                "unsupported_config_schema_version",
-            ),
             ("not = [valid".to_owned(), "invalid_config_toml"),
         ];
         for (text, expected_code) in fixtures {
-            let error =
-                ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(text, explicit_source()))
-                    .expect_err("invalid fixture must fail");
+            let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(text))
+                .expect_err("invalid fixture must fail");
             assert_eq!(error.code(), expected_code);
             assert!(!error.to_string().contains(CREDENTIAL));
         }
@@ -911,74 +673,37 @@ credential = \"{credential}\"
 
     #[test]
     fn parse_helpers_reject_schema_and_shape_mismatches() {
-        let wrong_major = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            v1("openrouter", "fixture", CREDENTIAL, None).replacen(
-                "schema_version = 1",
-                "schema_version = 2",
-                1,
+        // The single live schema version is the only accepted one: another
+        // integer, a negative integer, a non-integer, and an absent version
+        // each fail closed with their own typed code.
+        for (text, expected_code) in [
+            (
+                v1("openrouter", "fixture", CREDENTIAL, None).replacen(
+                    "schema_version = 1",
+                    "schema_version = 2",
+                    1,
+                ),
+                "unsupported_config_schema_version",
             ),
-            explicit_source(),
-        ))
-        .expect_err("wrong version must fail");
-        assert_eq!(wrong_major.code(), "unsupported_config_schema_version");
-        let missing_provider = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "schema_version = 1".to_owned(),
-            explicit_source(),
-        ))
-        .expect_err("missing provider must fail");
-        assert_eq!(missing_provider.code(), "invalid_config_schema");
-        let unversioned = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n"
-                .to_owned(),
-            explicit_source(),
-        ))
-        .expect_err("unversioned configuration must fail closed");
-        assert_eq!(unversioned.code(), "invalid_config_schema");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn unix_permission_policy_accepts_owner_only_and_rejects_unsafe_or_missing_files() {
-        use std::fs;
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = std::env::temp_dir().join(format!(
-            "intention-config-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("system time must be after the Unix epoch")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&directory).expect("temporary directory is available");
-        let safe_path = directory.join("safe.toml");
-        fs::write(&safe_path, "fixture").expect("fixture file is writable");
-        fs::set_permissions(&safe_path, fs::Permissions::from_mode(0o600))
-            .expect("safe permissions can be set");
-        let safe_dto = ConfigPathDto::parse(safe_path.to_string_lossy().into_owned())
-            .expect("temporary path is absolute");
-        assert!(ensure_user_only_permissions(&safe_dto).is_ok());
-
-        fs::set_permissions(&safe_path, fs::Permissions::from_mode(0o644))
-            .expect("unsafe permissions can be set");
-        assert_eq!(
-            ensure_user_only_permissions(&safe_dto)
-                .expect_err("group-readable file must fail")
-                .code(),
-            "unsafe_config_permissions"
-        );
-        let missing = ConfigPathDto::parse(
-            directory
-                .join("missing.toml")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("temporary path is absolute");
-        assert_eq!(
-            ensure_user_only_permissions(&missing)
-                .expect_err("missing file must fail")
-                .code(),
-            "config_permission_metadata_unavailable"
-        );
+            (
+                "schema_version = -1\n".to_owned(),
+                "unsupported_config_schema_version",
+            ),
+            (
+                "schema_version = \"one\"\n".to_owned(),
+                "invalid_config_schema_version",
+            ),
+            ("schema_version = 1".to_owned(), "invalid_config_schema"),
+            (
+                "[model]\nprovider = \"openrouter\"\nname = \"fixture\"\napi_key = \"fixture-credential-not-real-12345\"\n"
+                    .to_owned(),
+                "invalid_config_schema",
+            ),
+        ] {
+            let error = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(text))
+                .expect_err("a mismatched document must fail closed");
+            assert_eq!(error.code(), expected_code);
+        }
     }
 
     #[test]
@@ -1008,7 +733,6 @@ credential = \"{credential}\"
         let tricky = "sk-\"quoted\"-and\\backslash";
         let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
             document_with_credential(tricky),
-            explicit_source(),
         ))
         .expect("credential parses from the document");
         let (resolved, credential) =
@@ -1031,12 +755,9 @@ credential = \"{credential}\"
             ),
             ("not a toml document [[".to_owned(), "invalid_config_toml"),
         ] {
-            let error = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(
-                failure,
-                explicit_source(),
-            ))
-            .err()
-            .expect("invalid document must fail");
+            let error = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(failure))
+                .err()
+                .expect("invalid document must fail");
             assert_eq!(error.code(), expected_code);
             assert!(
                 !error.to_string().contains(CREDENTIAL),

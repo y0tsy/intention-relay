@@ -1,4 +1,8 @@
 [toolchain]
 channel = "1.97.1"
 components = ["rustfmt", "clippy", "llvm-tools-preview"]
+# The Windows cross target backs the cross-target Clippy pass (`make
+# lint-windows`), so it is part of the pinned toolchain rather than a local
+# extra.
+targets = ["x86_64-pc-windows-gnu"]
 profile = "minimal"

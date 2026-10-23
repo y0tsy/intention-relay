@@ -4,7 +4,9 @@
 //! translation of one native item into normalized events, its native error
 //! classification, and its error codes. The stream machinery is
 //! provider-neutral and therefore lives here once: the pending queue, the
-//! `Started` seeding, the terminal flag, and the emission order.
+//! `Started` seeding, the terminal flag, and the emission order. This is the
+//! only place the order contract is enforced; a consumer reads an already
+//! ordered stream and does not re-validate it.
 //!
 //! Interruption is not observed here: the adapter refuses an already-cancelled
 //! request before it builds a stream (`ModelExecutionDriver::execute`), and
@@ -137,5 +139,71 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use futures_util::{StreamExt, stream};
+
+    use super::{EventTranslator, NormalizedEvents, normalized_stream};
+    use crate::model::{FinishReasonDto, ModelEventDto};
+
+    /// A translator that writes past the terminal fact it already queued.
+    struct Overrunning {
+        /// How many native items the stream polled before it ended.
+        polled: Arc<AtomicUsize>,
+    }
+
+    impl EventTranslator for Overrunning {
+        type Item = u8;
+
+        fn translate_item(&mut self, item: u8, events: &mut NormalizedEvents<'_>) {
+            self.polled.fetch_add(1, Ordering::Relaxed);
+            events.push(ModelEventDto::text_delta(format!("delta {item}")).expect("text is valid"));
+            events.finish(FinishReasonDto::Stop);
+            // The sink is total once terminal: neither a fact nor a second
+            // terminal fact queues behind the finish.
+            events.push(ModelEventDto::text_delta("after").expect("text is valid"));
+            events.finish(FinishReasonDto::Length);
+            events.fail("provider_stream_fixture_failure");
+        }
+
+        fn native_ended(&mut self, events: &mut NormalizedEvents<'_>) {
+            events.fail("provider_stream_fixture_failure");
+        }
+    }
+
+    #[test]
+    fn the_normalized_stream_orders_its_facts_and_ends_at_the_first_terminal_one() {
+        let polled = Arc::new(AtomicUsize::new(0));
+        let events = futures_executor::block_on(
+            normalized_stream(
+                stream::iter([0_u8, 1]),
+                Overrunning {
+                    polled: Arc::clone(&polled),
+                },
+            )
+            .collect::<Vec<_>>(),
+        );
+        assert_eq!(
+            events,
+            vec![
+                Ok(ModelEventDto::started()),
+                Ok(ModelEventDto::text_delta("delta 0").expect("text is valid")),
+                Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
+            ],
+            "the start fact is seeded, translation order is kept, and nothing queues behind the terminal fact"
+        );
+        assert_eq!(
+            polled.load(Ordering::Relaxed),
+            1,
+            "the terminal fact ends the stream instead of polling the rest of the native stream"
+        );
     }
 }

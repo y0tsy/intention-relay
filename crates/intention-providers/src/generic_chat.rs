@@ -84,7 +84,7 @@ impl GenericChatDriver {
 
 impl ModelExecutionDriver for GenericChatDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -453,6 +453,10 @@ fn translate_request(request: &ModelRequestDto) -> DtoResult<WireRequest> {
 ///
 /// Attachments are transient same-run material: they are matched by identity,
 /// never merged into message content, and never consulted for other roles.
+///
+/// @todo(provider): a replayed earlier step (the DeepSeek contract once the
+/// request carries `tools`) reuses the same `reasoning_content` wire field on
+/// any assistant message, including one that carries no tool call.
 fn reasoning_attachments(request: &ModelRequestDto) -> BTreeMap<ToolCallId, &str> {
     let mut attachments = BTreeMap::new();
     for attachment in request.assistant_reasoning() {
@@ -534,15 +538,15 @@ fn translate_assistant_message(
     })
 }
 
-#[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    reason = "Private tool-fragment fixtures use expect to provide precise test failure messages."
+#[expect(
+    clippy::disallowed_types,
+    reason = "Adapter tests build raw SDK payloads to assert the translation; DTO-first binds production code."
 )]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{ModelRoleDto, UsageDto};
-    use intention_proto::{ErrorRetryDto, RunId};
+    use intention_proto::RunId;
 
     /// Collects the shared stream's events for one fixed native chunk sequence.
     fn collect_chunks(
@@ -725,14 +729,12 @@ mod tests {
                 "read_file",
                 "Reads one file",
                 r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-            )
-            .expect("tool is valid"),
+            ),
             crate::model::ModelToolDefinitionDto::new(
                 "search",
                 "Searches files",
                 r#"{"type":"object","required":["query"]}"#,
-            )
-            .expect("tool is valid"),
+            ),
         ])
         .expect("tools are valid");
 
@@ -878,8 +880,7 @@ mod tests {
             "read",
             "Read a workspace file",
             r#"{"type":"object","properties":{"path":{"type":"string"}}}"#,
-        )
-        .expect("tool definition is valid");
+        );
         let attachment =
             crate::model::AssistantReasoningDto::new(vec![call.call_id()], "chain of thought")
                 .expect("reasoning attachment is valid");
@@ -914,18 +915,15 @@ mod tests {
         );
 
         // A tool-role message always carries its identity, so the tool-result
-        // step cannot fail; tool parameters and the request identity are
-        // validated where they are built, so the remaining steps cannot fail.
+        // step cannot fail; the request identity is validated where it is
+        // built, so the remaining steps cannot fail.
         assert!(ModelMessageDto::new(ModelRoleDto::Tool, "result").is_err());
-        assert!(
-            crate::model::ModelToolDefinitionDto::new("read", "Read a file", "not-json").is_err()
-        );
         assert!(ModelRequestDto::new(RunId::new(), " ", vec![message], None).is_err());
         assert!(ModelRequestDto::new(RunId::new(), "fixture", Vec::new(), None).is_err());
 
         let error = crate::mapping::fixed_error(GENERIC_CHAT_REQUEST_REJECTED);
         assert_eq!(error.code(), "generic_chat_request_rejected");
-        assert_eq!(error.retry(), ErrorRetryDto::Never);
+        assert!(!error.retryable());
     }
 
     fn assistant_tool_request(first: &ToolCallDto, second: &ToolCallDto) -> ModelRequestDto {
@@ -1032,38 +1030,30 @@ mod tests {
         // string says. An untyped 400 must therefore never be retried to the
         // attempt maximum.
         for (status, kind, expected) in [
-            (http::StatusCode::BAD_REQUEST, None, ErrorRetryDto::Never),
+            (http::StatusCode::BAD_REQUEST, None, false),
             (
                 http::StatusCode::BAD_REQUEST,
                 Some("rate_limit_exceeded"),
-                ErrorRetryDto::Never,
+                false,
             ),
-            (
-                http::StatusCode::INTERNAL_SERVER_ERROR,
-                None,
-                ErrorRetryDto::Delayed,
-            ),
+            (http::StatusCode::INTERNAL_SERVER_ERROR, None, true),
             (
                 http::StatusCode::SERVICE_UNAVAILABLE,
                 Some("invalid_request_error"),
-                ErrorRetryDto::Delayed,
+                true,
             ),
             (
                 http::StatusCode::TOO_MANY_REQUESTS,
                 Some("rate_limit_exceeded"),
-                ErrorRetryDto::Delayed,
+                true,
             ),
             // A status outside the client/server taxonomy keeps the `type`
             // string as the secondary signal, and stays permanent without it.
-            (
-                http::StatusCode::FOUND,
-                Some("server_error"),
-                ErrorRetryDto::Delayed,
-            ),
-            (http::StatusCode::FOUND, None, ErrorRetryDto::Never),
+            (http::StatusCode::FOUND, Some("server_error"), true),
+            (http::StatusCode::FOUND, None, false),
         ] {
             assert_eq!(
-                map_openai_error(&api_error(status, kind)).retry(),
+                map_openai_error(&api_error(status, kind)).retryable(),
                 expected,
                 "status {status} with type {kind:?}"
             );
@@ -1072,12 +1062,11 @@ mod tests {
 
     #[test]
     fn native_transport_errors_and_normalized_codes_never_leak_provider_text() {
-        assert_eq!(
+        assert!(
             map_openai_error(&OpenAIError::StreamError(Box::new(
                 async_openai::error::StreamError::EventStream("secret provider text".to_owned())
             )))
-            .retry(),
-            ErrorRetryDto::Delayed
+            .retryable()
         );
         let error = map_openai_error(&api_error(http::StatusCode::BAD_REQUEST, None));
         assert_eq!(error.code(), "generic_chat_provider_request_rejected");

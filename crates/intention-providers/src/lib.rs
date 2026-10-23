@@ -18,7 +18,6 @@ pub use generic_chat::GenericChatDriver;
 pub use model::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCancelledFuture,
     ModelCapabilitiesDto, ModelEventDto, ModelEventStream, ModelExecutionDriver, ModelMessageDto,
-    ModelRequestDto, ModelRoleDto, ModelStreamLifecycleDto, ModelToolDefinitionDto,
-    ProviderErrorDto, ToolCallDto, UsageDto,
+    ModelRequestDto, ModelRoleDto, ModelToolDefinitionDto, ProviderErrorDto, ToolCallDto, UsageDto,
 };
 pub use openrouter::OpenRouterDriver;

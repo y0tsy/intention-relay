@@ -1,0 +1,22 @@
+# Compiler-level enforcement for the two source rules the quality policy keeps.
+#
+# The workspace denies `clippy::disallowed_types` and `clippy::disallowed_methods`
+# (see `[workspace.lints.clippy]` in `Cargo.toml`), so each entry below fails the
+# lint gate at the exact line that breaks the rule, without scanning comments,
+# strings, or documentation text.
+
+# DTO-first: untyped JSON belongs to the wire and storage boundaries only, never
+# to a function signature, a struct field, or an annotated local in production
+# code. Tests may decode and index raw JSON; they may not declare the type.
+disallowed-types = [
+  { path = "serde_json::Value", reason = "DTO-first: use a typed DTO instead of untyped JSON (serde_json::Value)." },
+  { path = "serde_json::Map", reason = "DTO-first: use a typed DTO instead of untyped JSON (serde_json::Map)." },
+]
+
+# WorkspaceRoot is the addressing anchor: a process never reads its own working
+# directory to decide where a workspace is, and a test that changes the
+# process-wide directory must say why it is allowed to.
+disallowed-methods = [
+  { path = "std::env::current_dir", reason = "Address workspaces through WorkspaceRoot, never through the process working directory." },
+  { path = "std::env::set_current_dir", reason = "Address workspaces through WorkspaceRoot; a process-wide directory change is never the addressing mechanism." },
+]

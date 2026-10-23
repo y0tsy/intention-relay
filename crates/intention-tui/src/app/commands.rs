@@ -1,16 +1,17 @@
 //! The one command registry: the names, arguments, descriptions, and
-//! categories a submitted line and the input's hint band both read.
+//! categories every terminal front end reads.
 //!
-//! A command exists exactly once, as an entry of [`COMMANDS`]. The submission
-//! path resolves a typed line through [`resolve_command`] and runs the
-//! transition its entry names, the unknown-command notice lists the same
-//! entries through [`known_commands`], and the hint band ranks the same
-//! entries - and the values of a declared argument - through [`CommandMenu`],
-//! so a command can never exist in one surface and not in another. Both
-//! notices a resolved line can answer with are built here too, from the same
+//! A command exists exactly once, as an entry of [`COMMANDS`]. The fullscreen
+//! UI's submission path and the line REPL's both resolve a typed line through
+//! [`resolve_command`] and run the transition its entry names, the
+//! unknown-command notice of either surface lists the same entries through
+//! [`known_commands`], and the fullscreen hint band ranks the same entries -
+//! and the values of a declared argument - through [`CommandMenu`], so a
+//! command can never exist in one surface and not in another. Both notices a
+//! resolved line can answer with are built here too, from the same
 //! declarations. Nothing outside this module spells a command name.
 
-use super::Theme;
+use super::ThemePreference;
 
 /// One value one declared command argument accepts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -30,6 +31,9 @@ pub struct ArgumentSpec {
     /// The argument's name, as the band's third column and the notices spell it.
     pub name: &'static str,
     /// Every value the argument accepts, in the order the band lists them.
+    ///
+    /// An empty slice is a free-form argument: the line passes any word
+    /// through to the transition that reads it, and the band lists no value.
     pub values: &'static [ValueSpec],
     /// Whether a submitted line must spell one of the values.
     ///
@@ -40,6 +44,12 @@ pub struct ArgumentSpec {
 }
 
 impl ArgumentSpec {
+    /// Returns whether the argument accepts any word instead of declared values.
+    #[must_use]
+    pub const fn is_free_form(self) -> bool {
+        self.values.is_empty()
+    }
+
     /// Returns the position of the declared value one word names, however the
     /// word is spelled.
     fn value_position(self, word: &str) -> Option<usize> {
@@ -82,36 +92,40 @@ pub struct CommandSpec {
 pub enum CommandAction {
     /// Create a session in the workspace and open it.
     NewSession,
+    /// Open the session the command's one argument names.
+    OpenSession,
     /// Open the sessions browser and refresh the list it shows.
     SessionsBrowser,
     /// Select the theme one argument names, or open the theme picker when the
     /// line omitted the argument.
     Theme,
+    /// Leave the front end.
+    Quit,
 }
 
 /// The values `/theme` accepts, in the order the picker draws its rows.
 ///
-/// The list is derived from [`Theme::ALL`], so the command surface cannot
-/// declare a value the theme vocabulary does not carry, nor call a theme by a
-/// name of its own: each value is spelled by the wire vocabulary itself
-/// (`ThemeDto::as_str`), the same word the setting is serialized with. A theme
-/// added to `ALL` extends this declaration, and the command surface and the
-/// picker panel can never disagree about what the two themes are called or
-/// which surface each one paints.
-static THEME_VALUES: [ValueSpec; Theme::ALL.len()] = theme_values();
+/// The list is derived from [`ThemePreference::ALL`], so the command surface
+/// cannot declare a value the preference vocabulary does not carry, nor call a
+/// preference by a name of its own: each value is spelled by the vocabulary
+/// itself ([`ThemePreference::as_str`]), the same word the local settings file
+/// stores. A preference added to `ALL` extends this declaration, and the
+/// command surface and the picker panel can never disagree about what the three
+/// preferences are called or which palette each one paints.
+static THEME_VALUES: [ValueSpec; ThemePreference::ALL.len()] = theme_values();
 
-/// Returns the theme vocabulary as the declared values of `/theme`.
-const fn theme_values() -> [ValueSpec; Theme::ALL.len()] {
+/// Returns the preference vocabulary as the declared values of `/theme`.
+const fn theme_values() -> [ValueSpec; ThemePreference::ALL.len()] {
     let mut values = [ValueSpec {
         value: "",
         description: "",
-    }; Theme::ALL.len()];
+    }; ThemePreference::ALL.len()];
     let mut position = 0;
-    while position < Theme::ALL.len() {
-        let theme = Theme::ALL[position];
+    while position < ThemePreference::ALL.len() {
+        let preference = ThemePreference::ALL[position];
         values[position] = ValueSpec {
-            value: theme.dto().as_str(),
-            description: theme.description(),
+            value: preference.as_str(),
+            description: preference.description(),
         };
         position += 1;
     }
@@ -125,8 +139,19 @@ static THEME_ARGUMENT: [ArgumentSpec; 1] = [ArgumentSpec {
     required: false,
 }];
 
+/// The one argument `/session` declares: the identifier of the session to open.
+///
+/// The identifier is a durable value no declaration can list, so the argument
+/// is free-form: the transition that opens the session parses the word, and the
+/// band lists no value for it.
+static SESSION_ARGUMENT: [ArgumentSpec; 1] = [ArgumentSpec {
+    name: "session",
+    values: &[],
+    required: true,
+}];
+
 /// Every command the chat knows, in the order a menu lists them.
-pub const COMMANDS: [CommandSpec; 3] = [
+pub const COMMANDS: [CommandSpec; 5] = [
     CommandSpec {
         name: "new",
         description: "create a new session in this workspace",
@@ -148,6 +173,20 @@ pub const COMMANDS: [CommandSpec; 3] = [
         arguments: &THEME_ARGUMENT,
         action: CommandAction::Theme,
     },
+    CommandSpec {
+        name: "session",
+        description: "open the session one identifier names",
+        category: "Session",
+        arguments: &SESSION_ARGUMENT,
+        action: CommandAction::OpenSession,
+    },
+    CommandSpec {
+        name: "quit",
+        description: "leave the front end",
+        category: "Session",
+        arguments: &[],
+        action: CommandAction::Quit,
+    },
 ];
 
 impl CommandSpec {
@@ -155,6 +194,12 @@ impl CommandSpec {
     #[must_use]
     pub fn typed_name(self) -> String {
         format!("/{}", self.name)
+    }
+
+    /// Returns the transition a submitted command of this name runs.
+    #[must_use]
+    pub const fn action(self) -> CommandAction {
+        self.action
     }
 }
 
@@ -529,10 +574,9 @@ pub enum MenuMove {
 pub struct CommandInvocation {
     /// The command the line named.
     spec: CommandSpec,
-    /// The position of each declared argument's resolved value within that
-    /// argument's declaration, in declaration order; `None` for an optional
-    /// argument the line omitted.
-    values: Vec<Option<usize>>,
+    /// The word the line gave each declared argument, in declaration order;
+    /// `None` for an optional argument the line omitted.
+    words: Vec<Option<String>>,
 }
 
 impl CommandInvocation {
@@ -545,7 +589,8 @@ impl CommandInvocation {
     /// Returns the value the declared argument at `index` was given, if any.
     ///
     /// The index is the argument's position in the command's declaration,
-    /// which is the order the words on the line fill.
+    /// which is the order the words on the line fill. A free-form argument
+    /// declares no value, so its word is read through [`Self::word`].
     #[must_use]
     pub fn value(&self, index: usize) -> Option<&'static str> {
         let position = self.value_index(index)?;
@@ -559,7 +604,7 @@ impl CommandInvocation {
 
     /// Returns the position of the value the declared argument at `index` was
     /// given within that argument's declaration, or `None` when the line
-    /// omitted the argument.
+    /// omitted the argument or the argument declares no values.
     ///
     /// The position is the value's own place in the declaration, which is what
     /// a transition reads when the declaration is derived from the vocabulary
@@ -567,7 +612,19 @@ impl CommandInvocation {
     /// position here.
     #[must_use]
     pub fn value_index(&self, index: usize) -> Option<usize> {
-        self.values.get(index).copied().flatten()
+        let argument = self.spec.arguments.get(index)?;
+        let word = self.words.get(index)?.as_deref()?;
+        argument.value_position(word)
+    }
+
+    /// Returns the word the declared argument at `index` was given, exactly as
+    /// the line spelled it.
+    ///
+    /// A free-form argument has no declared values, so this is how its
+    /// transition reads the identifier the user typed.
+    #[must_use]
+    pub fn word(&self, index: usize) -> Option<&str> {
+        self.words.get(index)?.as_deref()
     }
 }
 
@@ -620,6 +677,9 @@ impl CommandResolution {
                 argument.name,
                 argument.accepted_values()
             )),
+            Self::MissingArgument { argument } if argument.is_free_form() => {
+                Some(format!("missing argument \"{}\"", argument.name))
+            }
             Self::MissingArgument { argument } => Some(format!(
                 "missing argument \"{}\" - expected {}",
                 argument.name,
@@ -665,7 +725,7 @@ pub fn resolve_command(line: &str) -> CommandResolution {
 
 /// Returns the resolution of one command's argument words.
 fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
-    let mut values = Vec::with_capacity(spec.arguments.len());
+    let mut given = Vec::with_capacity(spec.arguments.len());
     for (index, argument) in spec.arguments.iter().enumerate() {
         match words.get(index) {
             None => {
@@ -674,17 +734,19 @@ fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
                         argument: *argument,
                     };
                 }
-                values.push(None);
+                given.push(None);
             }
-            Some(word) => match argument.value_position(word) {
-                Some(position) => values.push(Some(position)),
-                None => {
-                    return CommandResolution::UnknownValue {
-                        argument: *argument,
-                        value: (*word).to_owned(),
-                    };
-                }
-            },
+            // A free-form argument declares no value, so any word fills it: the
+            // transition that reads the argument parses the word.
+            Some(word) if argument.is_free_form() || argument.value_position(word).is_some() => {
+                given.push(Some((*word).to_owned()));
+            }
+            Some(word) => {
+                return CommandResolution::UnknownValue {
+                    argument: *argument,
+                    value: (*word).to_owned(),
+                };
+            }
         }
     }
     if let Some(unexpected) = words.get(spec.arguments.len()) {
@@ -692,15 +754,11 @@ fn resolve_arguments(spec: CommandSpec, words: &[&str]) -> CommandResolution {
             value: (*unexpected).to_owned(),
         };
     }
-    CommandResolution::Invocation(CommandInvocation { spec, values })
+    CommandResolution::Invocation(CommandInvocation { spec, words: given })
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Registry tests assert the declared commands and their ranking directly."
-    )]
 
     use super::{
         ArgumentSpec, COMMANDS, CommandAction, CommandMenu, CommandResolution, CommandSpec,
@@ -738,7 +796,7 @@ mod tests {
 
     #[test]
     fn the_registry_names_every_command_once_with_a_description_and_category() {
-        assert_eq!(COMMANDS.len(), 3, "the chat knows three commands today");
+        assert_eq!(COMMANDS.len(), 5, "the chat knows five commands today");
         for command in COMMANDS {
             assert!(
                 !command.name.starts_with('/'),
@@ -755,8 +813,8 @@ mod tests {
                     command.name
                 );
                 assert!(
-                    !argument.values.is_empty(),
-                    "the {} argument declares values",
+                    !argument.is_free_form() || argument.required,
+                    "the free-form {} argument is one the line must spell",
                     argument.name
                 );
                 for value in argument.values {
@@ -774,7 +832,11 @@ mod tests {
         assert_eq!(names.len(), COMMANDS.len(), "a name is registered once");
         assert_eq!(command_named("new").expect("new is registered").name, "new");
         assert_eq!(command_named("connectors"), None);
-        assert_eq!(known_commands(), "/new /sessions /theme");
+        assert_eq!(
+            known_commands(),
+            "/new /sessions /theme /session /quit",
+            "the one set both front ends list"
+        );
     }
 
     #[test]
@@ -792,13 +854,53 @@ mod tests {
                 .iter()
                 .map(|value| value.value)
                 .collect::<Vec<_>>(),
-            vec!["light", "dark"],
-            "the declared values are the theme vocabulary in picker order"
+            vec!["auto", "light", "dark"],
+            "the declared values are the preference vocabulary in picker order"
         );
         assert_eq!(
             argument.values[0].description,
-            crate::app::Theme::Light.description(),
-            "the command surface reads the theme's own row vocabulary"
+            crate::app::ThemePreference::Auto.description(),
+            "the command surface reads the preference's own row vocabulary"
+        );
+        assert_eq!(
+            argument.values[1].description,
+            crate::app::ThemePreference::Light.description(),
+            "every declared value reads its own row vocabulary"
+        );
+    }
+
+    #[test]
+    fn the_session_command_declares_one_required_free_form_argument() {
+        let session = command_named("session").expect("session is registered");
+        assert_eq!(session.action(), CommandAction::OpenSession);
+        assert_eq!(session.arguments.len(), 1);
+        let argument = session.arguments[0];
+        assert_eq!(argument.name, "session");
+        assert!(
+            argument.required,
+            "a line with no identifier names no session"
+        );
+        assert!(
+            argument.is_free_form(),
+            "a durable identifier is no value a declaration can list"
+        );
+        let invocation = resolve_command("session 0b1a2c3d")
+            .into_invocation()
+            .expect("any word fills a free-form argument");
+        assert_eq!(invocation.word(0), Some("0b1a2c3d"));
+        assert_eq!(
+            invocation.value(0),
+            None,
+            "a free-form argument declares no value to select"
+        );
+        assert_eq!(
+            resolve_command("session").notice().as_deref(),
+            Some("missing argument \"session\""),
+            "the notice names the argument without inventing values"
+        );
+        assert!(
+            command_word("/session ", 9).is_some_and(|word| word.argument == Some(argument)),
+            "the caret after the name sits in the free-form argument"
         );
     }
 
@@ -812,7 +914,7 @@ mod tests {
         assert_eq!(invocation.value(1), None, "no second argument is declared");
         assert_eq!(
             invocation.value_index(0),
-            Some(1),
+            Some(2),
             "the resolved value carries its own position in the declaration"
         );
         assert_eq!(invocation.value_index(1), None);
@@ -825,7 +927,7 @@ mod tests {
             Some("dark"),
             "the canonical spelling is what a caller sees"
         );
-        assert_eq!(invocation.value_index(0), Some(1));
+        assert_eq!(invocation.value_index(0), Some(2));
 
         let invocation = resolve_command("theme")
             .into_invocation()
@@ -842,7 +944,7 @@ mod tests {
     fn a_value_no_declaration_answers_to_names_the_accepted_values() {
         assert_eq!(
             resolve_command("theme purple").notice().as_deref(),
-            Some("unknown theme \"purple\" - expected light or dark")
+            Some("unknown theme \"purple\" - expected auto or light or dark")
         );
         assert_eq!(
             resolve_command("new purple").into_invocation(),
@@ -967,14 +1069,18 @@ mod tests {
         assert_eq!(match_rank("zzz", "connectors"), None);
         assert_eq!(
             suggestions(""),
-            vec![0, 1, 2],
+            vec![0, 1, 2, 3, 4],
             "an empty filter keeps the registry order"
         );
-        assert_eq!(suggestions("s"), vec![1], "only /sessions starts with s");
+        assert_eq!(
+            suggestions("s"),
+            vec![1, 3],
+            "only /sessions and /session start with s"
+        );
         assert_eq!(
             suggestions("n"),
-            vec![0, 1],
-            "/new starts with n, and n is also an ordered subsequence of sessions"
+            vec![0, 1, 3],
+            "/new starts with n, and n is also an ordered subsequence of the two session commands"
         );
         assert!(suggestions("zzz").is_empty());
     }
@@ -983,11 +1089,11 @@ mod tests {
     fn a_menu_opens_only_for_a_filter_that_selects_a_command() {
         assert!(menu_of("/zzz").is_none(), "no match, no menu");
 
-        let menu = menu_of("/se").expect("se selects sessions");
+        let menu = menu_of("/se").expect("se selects the two session commands");
         assert_eq!(menu.kind(), MenuKind::Command);
-        assert_eq!(menu.len(), 1);
+        assert_eq!(menu.len(), 2);
         assert_eq!(menu.highlight(), 0, "the best match starts highlighted");
-        assert_eq!(labels(&menu), vec!["/sessions"]);
+        assert_eq!(labels(&menu), vec!["/sessions", "/session"]);
         assert_eq!(
             menu.highlighted().expect("a row is highlighted").label(),
             "/sessions"
@@ -1050,7 +1156,7 @@ mod tests {
         );
         assert_eq!(
             labels(&menu),
-            vec!["light", "dark"],
+            vec!["auto", "light", "dark"],
             "an empty filter lists every value in declaration order"
         );
 
@@ -1089,12 +1195,16 @@ mod tests {
         assert_eq!(menu.highlight(), 0);
         menu.move_highlight(MenuMove::Up);
         assert_eq!(menu.highlight(), 0, "the first row is the top");
+        for expected in 1..menu.len() {
+            menu.move_highlight(MenuMove::Down);
+            assert_eq!(menu.highlight(), expected);
+        }
         menu.move_highlight(MenuMove::Down);
-        assert_eq!(menu.highlight(), 1);
-        menu.move_highlight(MenuMove::Down);
-        assert_eq!(menu.highlight(), 2);
-        menu.move_highlight(MenuMove::Down);
-        assert_eq!(menu.highlight(), 2, "the last row is the bottom");
+        assert_eq!(
+            menu.highlight(),
+            menu.len() - 1,
+            "the last row is the bottom"
+        );
     }
 
     #[test]

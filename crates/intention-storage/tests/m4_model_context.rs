@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "M4 SQLite model-context fixtures use expect for precise diagnostics."
-)]
-
 #[allow(
     dead_code,
     reason = "Shared fixtures serve every integration target in this crate; each target compiles the subset its suite calls."
@@ -11,16 +6,12 @@ mod common;
 
 use common::{create_session, repository, time};
 
-use intention_config::{
-    ConfigPathDto, ConfigSnapshotDto, ConfigSourceDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ConfigSnapshotDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
-    BoundedText, ConfigRevisionId, FinishReasonDto, IdempotencyKey, RunId, SchemaVersionDto,
-    SessionId, TextResult, ToolCallId, ToolIdentityDto, ToolResult, ToolResultRowDto,
-    ToolResultStatusDto, ToolRowDto, UsageDto,
+    BoundedText, FinishReasonDto, RunId, SessionId, TextResult, ToolCallId, ToolIdentityDto,
+    ToolResult, ToolResultRowDto, ToolResultStatusDto, ToolRowDto, UsageDto,
 };
 use intention_proto::{MessageKindDto, MessageProjectionDto, NewMessageDto, RunStatusDto};
-use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, RunOutcomeDto, SqliteStorageRepository, StorageRepositoryDto,
 };
@@ -32,32 +23,19 @@ fn starting_run_model_context_rebuilds_the_committed_transcript_in_insertion_ord
 
     let first_run = start_run(&repository, session_id, "first user", "first-model", 2);
     let call_id = ToolCallId::new();
-    // A result row commits atomically with its lifecycle evidence, so the
-    // fixture commits through the one writer the transcript reads expect.
-    repository
-        .write_tool_result(
-            ToolResultEvidenceDto::new(
-                session_id,
-                first_run,
-                call_id,
-                "read",
-                ToolResultStatusDto::Completed,
-                "file contents",
-                Vec::new(),
-                time(3),
-            )
-            .expect("fixture evidence is valid"),
-            NewMessageDto::new(
-                session_id,
-                Some(first_run),
-                MessageKindDto::ToolResult,
-                "file contents",
-                None,
-                Some(read_result_row(call_id)),
-            )
-            .expect("fixture answering row is valid"),
-        )
-        .expect("fixture tool result commits");
+    // A result row commits as one tool-result message carrying its own typed
+    // status, payload, and metadata projection, so the fixture commits through
+    // the one writer the transcript reads expect.
+    append(
+        &repository,
+        session_id,
+        Some(first_run),
+        MessageKindDto::ToolResult,
+        "file contents",
+        None,
+        Some(read_result_row(call_id)),
+        3,
+    );
     append(
         &repository,
         session_id,
@@ -247,7 +225,7 @@ fn model_context_rejects_unknown_cross_session_and_non_starting_runs_safely() {
             .expect_err("non-starting run is unavailable"),
     ];
     for error in errors {
-        assert_eq!(error.code(), "run_model_context_unavailable");
+        assert_eq!(error.code(), "storage_unavailable");
         let rendered = error.to_string();
         assert!(!rendered.contains("recognizable-fixture-credential"));
         assert!(!rendered.contains("model-context.toml"));
@@ -262,22 +240,13 @@ fn start_run(
     model: &str,
     event_time: i64,
 ) -> RunId {
-    let run_id = RunId::new();
     let outcome = repository
-        .accept_user_turn(
-            session_id,
-            IdempotencyKey::new(),
-            content,
-            run_id,
-            snapshot(model),
-            time(event_time),
-        )
+        .accept_user_turn(session_id, content, snapshot(model), time(event_time))
         .expect("turn starts");
     match outcome {
         AcceptedTurnOutcomeDto::Started { run, message } => {
-            assert_eq!(run.run_id(), run_id);
             assert_eq!(message.text(), content);
-            run_id
+            run.run_id()
         }
         AcceptedTurnOutcomeDto::Pending(_) => unreachable!("a fresh session starts the run"),
     }
@@ -352,26 +321,9 @@ fn read_result_row(call_id: ToolCallId) -> ToolRowDto {
 }
 
 fn snapshot(model: &str) -> ConfigSnapshotDto {
-    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-        format!(
-            "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
-        ),
-        ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("model-context.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("configuration path is absolute"),
-        ),
-    ))
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(format!(
+        "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"{model}\"\ncredential = \"recognizable-fixture-credential\""
+    )))
     .expect("safe configuration resolves");
-    ConfigSnapshotDto::new(
-        SchemaVersionDto::new(1, 0),
-        ConfigRevisionId::new(),
-        time(1),
-        resolved,
-    )
-    .expect("safe snapshot is valid")
+    ConfigSnapshotDto::new(time(1), resolved)
 }

@@ -1,6 +1,6 @@
-#![allow(
-    clippy::expect_used,
-    reason = "M3 contract fixtures use expect for precise test diagnostics."
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
 )]
 
 #[allow(
@@ -12,13 +12,12 @@ mod common;
 use common::{fixture_message, fixture_projection};
 
 use intention_proto::{
-    BoundedText, ConfigRevisionId, CreateSessionAcceptedDto, ExecuteResult, MessageId,
-    MessageKindDto, MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto,
-    RemoveTurnAcceptedDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionProjectionDto, SessionSnapshotDto,
-    TextResult, TimestampDto, ToolCallId, ToolCallRowDto, ToolId, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
-    TurnId, WorkspaceRootDto, validate_run_status_transition,
+    BoundedText, CreateSessionAcceptedDto, ExecuteResult, MessageId, MessageKindDto,
+    MessageProjectionDto, PendingTurnProjectionDto, ProtocolResultDto, RunId, RunModeDto,
+    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionProjectionDto, SessionSnapshotDto, TextResult, TimestampDto, ToolCallId, ToolCallRowDto,
+    ToolId, ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto, TurnId, WorkspaceRootDto, validate_run_status_transition,
 };
 use intention_proto::{ProjectId, SessionId, WorkspaceId};
 
@@ -47,18 +46,15 @@ fn typed_results_carry_required_durable_evidence() {
         TurnId::new(),
         SendUserTurnOutcomeDto::Started {
             run_id: RunId::new(),
-            config_revision_id: ConfigRevisionId::new(),
         },
     );
     let pending =
         SendUserTurnAcceptedDto::new(session_id, TurnId::new(), SendUserTurnOutcomeDto::Pending);
-    let removed = RemoveTurnAcceptedDto::new(session_id, TurnId::new());
 
     for result in [
         ProtocolResultDto::SessionCreated(created),
         ProtocolResultDto::TurnAccepted(started),
         ProtocolResultDto::TurnAccepted(pending),
-        ProtocolResultDto::TurnRemoved(removed),
     ] {
         let encoded = serde_json::to_string(&result).expect("result serializes");
         assert!(
@@ -128,110 +124,11 @@ fn session_snapshot_validation_covers_m3_failure_boundaries() {
 }
 
 #[test]
-fn a_session_projection_reports_its_omitted_pending_turn_count() {
-    let session_id = SessionId::new();
-    let projection = SessionProjectionDto::new(
-        ProjectId::new(),
-        session_id,
-        WorkspaceId::new(),
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        Vec::new(),
-    )
-    .expect("projection is valid");
-    assert_eq!(
-        projection.pending_turns_omitted(),
-        0,
-        "an untrimmed projection omits nothing"
-    );
-
-    let trimmed = projection.with_pending_turns_omitted(7);
-    assert_eq!(trimmed.pending_turns_omitted(), 7);
-    assert!(trimmed.pending_turns().is_empty());
-    let decoded: SessionProjectionDto = serde_json::from_str(
-        &serde_json::to_string(&trimmed).expect("the trimmed projection serializes"),
-    )
-    .expect("the trimmed projection decodes");
-    assert_eq!(decoded, trimmed);
-    assert_eq!(
-        decoded.pending_turns_omitted(),
-        7,
-        "the omitted count survives the wire"
-    );
-
-    let absent = serde_json::from_value::<SessionProjectionDto>(serde_json::json!({
-        "project_id": ProjectId::new(),
-        "session_id": session_id,
-        "workspace_id": WorkspaceId::new(),
-        "workspace_root": workspace_root(),
-        "mode": "build",
-        "pending_turns": []
-    }))
-    .expect("a projection without the count decodes");
-    assert_eq!(
-        absent.pending_turns_omitted(),
-        0,
-        "a projection that carries no count omits nothing"
-    );
-}
-
-#[test]
 fn session_projection_keeps_its_closed_shape_and_optional_state() {
     let project_id = ProjectId::new();
     let session_id = SessionId::new();
     let workspace_id = WorkspaceId::new();
 
-    let first = PendingTurnProjectionDto::new(session_id, TurnId::new(), "first")
-        .expect("pending turn is valid");
-    let second = PendingTurnProjectionDto::new(session_id, TurnId::new(), "second")
-        .expect("pending turn is valid");
-    let ordered = SessionProjectionDto::new(
-        project_id,
-        session_id,
-        workspace_id,
-        workspace_root(),
-        RunModeDto::Build,
-        None,
-        None,
-        vec![first.clone(), second],
-    )
-    .expect("ordered pending turns are coherent");
-    assert_eq!(ordered.pending_turns().len(), 2);
-    assert_eq!(ordered.pending_turns()[0].content(), "first");
-    assert_eq!(ordered.pending_turns()[1].content(), "second");
-    assert!(
-        SessionProjectionDto::new(
-            project_id,
-            session_id,
-            workspace_id,
-            workspace_root(),
-            RunModeDto::Build,
-            None,
-            None,
-            vec![first.clone(), first],
-        )
-        .is_err()
-    );
-    let third = PendingTurnProjectionDto::new(session_id, TurnId::new(), "third")
-        .expect("pending turn is valid");
-    let fourth = PendingTurnProjectionDto::new(session_id, TurnId::new(), "fourth")
-        .expect("pending turn is valid");
-    assert!(
-        SessionProjectionDto::new(
-            project_id,
-            session_id,
-            workspace_id,
-            workspace_root(),
-            RunModeDto::Build,
-            None,
-            None,
-            vec![third.clone(), fourth, third],
-        )
-        .is_err(),
-        "a repeated pending turn identity is rejected wherever it appears"
-    );
     assert!(PendingTurnProjectionDto::new(session_id, TurnId::new(), "   ").is_err());
     assert!(
         serde_json::from_value::<PendingTurnProjectionDto>(serde_json::json!({
@@ -242,29 +139,11 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         .is_err()
     );
 
-    let foreign_turn =
-        PendingTurnProjectionDto::new(SessionId::new(), TurnId::new(), "other session")
-            .expect("pending fixture is valid");
-    assert!(
-        SessionProjectionDto::new(
-            project_id,
-            session_id,
-            workspace_id,
-            workspace_root(),
-            RunModeDto::Build,
-            None,
-            None,
-            vec![foreign_turn],
-        )
-        .is_err()
-    );
-
     let foreign_run = RunProjectionDto::new(
         SessionId::new(),
         RunId::new(),
         TurnId::new(),
         RunStatusDto::Running,
-        ConfigRevisionId::new(),
         None,
         fixture_started_at(),
         None,
@@ -278,20 +157,16 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
             workspace_id,
             workspace_root(),
             RunModeDto::Build,
-            None,
             Some(foreign_run),
-            Vec::new(),
         )
         .is_err()
     );
 
-    let revision = ConfigRevisionId::new();
     let run = RunProjectionDto::new(
         session_id,
         RunId::new(),
         TurnId::new(),
         RunStatusDto::Running,
-        revision,
         None,
         fixture_started_at(),
         None,
@@ -300,23 +175,18 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     .expect("fixture run projection is valid");
     assert_eq!(run.session_id(), session_id);
     assert_eq!(run.status(), RunStatusDto::Running);
-    assert_eq!(run.config_revision_id(), revision);
     let decoded_run: RunProjectionDto =
         serde_json::from_str(&serde_json::to_string(&run).expect("run serializes"))
             .expect("run decodes");
     assert_eq!(decoded_run, run);
 
-    let pending = PendingTurnProjectionDto::new(session_id, TurnId::new(), "pending")
-        .expect("pending turn is valid");
     let projection = SessionProjectionDto::new(
         project_id,
         session_id,
         workspace_id,
         workspace_root(),
         RunModeDto::Plan,
-        Some(revision),
         Some(run),
-        vec![pending],
     )
     .expect("projection is valid");
     assert_eq!(projection.project_id(), project_id);
@@ -324,9 +194,7 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
     assert_eq!(projection.workspace_id(), workspace_id);
     assert_eq!(projection.workspace_root(), &workspace_root());
     assert_eq!(projection.mode(), RunModeDto::Plan);
-    assert_eq!(projection.config_revision_id(), Some(revision));
     assert_eq!(projection.active_run(), Some(run));
-    assert_eq!(projection.pending_turns().len(), 1);
     let decoded: SessionProjectionDto =
         serde_json::from_str(&serde_json::to_string(&projection).expect("projection serializes"))
             .expect("projection decodes");
@@ -337,14 +205,11 @@ fn session_projection_keeps_its_closed_shape_and_optional_state() {
         "session_id": session_id,
         "workspace_id": workspace_id,
         "workspace_root": workspace_root(),
-        "mode": "build",
-        "pending_turns": []
+        "mode": "build"
     });
     let decoded: SessionProjectionDto =
         serde_json::from_value(minimal).expect("optional state defaults to absent");
-    assert_eq!(decoded.config_revision_id(), None);
     assert_eq!(decoded.active_run(), None);
-    assert!(decoded.pending_turns().is_empty());
 }
 
 #[test]

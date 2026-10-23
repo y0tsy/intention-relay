@@ -1,6 +1,6 @@
 ---
 name: plan-intention-relay-milestone
-description: Prepare an approved implementation specification for one named Intention Relay roadmap milestone through repository research, detailed user decision briefs, a visible pre-draft, and a consolidated draft. Use when the user asks to execute, prepare, or plan a specific milestone from docs/intention-relay. Do not use for implementation from an approved specification, generic planning outside this repository, review-only work, or M7 physical plan artifacts.
+description: Prepare an approved implementation specification for one named Intention Relay roadmap milestone through repository research, detailed user decision briefs, a visible pre-draft, and a consolidated draft. Use when the user asks to execute, prepare, or plan a specific milestone from docs/intention-relay. Do not use for implementation from an approved specification, generic planning outside this repository, review-only work, or M5+ Slice 3 physical plan artifacts.
 allowed-tools:
   - Read
   - Grep
@@ -75,7 +75,7 @@ Determine and report:
 
 - predecessor milestones that must be accepted first;
 - whether the target milestone is unstarted, in progress, closed, or has an evidence/implementation gap;
-- architecture contracts, quality tiers, feature profiles, and known deferrals that constrain the milestone;
+- architecture contracts, coverage floors, the single feature configuration, and known deferrals that constrain the milestone;
 - requirements that are already decided, implementation-required, or deferred.
 
 ### Closed or corrective milestones
@@ -150,7 +150,7 @@ The draft must:
 - define observable outcomes and failure behavior, not only code structure;
 - identify test-first DTO, domain, contract, architecture, integration, and outcome evidence appropriate to the slice;
 - map every quality requirement to the root Makefile contract and machine-readable policy changes where applicable;
-- preserve established coverage tiers and feature-profile rules;
+- preserve the established coverage floors and the single feature configuration;
 - list repository documentation that must change in the same slice.
 
 Use a Mermaid diagram only where a data flow, lifecycle, or relationship would otherwise be unclear. Keep labels short enough for terminal rendering.
@@ -192,4 +192,21 @@ Classify unrelated failures, such as Factory BYOK/provider configuration, unavai
 
 ## Final self-check
 
-Read [checklists.md](checklists.md) before submitting the specification. Verify that every claimed file, command, acceptance criterion, and deferred boundary is supported by current repository evidence.
+Before submitting the specification, verify:
+
+- **Discovery:** one target milestone is named (or a bounded ordered sequence is approved); `AGENTS.md`, the
+  documentation index, the roadmap, and the TDD/TTD and quality-gate policies were read; predecessor status is
+  classified; every crate, test target, policy path, and command named in the draft was confirmed in the current
+  repository; the working tree was inspected and existing changes were treated as user work.
+- **Questions:** every question is materially unresolved by source documentation or the user request; each option
+  states what it is, its benefits, drawbacks, and scope impact; a recommendation is labelled as one; no round carries
+  more than four independent decisions; every confirmed answer is recorded in the pre-draft decision record.
+- **Draft:** objective, scope, ownership, dependencies, invariants, non-goals, and failure behavior are explicit;
+  decided, implementation-required, deferred, and blocked items are visibly distinct; every cross-crate or
+  cross-process boundary is DTO-first and preserves adapter isolation; tests are named by layer; observable acceptance
+  outcomes are stated separately from implementation details; coverage floors, the single feature configuration,
+  pinning, and Makefile requirements are included when affected; required policy, quality, architecture, and README
+  updates are listed; deferrals name their owner and are not described as delivered behavior.
+- **Specification:** new files are marked new; each step names purpose, boundary owner, behavior, tests first,
+  validation, and acceptance evidence; `make quick` is the iteration loop and `make verify` the acceptance gate; any
+  commit grouping was requested by the user and stays atomic; no unresolved alternative remains.

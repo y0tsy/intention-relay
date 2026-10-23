@@ -1,4 +1,4 @@
-//! The revue key vocabulary mapped onto the shared core's actions.
+//! The terminal's key vocabulary mapped onto the shared core's actions.
 //!
 //! One mapping serves every screen: the action a key asks for depends on the
 //! screen the shared state reports, so a letter is an input character in the
@@ -38,13 +38,13 @@
 //! The transcript's pointer path - selection, drag-scroll, and the marker click
 //! - lives in [`super`], because it needs the frame's published geometry.
 
-use revue::event::{Key, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::{
     Action, AppState, BrowserCursorMove, InputCursorMove, InputHistoryMove, MenuMove, Screen,
 };
 
-/// Returns the action one revue key press asks for on the current screen.
+/// Returns the action one key press asks for on the current screen.
 ///
 /// The state is what tells the two meanings of the vertical arrows apart: the
 /// hint band is open only while the state says so, and only then do the arrows
@@ -57,6 +57,11 @@ pub(super) fn key_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
     }
 }
 
+/// Returns whether one press carries the control modifier.
+const fn control(key: &KeyEvent) -> bool {
+    key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 /// Returns the action one key press asks for on the chat screen.
 ///
 /// `Up`, `Down`, and `Tab` are the three keys the hint menu claims; `Enter` is
@@ -64,21 +69,21 @@ pub(super) fn key_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
 /// menu before it runs anything, so the one action `Enter` carries keeps one
 /// meaning.
 fn chat_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
-    match key.key {
-        Key::Char('q') if key.ctrl => Some(Action::Quit),
-        Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
-        Key::Char('e') if key.ctrl => Some(Action::ExpandReasoning { row: None }),
-        Key::Char(character) if !key.ctrl => Some(Action::InputChar(character)),
-        Key::Enter => Some(Action::InputSubmitted),
-        Key::Backspace => Some(Action::InputBackspace),
-        Key::Left => Some(Action::MoveInputCursor(InputCursorMove::Left)),
-        Key::Right => Some(Action::MoveInputCursor(InputCursorMove::Right)),
-        Key::Home => Some(Action::MoveInputCursor(InputCursorMove::Home)),
-        Key::End => Some(Action::MoveInputCursor(InputCursorMove::End)),
-        Key::Up => vertical_action(state, MenuMove::Up),
-        Key::Down => vertical_action(state, MenuMove::Down),
-        Key::Tab if state.command_menu().is_some() => Some(Action::MenuAccept),
-        Key::Escape => Some(Action::EscapePressed),
+    match key.code {
+        KeyCode::Char('q') if control(key) => Some(Action::Quit),
+        KeyCode::Char('c') if control(key) => Some(Action::CtrlCPressed),
+        KeyCode::Char('e') if control(key) => Some(Action::ExpandReasoning { row: None }),
+        KeyCode::Char(character) if !control(key) => Some(Action::InputChar(character)),
+        KeyCode::Enter => Some(Action::InputSubmitted),
+        KeyCode::Backspace => Some(Action::InputBackspace),
+        KeyCode::Left => Some(Action::MoveInputCursor(InputCursorMove::Left)),
+        KeyCode::Right => Some(Action::MoveInputCursor(InputCursorMove::Right)),
+        KeyCode::Home => Some(Action::MoveInputCursor(InputCursorMove::Home)),
+        KeyCode::End => Some(Action::MoveInputCursor(InputCursorMove::End)),
+        KeyCode::Up => vertical_action(state, MenuMove::Up),
+        KeyCode::Down => vertical_action(state, MenuMove::Down),
+        KeyCode::Tab if state.command_menu().is_some() => Some(Action::MenuAccept),
+        KeyCode::Esc => Some(Action::EscapePressed),
         _ => None,
     }
 }
@@ -116,54 +121,66 @@ fn vertical_action(state: &AppState, direction: MenuMove) -> Option<Action> {
 /// the browser needs no navigation letters. Ctrl+C and Ctrl+Q keep the meanings
 /// the chat screen gives them.
 const fn sessions_action(key: &KeyEvent) -> Option<Action> {
-    match key.key {
-        Key::Char('q') if key.ctrl => Some(Action::Quit),
-        Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
-        Key::Char('r') if key.ctrl => Some(Action::BrowserRenameRequested),
-        Key::Char('x') if key.ctrl => Some(Action::BrowserArchiveRequested),
-        Key::Char('f') if key.ctrl => Some(Action::BrowserTreeRequested),
-        Key::Char(character) if !key.ctrl => Some(Action::BrowserFilterChar(character)),
-        Key::Backspace => Some(Action::BrowserFilterBackspace),
-        Key::Up => Some(Action::BrowserCursorMove(BrowserCursorMove::Up)),
-        Key::Down => Some(Action::BrowserCursorMove(BrowserCursorMove::Down)),
-        Key::Tab => Some(Action::BrowserTabNext),
-        Key::BackTab => Some(Action::BrowserTabPrevious),
-        Key::Enter => Some(Action::BrowserSelectionRequested),
-        Key::Escape => Some(Action::SessionsBrowserClosed),
+    match key.code {
+        KeyCode::Char('q') if control(key) => Some(Action::Quit),
+        KeyCode::Char('c') if control(key) => Some(Action::CtrlCPressed),
+        KeyCode::Char(character) if !control(key) => Some(Action::BrowserFilterChar(character)),
+        KeyCode::Backspace => Some(Action::BrowserFilterBackspace),
+        KeyCode::Up => Some(Action::BrowserCursorMove(BrowserCursorMove::Up)),
+        KeyCode::Down => Some(Action::BrowserCursorMove(BrowserCursorMove::Down)),
+        KeyCode::Tab => Some(Action::BrowserTabNext),
+        KeyCode::BackTab => Some(Action::BrowserTabPrevious),
+        KeyCode::Enter => Some(Action::BrowserSelectionRequested),
+        KeyCode::Esc => Some(Action::SessionsBrowserClosed),
         _ => None,
     }
 }
 
 /// Returns the action one key press asks for on the theme picker screen.
 ///
-/// The picker owns the same two rows the core does: `Up` and `Down` walk them
-/// without wrapping and preview the candidate they land on, `Enter` commits
-/// the highlighted theme through the daemon, and `Esc` drops the preview and
-/// returns to the chat. The picker's `Esc` is its own close key, exactly as the
-/// browser's is: while it is open, the chat's cancel, clear, and exit arms are
-/// unreachable. Ctrl+C and Ctrl+Q keep the meanings every screen gives them.
+/// The picker owns the same three rows the core does - `Auto`, `Light`, and
+/// `Dark`: `Up` and `Down` walk them without wrapping and preview the candidate
+/// they land on, `Enter` commits the highlighted preference and asks for its
+/// local rewrite, and `Esc` drops the preview and returns to the chat. The
+/// picker's `Esc` is its own close key, exactly as the browser's is: while it is
+/// open, the chat's cancel, clear, and exit arms are unreachable. Ctrl+C and
+/// Ctrl+Q keep the meanings every screen gives them.
 const fn theme_action(key: &KeyEvent, state: &AppState) -> Option<Action> {
-    match key.key {
-        Key::Char('q') if key.ctrl => Some(Action::Quit),
-        Key::Char('c') if key.ctrl => Some(Action::CtrlCPressed),
-        Key::Up => Some(Action::ThemePreviewed(state.effective_theme().previous())),
-        Key::Down => Some(Action::ThemePreviewed(state.effective_theme().next())),
-        Key::Enter => Some(Action::ThemeSelected(state.effective_theme())),
-        Key::Escape => Some(Action::ThemePreviewCleared),
+    match key.code {
+        KeyCode::Char('q') if control(key) => Some(Action::Quit),
+        KeyCode::Char('c') if control(key) => Some(Action::CtrlCPressed),
+        KeyCode::Up => Some(Action::ThemePreviewed(
+            state.highlighted_preference().previous(),
+        )),
+        KeyCode::Down => Some(Action::ThemePreviewed(
+            state.highlighted_preference().next(),
+        )),
+        KeyCode::Enter => Some(Action::ThemeSelected(state.highlighted_preference())),
+        KeyCode::Esc => Some(Action::ThemePreviewCleared),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use revue::event::{Key, KeyEvent};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use crate::app::{
         Action, AppState, BrowserCursorMove, InputCursorMove, InputHistoryMove, MenuMove, Screen,
-        Theme,
+        ThemePreference,
     };
 
     use super::key_action;
+
+    /// Returns one plain press of `code`.
+    const fn press(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// Returns one press of `code` with Control held.
+    const fn ctrl(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
 
     /// Returns a chat-screen state with the hint menu closed.
     fn chat_state() -> AppState {
@@ -207,47 +224,47 @@ mod tests {
     #[test]
     fn the_chat_screen_keeps_the_keys_it_always_had() {
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Char('r')), &chat_state()),
+            key_action(&press(KeyCode::Char('r')), &chat_state()),
             Some(Action::InputChar('r')),
             "a letter is input, never a command"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Enter), &chat_state()),
+            key_action(&press(KeyCode::Enter), &chat_state()),
             Some(Action::InputSubmitted)
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Left), &chat_state()),
+            key_action(&press(KeyCode::Left), &chat_state()),
             Some(Action::MoveInputCursor(InputCursorMove::Left))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &chat_state()),
+            key_action(&press(KeyCode::Up), &chat_state()),
             Some(Action::NavigateInputHistory(InputHistoryMove::Previous))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::PageUp), &chat_state()),
+            key_action(&press(KeyCode::PageUp), &chat_state()),
             None,
             "the transcript moves on the mouse wheel, not on a page key"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::PageDown), &chat_state()),
+            key_action(&press(KeyCode::PageDown), &chat_state()),
             None,
             "the transcript moves on the mouse wheel, not on a page key"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Home), &chat_state()),
+            key_action(&press(KeyCode::Home), &chat_state()),
             Some(Action::MoveInputCursor(InputCursorMove::Home))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::End), &chat_state()),
+            key_action(&press(KeyCode::End), &chat_state()),
             Some(Action::MoveInputCursor(InputCursorMove::End))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Escape), &chat_state()),
+            key_action(&press(KeyCode::Esc), &chat_state()),
             Some(Action::EscapePressed),
             "the chat's Esc is the cancel, clear, and exit key"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Escape), &sessions_state()),
+            key_action(&press(KeyCode::Esc), &sessions_state()),
             Some(Action::SessionsBrowserClosed),
             "the browser keeps Esc as its own close key"
         );
@@ -256,52 +273,45 @@ mod tests {
     #[test]
     fn the_session_browser_maps_its_own_keys() {
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Char('a')), &sessions_state()),
+            key_action(&press(KeyCode::Char('a')), &sessions_state()),
             Some(Action::BrowserFilterChar('a'))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Char(' ')), &sessions_state()),
+            key_action(&press(KeyCode::Char(' ')), &sessions_state()),
             Some(Action::BrowserFilterChar(' ')),
             "a space filters, it does not scroll"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Backspace), &sessions_state()),
+            key_action(&press(KeyCode::Backspace), &sessions_state()),
             Some(Action::BrowserFilterBackspace)
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &sessions_state()),
+            key_action(&press(KeyCode::Up), &sessions_state()),
             Some(Action::BrowserCursorMove(BrowserCursorMove::Up))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Down), &sessions_state()),
+            key_action(&press(KeyCode::Down), &sessions_state()),
             Some(Action::BrowserCursorMove(BrowserCursorMove::Down))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Tab), &sessions_state()),
+            key_action(&press(KeyCode::Tab), &sessions_state()),
             Some(Action::BrowserTabNext)
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::BackTab), &sessions_state()),
+            key_action(&press(KeyCode::BackTab), &sessions_state()),
             Some(Action::BrowserTabPrevious)
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Enter), &sessions_state()),
+            key_action(&press(KeyCode::Enter), &sessions_state()),
             Some(Action::BrowserSelectionRequested)
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('r')), &sessions_state()),
-            Some(Action::BrowserRenameRequested)
+            key_action(&ctrl(KeyCode::Char('r')), &sessions_state()),
+            None,
+            "the browser binds no key for a command the core does not carry"
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('x')), &sessions_state()),
-            Some(Action::BrowserArchiveRequested)
-        );
-        assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('f')), &sessions_state()),
-            Some(Action::BrowserTreeRequested)
-        );
-        assert_eq!(
-            key_action(&KeyEvent::new(Key::Escape), &sessions_state()),
+            key_action(&press(KeyCode::Esc), &sessions_state()),
             Some(Action::SessionsBrowserClosed)
         );
     }
@@ -309,19 +319,19 @@ mod tests {
     #[test]
     fn ctrl_c_and_ctrl_q_mean_the_same_on_every_screen() {
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('c')), &chat_state()),
+            key_action(&ctrl(KeyCode::Char('c')), &chat_state()),
             Some(Action::CtrlCPressed)
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('c')), &sessions_state()),
+            key_action(&ctrl(KeyCode::Char('c')), &sessions_state()),
             Some(Action::CtrlCPressed)
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('q')), &chat_state()),
+            key_action(&ctrl(KeyCode::Char('q')), &chat_state()),
             Some(Action::Quit)
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('q')), &sessions_state()),
+            key_action(&ctrl(KeyCode::Char('q')), &sessions_state()),
             Some(Action::Quit)
         );
     }
@@ -331,35 +341,35 @@ mod tests {
         let open = menu_state();
         let closed = chat_state();
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &open),
+            key_action(&press(KeyCode::Up), &open),
             Some(Action::MenuMove(MenuMove::Up)),
             "an open menu takes Up from the input history"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Down), &open),
+            key_action(&press(KeyCode::Down), &open),
             Some(Action::MenuMove(MenuMove::Down))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Tab), &open),
+            key_action(&press(KeyCode::Tab), &open),
             Some(Action::MenuAccept),
             "Tab commits the highlighted command"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &closed),
+            key_action(&press(KeyCode::Up), &closed),
             Some(Action::NavigateInputHistory(InputHistoryMove::Previous)),
             "a closed menu leaves Up the history walk it always was"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Down), &closed),
+            key_action(&press(KeyCode::Down), &closed),
             Some(Action::NavigateInputHistory(InputHistoryMove::Next))
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Tab), &closed),
+            key_action(&press(KeyCode::Tab), &closed),
             None,
             "a closed menu leaves Tab bound to nothing"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Enter), &open),
+            key_action(&press(KeyCode::Enter), &open),
             Some(Action::InputSubmitted),
             "Enter keeps its one meaning: the submission path completes the menu first"
         );
@@ -369,49 +379,49 @@ mod tests {
     fn the_theme_picker_owns_the_arrows_enter_and_escape() {
         let mut state = picker_state();
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Down), &state),
-            Some(Action::ThemePreviewed(Theme::Dark)),
-            "Down previews the row below the committed theme"
+            key_action(&press(KeyCode::Down), &state),
+            Some(Action::ThemePreviewed(ThemePreference::Light)),
+            "Down previews the row below the committed auto row"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &state),
-            Some(Action::ThemePreviewed(Theme::Light)),
-            "Light is the first row: Up stays"
+            key_action(&press(KeyCode::Up), &state),
+            Some(Action::ThemePreviewed(ThemePreference::Auto)),
+            "Auto is the first row: Up stays"
         );
 
-        state.update(Action::ThemePreviewed(Theme::Dark));
+        state.update(Action::ThemePreviewed(ThemePreference::Dark));
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Down), &state),
-            Some(Action::ThemePreviewed(Theme::Dark)),
+            key_action(&press(KeyCode::Down), &state),
+            Some(Action::ThemePreviewed(ThemePreference::Dark)),
             "Dark is the last row: Down stays"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Up), &state),
-            Some(Action::ThemePreviewed(Theme::Light)),
+            key_action(&press(KeyCode::Up), &state),
+            Some(Action::ThemePreviewed(ThemePreference::Light)),
             "Up walks back from the previewed row"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Enter), &state),
-            Some(Action::ThemeSelected(Theme::Dark)),
+            key_action(&press(KeyCode::Enter), &state),
+            Some(Action::ThemeSelected(ThemePreference::Dark)),
             "Enter commits the row the preview is on"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Escape), &state),
+            key_action(&press(KeyCode::Esc), &state),
             Some(Action::ThemePreviewCleared),
             "the picker's Esc is its own close key"
         );
         assert_eq!(
-            key_action(&KeyEvent::new(Key::Char('l')), &state),
+            key_action(&press(KeyCode::Char('l')), &state),
             None,
             "a letter means nothing while the picker owns the keyboard"
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('q')), &state),
+            key_action(&ctrl(KeyCode::Char('q')), &state),
             Some(Action::Quit),
             "Ctrl+Q stays the immediate exit on every screen"
         );
         assert_eq!(
-            key_action(&KeyEvent::ctrl(Key::Char('c')), &state),
+            key_action(&ctrl(KeyCode::Char('c')), &state),
             Some(Action::CtrlCPressed),
             "Ctrl+C keeps the layered meaning every screen gives it"
         );

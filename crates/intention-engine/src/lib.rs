@@ -1,7 +1,7 @@
 //! Application command/query orchestration over DTO-only current-state storage.
 //!
-//! This crate maps committed repository outcomes into protocol-ready DTOs. It
-//! neither owns database resources nor reimplements repository idempotency.
+//! This crate maps committed repository outcomes into protocol-ready DTOs and
+//! owns no database resources.
 //! Every tool call commits its `tool_call` row before dispatch and exactly one
 //! terminal result row with its answering `tool_result` message afterwards.
 
@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use intention_config::ConfigSnapshotDto;
 use intention_proto::{
     CreateSessionCommandDto, CreateSessionFirstTurnDto, MessageKindDto, MessageProjectionDto,
-    NewMessageDto, PendingTurnProjectionDto, RemoveTurnCommandDto, RunProjectionDto,
-    SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto, ToolIdentityDto, ToolInput,
-    ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto, ToolResultStatusDto, ToolRowDto,
+    NewMessageDto, RunProjectionDto, SendUserTurnCommandDto, SessionProjectionDto, ToolCallRowDto,
+    ToolIdentityDto, ToolInput, ToolResult, ToolResultMetadataEntryDto, ToolResultRowDto,
+    ToolResultStatusDto, ToolRowDto,
 };
 use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto};
 use intention_proto::{ToolCallDto, ToolCallId};
-use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto, ToolResultEvidenceDto};
+use intention_storage::{AcceptedTurnOutcomeDto, StorageRepositoryDto};
 use intention_tools::{
     InterruptCause, ToolDispatchOutcome, ToolService, WorkspaceRoot, partial_tool_result_content,
     render_tool_result_content, tool_failure_guidance,
@@ -289,12 +289,12 @@ where
         Ok(committed)
     }
 
-    /// Commits one terminal tool result with its answering transcript row, then
+    /// Commits one terminal tool result as its answering transcript row, then
     /// hands that committed row to the commit sink.
     ///
-    /// Exactly one transaction writes the `tool_results` row and the
-    /// `tool_result` message the model reads; the message carries the same
-    /// typed status, payload, and metadata the evidence row stores.
+    /// Exactly one transaction appends the `tool_result` message the model
+    /// reads; the row's own typed projection carries its status, payload, and
+    /// metadata, so the message is the result's single durable home.
     ///
     /// # Errors
     ///
@@ -315,23 +315,13 @@ where
         metadata: Vec<ToolResultMetadataEntryDto>,
         occurred_at: TimestampDto,
         publisher: &P,
-    ) -> DtoResult<ToolResultEvidenceDto> {
+    ) -> DtoResult<MessageProjectionDto> {
         let projection = ToolResultRowDto::new(
             call_id,
             ToolIdentityDto::parse(tool_id)?,
             status,
             result,
-            metadata.clone(),
-        )?;
-        let evidence = ToolResultEvidenceDto::new(
-            session_id,
-            run_id,
-            call_id,
-            tool_id.to_owned(),
-            status,
-            content.clone(),
             metadata,
-            occurred_at,
         )?;
         let message = NewMessageDto::new(
             session_id,
@@ -341,11 +331,9 @@ where
             None,
             Some(ToolRowDto::Result(projection)),
         )?;
-        let committed = self
-            .repository
-            .write_tool_result(evidence.clone(), message)?;
-        publisher.observe_session_commit(&SessionCommitDto::Content(committed));
-        Ok(evidence)
+        let committed = self.repository.append_message(message, occurred_at)?;
+        publisher.observe_session_commit(&SessionCommitDto::Content(committed.clone()));
+        Ok(committed)
     }
 
     /// Creates an application facade around a DTO-only durable repository.
@@ -371,9 +359,8 @@ where
     /// The session commits before the turn, so a rejected first turn leaves the
     /// durable session the client proposed and returns the typed rejection; no
     /// rollback exists and the next command may target that same session.
-    /// Repeating an exactly-replayed command is this creation's replay: the
-    /// durable `session_already_exists` conflict reads the session back and the
-    /// turn path replays its own recorded outcome.
+    /// Repeating a creation whose session already exists reads that session
+    /// back, and its carried turn is accepted as a new turn of it.
     ///
     /// # Errors
     ///
@@ -414,14 +401,9 @@ where
 
     /// Accepts one carried first turn against the session this creation made.
     ///
-    /// The proposed run identity is the turn path's own derivation: the same
-    /// session and `IdempotencyKey` always name the same run, so a replayed
-    /// command replays the recorded acceptance instead of conflicting.
-    ///
     /// # Errors
     ///
-    /// Returns the typed validation error when the run identity is not
-    /// canonical, or the typed admission error when the turn is rejected.
+    /// Returns the typed admission error when the turn is rejected.
     fn accept_first_turn(
         &self,
         first_turn: &CreateSessionFirstTurnDto,
@@ -430,19 +412,8 @@ where
         occurred_at: TimestampDto,
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
-        let proposed_run_id = RunId::parse(&first_turn.idempotency_key().to_string())?;
-        let command = SendUserTurnCommandDto::new(
-            session_id,
-            first_turn.idempotency_key(),
-            first_turn.content(),
-        )?;
-        self.send_user_turn(
-            command,
-            proposed_run_id,
-            config_snapshot,
-            occurred_at,
-            observer,
-        )
+        let command = SendUserTurnCommandDto::new(session_id, first_turn.content())?;
+        self.send_user_turn(command, config_snapshot, occurred_at, observer)
     }
 
     /// Returns `command` carrying the durable identity binding of its root.
@@ -485,13 +456,9 @@ where
     /// queued turn has no transcript row yet - its row commits when it joins
     /// the run context.
     ///
-    /// `proposed_run_id` must be a deterministic function of the command's own
-    /// identity: the same session and `IdempotencyKey` must always propose the
-    /// same [`RunId`], because the repository compares it when it replays an
-    /// accepted turn. A retry that proposes a fresh identity is
-    /// indistinguishable from the same key bound to different content and fails
-    /// with `turn_idempotency_conflict`, so a client could never learn that its
-    /// turn was already accepted.
+    /// `config_snapshot` is the credential-free selection this acceptance
+    /// froze: a turn that starts a run commits it on that run's row, and a turn
+    /// that queues commits no configuration of its own.
     ///
     /// # Errors
     ///
@@ -499,16 +466,13 @@ where
     pub fn send_user_turn(
         &self,
         command: SendUserTurnCommandDto,
-        proposed_run_id: RunId,
         config_snapshot: ConfigSnapshotDto,
         occurred_at: TimestampDto,
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<AcceptedTurnOutcomeDto> {
         let accepted = self.repository.accept_user_turn(
             command.session_id(),
-            command.idempotency_key(),
             command.content(),
-            proposed_run_id,
             config_snapshot,
             occurred_at,
         )?;
@@ -517,26 +481,9 @@ where
             // a reader that shows the row first never displays an answer before
             // the turn it answers.
             observer.observe_session_commit(&SessionCommitDto::Content(message.clone()));
-            observer.observe_session_commit(&SessionCommitDto::Status {
-                session_id: run.session_id(),
-                run_id: run.run_id(),
-                status: run.status(),
-            });
+            observer.observe_session_commit(&SessionCommitDto::Status(*run));
         }
         Ok(accepted)
-    }
-
-    /// Removes one not-yet-seen pending turn and returns its committed projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed repository error when no pending turn can be removed.
-    pub fn remove_turn(
-        &self,
-        command: RemoveTurnCommandDto,
-        occurred_at: TimestampDto,
-    ) -> DtoResult<PendingTurnProjectionDto> {
-        self.repository.remove_turn(command, occurred_at)
     }
 
     /// Returns the exact active run one request addresses.
@@ -644,12 +591,13 @@ fn schedule_from_context(
         messages,
         None,
     )?
-    .with_tools(advertised_tool_definitions()?)?;
-    // The constructed request must agree with the requested run identity and
-    // the durable starting-run selection before it becomes executable work.
-    if request.run_id() != run_id
-        || request.model() != context.safe_config().resolved().provider().model()
-    {
+    .with_tools(advertised_tool_definitions())?;
+    // The constructed request must agree with the requested run identity
+    // before it becomes executable work: the durable context is read by that
+    // identity, so a context for another run cannot become this schedule. The
+    // request carries the snapshot's own selection, and the executor re-checks
+    // the request it receives against that selection.
+    if request.run_id() != run_id {
         return Err(ErrorDto::validation(
             "invalid_model_run_schedule",
             "model scheduling request must match the durable starting run selection",
@@ -675,6 +623,11 @@ fn schedule_from_context(
 /// An assistant row without answer text carries only the reasoning of a step
 /// that issued calls without answering; reasoning is never replayed, so the row
 /// contributes no model message.
+///
+/// @todo(provider): a gateway with the DeepSeek contract requires every previous
+/// turn's reasoning back once the request carries `tools`, and this rebuild is
+/// where that replay would read the durable `messages.reasoning` column into a
+/// request-scoped attachment.
 ///
 /// A call whose result never committed cannot replay: an assistant tool-call
 /// message whose answer is missing is not a valid model context, so the call is
@@ -709,6 +662,8 @@ fn model_context_messages(rows: &[MessageProjectionDto]) -> DtoResult<Vec<ModelM
                 // A reasoning-only step row is durable transcript evidence,
                 // not model context: reasoning is never replayed, so a row
                 // without answer text contributes no message.
+                // @todo(provider): a gateway with the DeepSeek contract replays
+                // it once the request carries `tools`.
                 if !row.text().trim().is_empty() {
                     messages.push(ModelMessageDto::new(ModelRoleDto::Assistant, row.text())?);
                 }
@@ -754,13 +709,9 @@ fn incomplete_tool_row() -> ErrorDto {
 
 /// Builds the model-visible tool definitions advertised with every scheduled run.
 ///
-/// The model-visible tools surface in advertisement order.
-///
-/// # Errors
-///
-/// Returns a typed validation error when a model-visible tool cannot be mapped
-/// into a provider-neutral tool definition.
-fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
+/// The model-visible tools surface in advertisement order; their definitions and
+/// schema text are code-owned, so construction cannot fail.
+fn advertised_tool_definitions() -> Vec<ModelToolDefinitionDto> {
     intention_tools::model_visible_descriptors()
         .iter()
         .map(|descriptor| {
@@ -775,10 +726,6 @@ fn advertised_tool_definitions() -> DtoResult<Vec<ModelToolDefinitionDto>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Metadata fixtures use expect to provide precise failures."
-    )]
 
     use super::tool_result_metadata;
     use intention_proto::{

@@ -1,6 +1,6 @@
 //! The fullscreen terminal front end over the shared application core.
 //!
-//! [`RevueView`] is a pure function of the same [`AppState`] the application core
+//! [`TerminalView`] is a pure function of the same [`AppState`] the application core
 //! publishes, and this front end drives that state through the same [`Action`] and
 //! [`crate::app::Effect`] vocabulary, so no session, transcript, input, or status
 //! decision lives in the view. One client driver owns the connection: keys become
@@ -10,16 +10,15 @@
 //! The front end draws one window: the chat panel on the canvas, with the
 //! sessions browser docked as the window's bottom rows while the core's screen
 //! carries it. Committed rows lay out at the transcript pane's width,
-//! `palette` is the only source of colour, and the event loop disables
-//! revue's built-in quit key so Ctrl+C reaches the shared core's layered
-//! action: a live run is stopped on the second consecutive press, a typed
-//! line is abandoned into the history, and an empty line arms the exit for a
-//! second press. Ctrl+Q stays the immediate exit.
+//! `palette` is the only source of colour, and the event loop leaves every quit
+//! key to the shared core's layered action: a live run is stopped on the second
+//! consecutive Ctrl+C, a typed line is abandoned into the history, and an empty
+//! line arms the exit for a second press. Ctrl+Q stays the immediate exit.
 //!
 //! # The wheel, the pointer, and copying
 //!
-//! The transcript is moved by the mouse wheel: revue's mouse capture is on so
-//! wheel events reach `handle_event`, which maps a notch to
+//! The transcript is moved by the mouse wheel: the terminal's mouse capture is
+//! on so wheel events reach `handle_event`, which maps a notch to
 //! [`Action::ScrollTranscript`] - one normal step - and routes the left button
 //! through `Pointer`. A press anchors a selection at the display row it hit,
 //! a drag extends it, and a release keeps it: the range reaches the core as one
@@ -58,7 +57,7 @@
 //! # Pastes
 //!
 //! A paste is one edit, never a submission per line. The terminal delivers a
-//! bracketed paste as one [`Event::Paste`], so its text enters the line whole;
+//! bracketed paste as one `Event::Paste`, so its text enters the line whole;
 //! a terminal that types a paste into the application instead is recognised by
 //! the timing of its presses (`paste`), its `Enter` presses insert the pasted
 //! text's own line breaks, and the run's end reports the characters it inserted
@@ -73,11 +72,13 @@ mod palette;
 mod panes;
 mod paste;
 mod screens;
+mod surface;
+pub mod testing;
+mod theme;
 
 pub use driver::TuiOptions;
-pub use screens::RevueView;
+pub use screens::TerminalView;
 
-use std::cell::RefCell;
 use std::time::Instant;
 
 use intention_client::IntentionClient;
@@ -85,9 +86,15 @@ use intention_proto::{
     DtoResult, ErrorDto, SessionFrameDto, SessionId, WorkspaceRootDto, run_status_is_terminal,
 };
 use intention_transport::LocalEndpoint;
-use revue::core::app::App;
-use revue::event::{Event, Key, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
-use revue::widget::{RenderContext, View};
+use ratatui::DefaultTerminal;
+use ratatui::Frame;
+use ratatui::crossterm::cursor::Show;
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event as CrosstermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton,
+    MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
 
 use crate::app::{
     Action, AppState, BrowserCursorMove, Effect, Screen, TRANSCRIPT_DRAG_ROWS, TranscriptScroll,
@@ -97,6 +104,13 @@ use driver::Driver;
 use keymap::key_action;
 use layout::{LaidOutRow, TranscriptLayoutCache, TranscriptWindow};
 use paste::Pastes;
+use surface::TranscriptSurface;
+
+/// The longest the event loop waits for input before it reports a tick.
+///
+/// The tick is the clock the front end measures with: the live turn's elapsed
+/// tenth of a second and a paste run's own silence both advance on it.
+const TICK: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Runs the terminal front end until the user quits.
 ///
@@ -105,14 +119,19 @@ use paste::Pastes;
 ///
 /// # Errors
 ///
-/// Returns an unavailable error when the client runtime or the terminal cannot
-/// be started. Client, protocol, and run failures reach the status pane instead
-/// of ending the session.
+/// Returns the typed validation error of a local settings file that declares
+/// an undeclared theme or an unreadable shape, and an unavailable error when
+/// the client runtime or the terminal cannot be started. Client, protocol, and
+/// run failures reach the status pane instead of ending the session.
 pub fn run_blocking(
     options: TuiOptions,
     client: IntentionClient,
     endpoint: LocalEndpoint,
 ) -> DtoResult<()> {
+    // The theme is this front end's own value and is resolved once, before the
+    // first frame: the spelled flag, else the local settings file, else the
+    // environment detection the file asks for. See `theme`.
+    let theme = theme::resolve(options.theme())?;
     // The front end resolves the session it opens once, through the client: an
     // explicit continuation asks the client for the target, a selected session
     // is used as it is, and a launch that asked for neither opens nothing.
@@ -127,40 +146,128 @@ pub fn run_blocking(
         options.workspace_root().clone(),
         options.mode(),
     )?;
-    let front_end = FrontEnd::new(session, options.workspace_root().clone(), driver);
+    let mut front_end = FrontEnd::new(session, options.workspace_root().clone(), driver, theme);
     front_end.start();
-    App::builder()
-        // @todo(revue): revue has no text-selection model, so the front end
-        // turns capture on and implements transcript selection, drag-scroll,
-        // and marker hit-testing itself; capture is all-or-nothing, which costs
-        // the terminal its own drag-selection (Shift must be held to select
-        // text) and leaves copying to the terminal emulator. A library
-        // selection surface would remove the trade-off.
-        .mouse_capture(true)
-        // Ctrl+C is the shared core's layered action, so revue must not
-        // consume it as the framework's own quit key first.
-        // @todo(revue): revue 3.9.1 hardcodes Ctrl+C as its quit key and its
-        // event loop quits right after the app handler runs, so on the default
-        // configuration a single press during a live run tears the front end
-        // down before the layered interrupt can arm or notice anything. This
-        // argument and the repository's vendored patch (`AppBuilder::quit_key`,
-        // `vendor/revue/PATCH.md`, the root `[patch.crates-io]` entry) exist
-        // only for this option; drop both once upstream exposes it. The
-        // argument and the Ctrl+C arms in `keymap.rs` must go together: without
-        // the argument revue silently resumes quitting on the first press, and
-        // without the arms Ctrl+C silently does nothing.
-        .quit_key(None)
-        .build()
-        .run(front_end, handle_event)
-        // @todo(revue): revue's `run` failure carries no typed cause, so every
-        // terminal-startup failure collapses into this one unavailable error
-        // and the real reason is unobservable from here.
-        .map_err(|_| {
-            ErrorDto::unavailable(
-                "revue_terminal_unavailable",
-                "the revue terminal could not be started",
-            )
-        })
+    let mut session = Session::start()?;
+    let mut dirty = true;
+    loop {
+        if dirty {
+            session
+                .terminal
+                .draw(|frame| front_end.render(frame))
+                .map_err(terminal_error)?;
+        }
+        let event = read_event()?;
+        dirty = handle_event(&event, &mut front_end);
+        if front_end.state.should_quit() {
+            return Ok(());
+        }
+    }
+}
+
+/// Returns the unavailable error one terminal operation reports.
+///
+/// The terminal is the one thing the user can act on, so every terminal
+/// failure - starting it, drawing a frame, reading an event - reports the same
+/// stable message instead of an operating-system error the interface cannot
+/// render.
+fn terminal_error(_cause: std::io::Error) -> ErrorDto {
+    ErrorDto::unavailable(
+        "terminal_unavailable",
+        "the terminal could not be started or drawn on",
+    )
+}
+
+/// The terminal this front end owns for one run.
+///
+/// The alternate screen, raw mode, mouse capture, and bracketed paste are
+/// entered together and left together: the guard restores the terminal on
+/// every exit path, the error ones included, so a failed frame never leaves a
+/// shell in raw mode.
+struct Session {
+    /// The terminal the frames are drawn on.
+    terminal: DefaultTerminal,
+}
+
+impl Session {
+    /// Enters the alternate screen and starts the terminal.
+    ///
+    /// Mouse capture is on so the wheel reaches this front end instead of the
+    /// terminal's own scrollback. Bracketed paste is on so a paste arrives as
+    /// one [`Event::Paste`] instead of a run of presses.
+    fn start() -> DtoResult<Self> {
+        let mut terminal = ratatui::try_init().map_err(terminal_error)?;
+        execute!(
+            terminal.backend_mut(),
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )
+        .map_err(terminal_error)?;
+        Ok(Self { terminal })
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            DisableBracketedPaste,
+            DisableMouseCapture
+        );
+        ratatui::restore();
+        let _ = execute!(std::io::stdout(), Show);
+    }
+}
+
+/// One event the front end acts on.
+///
+/// The terminal's own vocabulary is flattened here so the front end's event
+/// handling names only what it acts on: a key press, a mouse event, a paste,
+/// the terminal's own resize and focus changes, and the tick the event loop
+/// adds while no input arrives.
+#[derive(Clone, Debug)]
+enum Event {
+    /// One key press.
+    Key(KeyEvent),
+    /// One mouse event.
+    Mouse(MouseEvent),
+    /// One whole bracketed paste.
+    Paste(String),
+    /// The terminal's size changed.
+    Resize,
+    /// The terminal window gained focus.
+    FocusGained,
+    /// The terminal window lost focus.
+    FocusLost,
+    /// The event loop's own clock.
+    Tick,
+}
+
+/// Waits for one event and translates it, reporting a tick when none arrives.
+///
+/// A key release is not an event this front end acts on, so it is dropped
+/// rather than reported; a terminal that never sends releases simply never
+/// produces one.
+fn read_event() -> DtoResult<Event> {
+    if !event::poll(TICK).map_err(terminal_error)? {
+        return Ok(Event::Tick);
+    }
+    loop {
+        let event = match event::read().map_err(terminal_error)? {
+            CrosstermEvent::Key(key)
+                if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) =>
+            {
+                Event::Key(key)
+            }
+            CrosstermEvent::Key(_) => continue,
+            CrosstermEvent::Mouse(mouse) => Event::Mouse(mouse),
+            CrosstermEvent::Paste(text) => Event::Paste(text),
+            CrosstermEvent::Resize(..) => Event::Resize,
+            CrosstermEvent::FocusGained => Event::FocusGained,
+            CrosstermEvent::FocusLost => Event::FocusLost,
+        };
+        return Ok(event);
+    }
 }
 
 /// Applies one event to the front end and reports whether a redraw is needed.
@@ -186,7 +293,7 @@ pub fn run_blocking(
 /// so the chunks of one paste join one run. Only the run's own silence, or the
 /// user's next input, ends it - a tick never does, or a paste arriving in chunks
 /// would become a paste per chunk. See the `paste` detector.
-fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool {
+fn handle_event(event: &Event, front_end: &mut FrontEnd) -> bool {
     let now = Instant::now();
     let chat = front_end.state.screen() == Screen::Chat;
     let mut changed;
@@ -213,7 +320,7 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
         // The tick is the clock a run's silence is measured against, and a
         // resize or a focus change is the terminal's own work: none of them ends
         // a run a terminal is still writing.
-        Event::Tick | Event::Resize(..) | Event::FocusGained | Event::FocusLost => {
+        Event::Tick | Event::Resize | Event::FocusGained | Event::FocusLost => {
             let settled = front_end.pastes.settle(now);
             changed = front_end.settle_paste(settled);
             false
@@ -240,15 +347,16 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
             // The line belongs to the chat: a paste while the browser or the
             // picker owns the window is not a line's text.
             Event::Paste(_) => false,
-            _ => false,
+            // The terminal's own events repaint the frame: the one window is a
+            // pure function of state and size, so a resize is a redraw and a
+            // focus change leaves the window as it was.
+            Event::Resize => true,
+            Event::FocusGained | Event::FocusLost | Event::Tick => false,
         };
     }
     changed |= front_end.drain_actions();
     if matches!(event, Event::Tick) {
         changed |= front_end.tick();
-    }
-    if front_end.state.should_quit() {
-        app.quit();
     }
     changed
 }
@@ -259,7 +367,8 @@ fn handle_event(event: &Event, front_end: &mut FrontEnd, app: &mut App) -> bool 
 /// and its line breaks. Every other key asks for something else, so it ends the
 /// run in flight instead of continuing it.
 fn carries_characters(key: &KeyEvent) -> bool {
-    (matches!(key.key, Key::Char(_)) && !key.ctrl) || key.key == Key::Enter
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    (matches!(key.code, KeyCode::Char(_)) && !control) || key.code == KeyCode::Enter
 }
 
 /// Returns the action one wheel event asks for on one screen, or `None` to
@@ -287,6 +396,11 @@ const fn mouse_action(mouse: &MouseEvent, screen: Screen) -> Option<Action> {
         }
         _ => None,
     }
+}
+
+/// Returns the terminal row one mouse event points at.
+const fn mouse_row(mouse: &MouseEvent) -> u16 {
+    mouse.row
 }
 
 /// The chat's left-button pointer, carried between mouse events.
@@ -358,7 +472,7 @@ impl Pointer {
         window: TranscriptWindow,
         marker: Option<usize>,
     ) -> Vec<Action> {
-        let Some(row) = window.row_at(mouse.y) else {
+        let Some(row) = window.row_at(mouse_row(mouse)) else {
             self.drag = None;
             return Vec::new();
         };
@@ -395,7 +509,7 @@ impl Pointer {
             actions.push(Action::ScrollTranscriptFast(direction));
             window.scrolled(direction, TRANSCRIPT_DRAG_ROWS)
         });
-        drag.extent = window.clamped_row(mouse.y);
+        drag.extent = window.clamped_row(mouse_row(mouse));
         actions.push(Action::SelectTranscriptRows {
             anchor: drag.anchor,
             extent: drag.extent,
@@ -424,19 +538,20 @@ impl Pointer {
 ///
 /// A wheel notch scrolls in its own direction; a drag scrolls towards the edge
 /// the pointer is past, and sliding neither way asks for no scroll.
-const fn fast_scroll(mouse: &MouseEvent, window: TranscriptWindow) -> Option<TranscriptScroll> {
+fn fast_scroll(mouse: &MouseEvent, window: TranscriptWindow) -> Option<TranscriptScroll> {
+    let row = mouse_row(mouse);
     match mouse.kind {
         MouseEventKind::ScrollUp => Some(TranscriptScroll::Older),
         MouseEventKind::ScrollDown => Some(TranscriptScroll::Newer),
-        _ if window.above(mouse.y) => Some(TranscriptScroll::Older),
-        _ if window.below(mouse.y) => Some(TranscriptScroll::Newer),
+        _ if window.above(row) => Some(TranscriptScroll::Older),
+        _ if window.below(row) => Some(TranscriptScroll::Newer),
         _ => None,
     }
 }
 
-/// The revue front end: the shared state, its view, its client task, its one
-/// turn clock, the chat's pointer, the paste detector, and the transcript layout
-/// cache every frame renders through.
+/// The terminal front end: the shared state, its view, its client task, its one
+/// turn clock, the chat's pointer, the paste detector, and the transcript's
+/// layout cache and scroll surface.
 struct FrontEnd {
     state: AppState,
     driver: Driver,
@@ -449,14 +564,9 @@ struct FrontEnd {
     /// The chat's left-button pointer, kept between mouse events.
     pointer: Pointer,
     /// The committed transcript's laid-out rows, kept between frames.
-    ///
-    /// `View::render` takes `&self`, so the cache a render fills sits behind a
-    /// [`RefCell`]: the pane borrows it for the length of one frame, and the
-    /// frame publishes the transcript window into it for the next event.
-    // @todo(revue): the interior mutability is a revue trait boundary, not a
-    // design choice: `View::render` takes `&self`, so the cache a frame fills
-    // and publishes cannot be a plain field.
-    cache: RefCell<TranscriptLayoutCache>,
+    cache: TranscriptLayoutCache,
+    /// The scroll surface the transcript rows are painted into.
+    surface: TranscriptSurface,
 }
 
 impl FrontEnd {
@@ -465,15 +575,25 @@ impl FrontEnd {
     /// `session` is the session this launch opens: the one the caller selected,
     /// or the one the client resolved for an explicit continuation. A launch
     /// that named neither opens none, and the user can still ask for a session
-    /// later with `/new` or a row of the sessions browser.
-    fn new(session: Option<SessionId>, workspace_root: WorkspaceRootDto, driver: Driver) -> Self {
+    /// later with `/new` or a row of the sessions browser. `theme` is the
+    /// preference and detection answer the launch resolved, so the first frame
+    /// already paints the palette they name.
+    fn new(
+        session: Option<SessionId>,
+        workspace_root: WorkspaceRootDto,
+        driver: Driver,
+        theme: theme::ResolvedTheme,
+    ) -> Self {
         Self {
-            state: AppState::new(session).with_workspace_root(workspace_root),
+            state: AppState::new(session)
+                .with_theme(theme.preference(), theme.detected())
+                .with_workspace_root(workspace_root),
             driver,
             timer: TurnTimer::new(),
             pastes: Pastes::new(),
             pointer: Pointer { drag: None },
-            cache: RefCell::new(TranscriptLayoutCache::new()),
+            cache: TranscriptLayoutCache::new(),
+            surface: TranscriptSurface::new(),
         }
     }
 
@@ -494,8 +614,10 @@ impl FrontEnd {
     fn apply(&mut self, action: Action) {
         let terminal = matches!(
             &action,
-            Action::FrameReceived(SessionFrameDto::Status(run))
-                if run_status_is_terminal(run.status())
+            Action::FrameReceived {
+                frame: SessionFrameDto::Status(run),
+                ..
+            } if run_status_is_terminal(run.status())
         );
         let effects = self.state.update(action);
         if terminal {
@@ -537,11 +659,11 @@ impl FrontEnd {
     /// the pressed display row holds is resolved from that same frame's layout;
     /// everything else is the pointer's own arithmetic.
     fn apply_mouse(&mut self, mouse: &MouseEvent) -> bool {
-        let window = self.cache.borrow().window();
+        let window = self.cache.window();
         let marker = match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                window.row_at(mouse.y).and_then(|row| self.marker_at(row))
-            }
+            MouseEventKind::Down(MouseButton::Left) => window
+                .row_at(mouse_row(mouse))
+                .and_then(|row| self.marker_at(row)),
             _ => None,
         };
         let actions = self.pointer.actions(mouse, &self.state, window, marker);
@@ -559,7 +681,7 @@ impl FrontEnd {
     /// the live segment will become.
     fn marker_at(&self, row: u16) -> Option<usize> {
         marker_target(
-            &self.cache.borrow(),
+            &self.cache,
             self.state.live_reasoning_row(),
             usize::from(row),
         )
@@ -572,6 +694,11 @@ impl FrontEnd {
         };
         self.apply(Action::ElapsedReported { millis });
         true
+    }
+
+    /// Paints one frame of the one window.
+    fn render(&mut self, frame: &mut Frame) {
+        TerminalView::new(&self.state, &mut self.cache, &mut self.surface).render(frame);
     }
 }
 
@@ -657,43 +784,24 @@ fn elapsed_millis(started: Instant, now: Instant) -> Option<u64> {
     u64::try_from(now.saturating_duration_since(started).as_millis()).ok()
 }
 
-impl View for FrontEnd {
-    fn render(&self, ctx: &mut RenderContext) {
-        RevueView::cached(&self.state, &self.cache).render(ctx);
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit tests build typed fixture DTOs directly and assert them for diagnostics."
-    )]
 
-    use std::cell::RefCell;
     use std::time::{Duration, Instant};
 
     use intention_proto::{
         DaemonHealthDto, ProjectId, RunModeDto, SessionId, SessionSummariesDto, SessionSummaryDto,
         TimestampDto, WorkspaceId, WorkspaceRootDto,
     };
-    use revue::event::{MouseButton, MouseEvent, MouseEventKind};
-    use revue::testing::TestApp;
-    use revue::widget::{RenderContext, View};
+    use ratatui::crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
 
     use crate::app::{Action, AppState, Screen, TRANSCRIPT_DRAG_ROWS, TranscriptScroll};
     use crate::tui::layout::{TranscriptLayoutCache, TranscriptWindow};
+    use crate::tui::testing::Screen as TestScreen;
 
-    use super::{Pointer, RevueView, TurnTimer, marker_target, mouse_action};
-
-    /// A view over a shared state, so a test handler can feed actions back in.
-    struct SharedState<'a>(&'a RefCell<AppState>);
-
-    impl View for SharedState<'_> {
-        fn render(&self, ctx: &mut RenderContext) {
-            RevueView::with_now(&self.0.borrow(), 0).render(ctx);
-        }
-    }
+    use super::{Pointer, TurnTimer, marker_target, mouse_action};
 
     /// Returns the transcript window the pointer tests hit-test.
     ///
@@ -710,8 +818,26 @@ mod tests {
     }
 
     /// Returns one mouse event of `kind` at one screen row.
-    fn mouse(kind: MouseEventKind, y: u16) -> MouseEvent {
-        MouseEvent::new(1, y, kind)
+    const fn mouse(kind: MouseEventKind, row: u16) -> MouseEvent {
+        MouseEvent {
+            kind,
+            column: 1,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }
+    }
+
+    /// Applies one wheel notch to `state` the way the event loop does.
+    ///
+    /// Returns whether the event asked for an action at all, so a test can tell
+    /// a notch that moved something from one the screen ignores.
+    fn wheel(state: &mut AppState, kind: MouseEventKind) -> bool {
+        let action = mouse_action(&mouse(kind, 1), state.screen());
+        let Some(action) = action else {
+            return false;
+        };
+        state.update(action);
+        true
     }
 
     #[test]
@@ -757,7 +883,6 @@ mod tests {
             WorkspaceRootDto::parse(std::env::temp_dir().to_string_lossy().into_owned())
                 .expect("the fixture workspace root is absolute"),
             0,
-            None,
         )
     }
 
@@ -803,77 +928,60 @@ mod tests {
         );
     }
 
-    /// Returns a test app over `state` whose mouse handler applies the wheel
-    /// action the production event handler maps the event to.
-    fn wheel_app(state: &RefCell<AppState>, width: u16, height: u16) -> TestApp<SharedState<'_>> {
-        TestApp::with_size(SharedState(state), width, height).on_mouse(|mouse, view| {
-            let action = mouse_action(mouse, view.0.borrow().screen());
-            let Some(action) = action else {
-                return false;
-            };
-            view.0.borrow_mut().update(action);
-            true
-        })
-    }
-
     #[test]
     fn wheel_events_scroll_the_transcript_and_other_mouse_events_do_not() {
-        let state = RefCell::new(AppState::new(None));
-        let mut app = wheel_app(&state, 80, 24);
-        // @todo(revue): revue's testing surface is inconsistent - `TestApp`'s
-        // `scroll_up`/`scroll_down` build the same wheel events the terminal
-        // delivers to `handle_event`, while `Pilot::scroll_up` reaches a
-        // test-only integer channel instead, so the wheel path is drivable only
-        // through `TestApp`.
-        app.scroll_up(1, 1);
-        assert_eq!(state.borrow().scroll(), 3, "one notch moves three rows");
-        app.scroll_down(1, 1);
-        assert_eq!(
-            state.borrow().scroll(),
-            0,
-            "a notch back reaches the newest rows"
+        let mut state = AppState::new(None);
+        assert!(wheel(&mut state, MouseEventKind::ScrollUp));
+        assert_eq!(state.scroll(), 3, "one notch moves three rows");
+        wheel(&mut state, MouseEventKind::ScrollDown);
+        assert_eq!(state.scroll(), 0, "a notch back reaches the newest rows");
+        assert!(
+            !wheel(&mut state, MouseEventKind::Down(MouseButton::Left)),
+            "a click asks for no action of its own"
         );
-        app.send_click(1, 1);
-        assert_eq!(state.borrow().scroll(), 0, "a click moves nothing");
+        assert_eq!(state.scroll(), 0, "a click moves nothing");
     }
 
     #[test]
     fn a_wheel_notch_moves_the_browser_cursor_and_its_window() {
-        let state = RefCell::new(browser_state(12));
-        let mut app = wheel_app(&state, 100, 30);
+        let mut state = browser_state(12);
         assert!(
-            app.screen_text().contains("1-5 of 12"),
+            TestScreen::view(&state, 100, 30)
+                .screen_text()
+                .contains("1-5 of 12"),
             "the window starts at the newest sessions"
         );
-        app.scroll_down(1, 1);
+        wheel(&mut state, MouseEventKind::ScrollDown);
         assert_eq!(
-            state.borrow().browser_cursor(),
+            state.browser_cursor(),
             1,
             "a wheel notch moves the cursor one row"
         );
         for _ in 0..5 {
-            app.scroll_down(1, 1);
+            wheel(&mut state, MouseEventKind::ScrollDown);
         }
-        assert_eq!(state.borrow().browser_cursor(), 6);
-        assert_eq!(state.borrow().screen(), Screen::Sessions);
+        assert_eq!(state.browser_cursor(), 6);
+        assert_eq!(state.screen(), Screen::Sessions);
         assert!(
-            app.screen_text().contains("3-7 of 12"),
+            TestScreen::view(&state, 100, 30)
+                .screen_text()
+                .contains("3-7 of 12"),
             "the virtualized window follows the wheeled cursor"
         );
-        app.scroll_up(1, 1);
-        assert_eq!(state.borrow().browser_cursor(), 5);
+        wheel(&mut state, MouseEventKind::ScrollUp);
+        assert_eq!(state.browser_cursor(), 5);
         for _ in 0..10 {
-            app.scroll_up(1, 1);
+            wheel(&mut state, MouseEventKind::ScrollUp);
         }
         assert_eq!(
-            state.borrow().browser_cursor(),
+            state.browser_cursor(),
             0,
             "the cursor stops at the newest session"
         );
     }
 
     /// Every crate source that could carry a copy path, read at compile time.
-    const CLIPBOARD_FREE_SOURCES: [(&str, &str); 31] = [
+    const CLIPBOARD_FREE_SOURCES: [(&str, &str); 33] = [
         ("Cargo.toml", include_str!("../../Cargo.toml")),
         ("src/lib.rs", include_str!("../lib.rs")),
         ("src/main.rs", include_str!("../main.rs")),
@@ -913,6 +1021,8 @@ mod tests {
         ),
         ("src/tui/screens/chat.rs", include_str!("screens/chat.rs")),
         ("src/tui/screens/mod.rs", include_str!("screens/mod.rs")),
+        ("src/tui/surface.rs", include_str!("surface.rs")),
+        ("src/tui/testing.rs", include_str!("testing.rs")),
         (
             "src/tui/screens/sessions.rs",
             include_str!("screens/sessions.rs"),
@@ -1179,8 +1289,6 @@ mod tests {
 
     #[test]
     fn the_keys_of_one_flow_drive_the_hint_menu_from_a_slash_to_the_command() {
-        use revue::event::{Key, KeyEvent};
-
         use crate::app::Effect;
         use crate::tui::key_action;
         use crate::tui::panes::commands;
@@ -1189,10 +1297,10 @@ mod tests {
         let mut rows = Vec::new();
         let mut effects = Vec::new();
         for key in [
-            KeyEvent::new(Key::Char('/')),
-            KeyEvent::new(Key::Char('n')),
-            KeyEvent::new(Key::Tab),
-            KeyEvent::new(Key::Enter),
+            KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
         ] {
             let action = key_action(&key, &state).expect("each key of the flow asks for an action");
             effects = state.update(action);
@@ -1200,7 +1308,7 @@ mod tests {
         }
         assert_eq!(
             rows,
-            vec![5, 4, 0, 0],
+            vec![7, 5, 0, 0],
             "the slash opens the band, the narrowed list keeps it, and the commit closes it"
         );
         assert_eq!(

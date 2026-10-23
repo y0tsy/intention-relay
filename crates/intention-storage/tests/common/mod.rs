@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Shared storage fixtures use expect for precise test diagnostics."
-)]
-
 use intention_proto::{
     CreateSessionCommandDto, ProjectId, RunModeDto, SessionId, TimestampDto, WorkspaceId,
     WorkspaceRootDto,

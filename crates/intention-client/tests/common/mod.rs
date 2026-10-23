@@ -1,8 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Shared client fixtures use expect for precise test diagnostics."
-)]
-
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

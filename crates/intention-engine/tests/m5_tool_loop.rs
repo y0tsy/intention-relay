@@ -1,24 +1,18 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Execution fixtures use expect to provide precise failures."
-)]
-
 mod common;
 
-use std::{collections::VecDeque, future, sync::PoisonError, sync::mpsc, time::Duration};
+use std::{collections::VecDeque, future, sync::mpsc, time::Duration};
 
 use common::{
-    FakeRepository, ImmediateTime, RecordedTransition, RecordingCommitObserver, ScriptedPort,
-    row_id, time,
+    FIXTURE_ATTEMPT_WINDOW, FIXTURE_RETRY_DELAY, FakeRepository, RecordedTransition,
+    RecordingCommitObserver, ScriptedPort, VirtualTime, row_id,
 };
 use futures_util::{StreamExt, stream};
 use intention_config::ConfigSnapshotDto;
 use intention_engine::{
     ModelRunExecutionInputDto, ModelRunExecutionOutcomeDto, ModelRunExecutionService,
-    ModelSleepFuture, ModelTimePort, RunCancellation, SessionCommitDto, ToolExecutionPort,
-    ToolResultOutcomeDto,
+    RunCancellation, SessionCommitDto, ToolExecutionPort, ToolResultOutcomeDto,
 };
-use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, TimestampDto, ToolCallId};
+use intention_proto::{DtoResult, ErrorDto, RunId, SessionId, ToolCallId};
 use intention_proto::{MessageKindDto, MessageProjectionDto, RunStatusDto};
 use intention_providers::{
     AssistantReasoningDto, FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto,
@@ -35,7 +29,6 @@ fn tool_definition() -> ModelToolDefinitionDto {
         "Read bounded text from a workspace file.",
         r#"{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}"#,
     )
-    .expect("fixture tool definition is valid")
 }
 
 fn request(run_id: RunId, model: &str) -> ModelRequestDto {
@@ -68,7 +61,7 @@ struct PendingAfterStartedDriver {
 
 impl ModelExecutionDriver for PendingAfterStartedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -106,70 +99,6 @@ impl ModelExecutionDriver for PendingAfterStartedDriver {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
         ]))
-    }
-}
-
-/// A time port whose retry-delay sleep signals that the delay was entered and
-/// then stays pending, so the test can cancel the run inside the wait.
-///
-/// The attempt timeout is a seconds-scale duration while the runtime's retry
-/// delay is sub-second, so only the retry delay is held pending.
-struct RetryDelayTime {
-    entered: mpsc::Sender<()>,
-}
-
-impl ModelTimePort for RetryDelayTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        if duration < Duration::from_secs(1) {
-            let entered = self.entered.clone();
-            Box::pin(async move {
-                entered.send(()).expect("the test observes the retry delay");
-                future::pending::<()>().await;
-            })
-        } else {
-            Box::pin(future::ready(()))
-        }
-    }
-}
-
-/// A time port that signals when the provider round's timeout sleep is polled
-/// while the provider stream is pending, proving the round's select is
-/// suspended on that stream, and then stays pending until the run is
-/// cancelled.
-///
-/// The attempt timeout is a seconds-scale duration while the runtime's retry
-/// delay is sub-second, so only the round timeout is held pending. The round
-/// re-arms its idle window after every delivered event, so the port signals on
-/// every arm instead of only the first one.
-struct RoundSelectTime {
-    entered: std::sync::Mutex<mpsc::Sender<()>>,
-}
-
-impl ModelTimePort for RoundSelectTime {
-    fn now(&self) -> TimestampDto {
-        time(2)
-    }
-
-    fn sleep(&self, duration: Duration) -> ModelSleepFuture<'_> {
-        if duration >= Duration::from_secs(1) {
-            let entered = self
-                .entered
-                .lock()
-                .expect("time channel is available")
-                .clone();
-            Box::pin(async move {
-                entered
-                    .send(())
-                    .expect("the test observes the round select");
-                future::pending::<()>().await;
-            })
-        } else {
-            Box::pin(future::ready(()))
-        }
     }
 }
 
@@ -288,7 +217,7 @@ fn execute(
     config: ConfigSnapshotDto,
     signal: RunCancellation,
 ) -> DtoResult<ModelRunExecutionOutcomeDto> {
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     run_ready(
         ModelRunExecutionService::new(
             repository,
@@ -352,7 +281,7 @@ fn tool_call_executes_tool_and_completes() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -370,14 +299,14 @@ fn tool_call_executes_tool_and_completes() {
         repository
             .tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "the dispatched tool path owns the tool-result transaction"
     );
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -385,7 +314,7 @@ fn tool_call_executes_tool_and_completes() {
         repository
             .transitions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .iter()
             .map(RecordedTransition::status)
             .collect::<Vec<_>>(),
@@ -478,7 +407,7 @@ fn the_window_pass_compresses_a_large_tool_result_before_the_continuation_reques
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "a tool round without assistant text commits no transcript row"
     );
@@ -591,7 +520,7 @@ fn partial_tool_result_continues_the_loop_without_terminalizing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -809,7 +738,7 @@ fn tool_round_reasoning_is_attached_to_later_requests_in_round_order() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -855,7 +784,7 @@ fn a_reasoning_only_final_step_commits_its_reasoning_row() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -907,7 +836,7 @@ fn an_interrupted_reasoning_only_step_commits_its_reasoning_without_a_cut_marker
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -978,7 +907,7 @@ fn empty_reasoning_channel_round_attaches_presence_without_blank_facts() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "an empty reasoning presence carries no text and commits no durable assistant row"
     );
@@ -1026,7 +955,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(
@@ -1037,7 +966,7 @@ fn reasoning_echo_beyond_attachment_bound_terminalizes_as_typed_failed_run() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -1082,7 +1011,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .len(),
         1
     );
@@ -1090,7 +1019,7 @@ fn control_character_reasoning_echo_terminalizes_as_typed_failed_run() {
         repository
             .messages
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -1161,7 +1090,7 @@ fn tool_failure_continues_with_guidance_without_retry() {
         let finishes = repository
             .finishes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone();
         assert_eq!(finishes.len(), 1, "a tool failure never retries");
         assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -1170,7 +1099,7 @@ fn tool_failure_continues_with_guidance_without_retry() {
             repository
                 .tool_results
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .expect("the fixture mutex is not poisoned")
                 .is_empty(),
             "the tool path committed the failed result row"
         );
@@ -1212,7 +1141,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("tool_execution_failed"));
@@ -1225,7 +1154,7 @@ fn port_infrastructure_error_terminalizes_with_the_safe_error() {
         repository
             .tool_results
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty(),
         "the port owns the durable failed result row"
     );
@@ -1252,7 +1181,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let (called_tx, called_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let port = GatedPort::new(called_tx, release_rx);
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1298,7 +1227,7 @@ fn interruption_during_tool_execution_records_the_notice_and_continues() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1328,12 +1257,8 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::tool_call(call)),
         ],
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_broken",
-            false,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_broken", false)
+            .expect("fixture provider error is valid"))],
     ]);
     let port = ScriptedPort::new(vec![Ok(
         ToolResultOutcomeDto::completed("hello world").expect("content is valid")
@@ -1363,7 +1288,7 @@ fn provider_failure_after_tool_round_is_terminal_without_retry() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].error_code(), Some("provider_broken"));
@@ -1402,9 +1327,9 @@ fn interruption_before_port_invocation_answers_the_call_with_a_partial_result() 
     repository
         .cancel_after_append
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .replace((1, signal.clone()));
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -1468,7 +1393,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
         ToolResultOutcomeDto::completed("hello world").expect("content is valid")
     )]);
     let observer = RecordingCommitObserver::new();
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(&repository, &driver, &clock, &observer, &port).execute(
@@ -1491,7 +1416,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     assert_eq!(
         commits
             .iter()
-            .filter(|commit| matches!(commit, SessionCommitDto::Status { .. }))
+            .filter(|commit| matches!(commit, SessionCommitDto::Status(_)))
             .count(),
         2,
         "the running and completed statuses are observed"
@@ -1506,11 +1431,7 @@ fn tool_loop_with_commit_observer_executes_and_observes() {
     );
     assert_eq!(
         commits.last(),
-        Some(&SessionCommitDto::Status {
-            session_id,
-            run_id,
-            status: RunStatusDto::Completed,
-        })
+        Some(&SessionCommitDto::Status(repository.projection()))
     );
 }
 
@@ -1547,7 +1468,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
             Ok(ToolResultOutcomeDto::completed("two").expect("content is valid")),
         ],
     ));
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let execution_port = std::sync::Arc::clone(&port);
 
     let execution = std::thread::spawn(move || {
@@ -1599,7 +1520,7 @@ fn second_tool_call_does_not_start_until_first_finishes() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -1623,9 +1544,9 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     };
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
-    let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(select_tx),
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_ATTEMPT_WINDOW])
+        .signalling(select_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1669,7 +1590,7 @@ fn interruption_while_the_round_select_waits_records_a_notice_and_continues() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1699,9 +1620,9 @@ fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
     };
     let port = ScriptedPort::new(Vec::new());
     let (select_tx, select_rx) = mpsc::channel();
-    let clock = RoundSelectTime {
-        entered: std::sync::Mutex::new(select_tx),
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_ATTEMPT_WINDOW])
+        .signalling(select_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1749,14 +1670,14 @@ fn a_stop_while_the_round_select_waits_ends_the_run_instead_of_continuing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1, "the run commits one terminal outcome");
     assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1815,7 +1736,7 @@ fn a_stop_during_a_tool_batch_ends_the_run_after_the_results_commit() {
         cancellation: signal.clone(),
     };
 
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
     let outcome = run_ready(
         ModelRunExecutionService::new(
             &repository,
@@ -1846,14 +1767,14 @@ fn a_stop_during_a_tool_batch_ends_the_run_after_the_results_commit() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Interrupted);
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1879,12 +1800,8 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     // one more round, and a script that ends after two would then panic the
     // fixture thread rather than observe the continuation.
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_busy",
-            true,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_busy", true)
+            .expect("fixture provider error is valid"))],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
@@ -1897,9 +1814,9 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let port = ScriptedPort::new(Vec::new());
     let signal = RunCancellation::new();
     let (entered_tx, entered_rx) = mpsc::channel();
-    let clock = RetryDelayTime {
-        entered: entered_tx,
-    };
+    let clock = VirtualTime::new()
+        .holding([FIXTURE_RETRY_DELAY])
+        .signalling(entered_tx);
     let execution_signal = signal.clone();
 
     let execution = std::thread::spawn(move || {
@@ -1941,7 +1858,7 @@ fn interruption_during_the_retry_delay_starts_the_next_attempt() {
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -1962,12 +1879,8 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let config = fixture_snapshot_with_model("fixture");
     let repository = FakeRepository::new(session_id, run_id, config.clone());
     let driver = ScriptedDriver::with_rounds(vec![
-        vec![Err(ProviderErrorDto::unavailable(
-            "provider_busy",
-            true,
-            None,
-        )
-        .expect("fixture provider error is valid"))],
+        vec![Err(ProviderErrorDto::unavailable("provider_busy", true)
+            .expect("fixture provider error is valid"))],
         vec![
             Ok(ModelEventDto::started()),
             Ok(ModelEventDto::finished(FinishReasonDto::Stop)),
@@ -1976,7 +1889,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let port = ScriptedPort::new(Vec::new());
     let signal = RunCancellation::new();
     driver.cancel_during_stream(0, signal.model_signal());
-    let clock = ImmediateTime::new();
+    let clock = VirtualTime::new();
 
     let outcome = run_ready(
         ModelRunExecutionService::new(
@@ -2007,9 +1920,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     );
     assert!(
         clock
-            .sleeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .sleeps()
             .iter()
             .all(|duration| *duration >= Duration::from_secs(1)),
         "an already-interrupted run never arms the sub-second retry delay"
@@ -2017,7 +1928,7 @@ fn interruption_signalled_before_the_retry_wait_still_starts_the_next_attempt() 
     let messages = repository
         .messages
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         messages
@@ -2102,7 +2013,7 @@ fn finished_with_tool_calls_attaches_reasoning_and_continues_the_loop() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(finishes.len(), 1);
     assert_eq!(finishes[0].status(), RunStatusDto::Completed);
@@ -2118,7 +2029,7 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
     repository
         .pending
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .push_back(pending_user_message(session_id, run_id, "pending message"));
     let driver = ScriptedDriver::with_rounds(vec![
         vec![
@@ -2162,14 +2073,14 @@ fn pending_messages_join_the_live_context_at_a_tool_batch_boundary() {
         *repository
             .pending_consumes
             .lock()
-            .unwrap_or_else(PoisonError::into_inner),
+            .expect("the fixture mutex is not poisoned"),
         2
     );
     assert!(
         repository
             .pending
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .is_empty()
     );
 }
@@ -2183,7 +2094,7 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     repository
         .pending
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .push_back(pending_user_message(
             session_id,
             run_id,
@@ -2228,7 +2139,7 @@ fn a_pending_message_at_the_finish_boundary_continues_instead_of_completing() {
     let finishes = repository
         .finishes
         .lock()
-        .unwrap_or_else(PoisonError::into_inner)
+        .expect("the fixture mutex is not poisoned")
         .clone();
     assert_eq!(
         finishes.len(),

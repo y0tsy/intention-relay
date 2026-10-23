@@ -1,29 +1,15 @@
 //! The sessions-browser transitions: the browser card, its tabs, its filter,
-//! its cursor, and the requests whose core support does not exist yet.
+//! and its cursor.
 //!
 //! The browser is one surface of the same render-free core the chat uses, drawn
 //! as a card over the chat inside the one window. It computes the rows a view
 //! renders - filtered, recency-ordered, and clamped to a valid cursor row - so
-//! the view stays a pure function of them. Every fact the core cannot supply
-//! yet carries a `@todo(core)` marker here and in the text the user sees.
+//! the view stays a pure function of them. A tab exists only for a fact the
+//! session summary carries: the workspace binding and the whole list.
 
 use intention_proto::{RunModeDto, SessionId, SessionSummaryDto, WorkspaceRootDto};
 
 use super::{AppState, BrowserCursorMove, Effect, Screen, short_identifier};
-
-/// The empty state of the `Exec` tab.
-// @todo(core): the session summary carries no "ran an execute call" fact.
-const EXEC_REASON: &str = "@todo(core): the session summary carries no execute-call fact, so this tab cannot select sessions";
-
-/// The empty state of the `Favorites` tab.
-// @todo(core): durable favorite flags and the command that sets them are missing.
-const FAVORITES_REASON: &str =
-    "@todo(core): sessions carry no favorite flag or command, so this tab cannot select sessions";
-
-/// The empty state of the `Archived` tab.
-// @todo(core): durable archive flags and the command that sets them are missing.
-const ARCHIVED_REASON: &str =
-    "@todo(core): sessions carry no archive flag or command, so this tab cannot select sessions";
 
 /// The empty state of a filter that selects no row.
 const NO_MATCHES_REASON: &str = "no session matches the filter";
@@ -31,49 +17,25 @@ const NO_MATCHES_REASON: &str = "no session matches the filter";
 /// The empty state while no session list has been read yet.
 const READING_SESSIONS_REASON: &str = "reading sessions";
 
-/// The notice the rename key shows.
-// @todo(core): neither proto, storage, nor the daemon carries a durable session
-// title or a rename command.
-const RENAME_NOTICE: &str = "rename needs core support (@todo(core): no durable session title)";
-
-/// The notice the archive key shows.
-// @todo(core): neither proto, storage, nor the daemon carries a durable archive
-// flag or command.
-const ARCHIVE_NOTICE: &str =
-    "archive needs core support (@todo(core): no durable archive flag or command)";
-
-/// The notice the tree key shows.
-// @todo(core): forks arrive with Slice 6 (`session_fork_v1`).
-const TREE_NOTICE: &str =
-    "the fork tree needs core support (@todo(core): session forks arrive in Slice 6)";
-
 /// The notice the selection key shows when the result has no row.
 const NO_SELECTION_NOTICE: &str = "no session to select";
 
 /// The tabs the sessions browser offers, in the order the radio row shows them.
+///
+/// Each tab selects by a fact the session summary carries, so every tab can
+/// have rows: the workspace root a session is durably bound to, and the list
+/// itself.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrowserTab {
     /// Sessions bound to the workspace root this front end runs in.
     CurrentFolder,
     /// Every listed session, most recently updated first.
     All,
-    /// Sessions that ran an execute call.
-    Exec,
-    /// Sessions the user marked as favorites.
-    Favorites,
-    /// Sessions the user archived.
-    Archived,
 }
 
 impl BrowserTab {
     /// Every tab, in the order the radio row shows them.
-    pub const ALL: [Self; 5] = [
-        Self::CurrentFolder,
-        Self::All,
-        Self::Exec,
-        Self::Favorites,
-        Self::Archived,
-    ];
+    pub const ALL: [Self; 2] = [Self::CurrentFolder, Self::All];
 
     /// Returns the label the radio row shows for this tab.
     #[must_use]
@@ -81,9 +43,6 @@ impl BrowserTab {
         match self {
             Self::CurrentFolder => "Current Folder",
             Self::All => "All",
-            Self::Exec => "Exec",
-            Self::Favorites => "Favorites",
-            Self::Archived => "Archived",
         }
     }
 
@@ -91,34 +50,15 @@ impl BrowserTab {
     const fn next(self) -> Self {
         match self {
             Self::CurrentFolder => Self::All,
-            Self::All => Self::Exec,
-            Self::Exec => Self::Favorites,
-            Self::Favorites => Self::Archived,
-            Self::Archived => Self::CurrentFolder,
+            Self::All => Self::CurrentFolder,
         }
     }
 
     /// Returns the previous tab, wrapping from the first one to the last.
     const fn previous(self) -> Self {
         match self {
-            Self::CurrentFolder => Self::Archived,
+            Self::CurrentFolder => Self::All,
             Self::All => Self::CurrentFolder,
-            Self::Exec => Self::All,
-            Self::Favorites => Self::Exec,
-            Self::Archived => Self::Favorites,
-        }
-    }
-
-    /// Returns why this tab can select no session, if the core cannot fill it.
-    ///
-    /// A stub tab returns no rows and names the missing fact, so the view can
-    /// explain its empty state instead of rendering an empty table.
-    const fn stub_reason(self) -> Option<&'static str> {
-        match self {
-            Self::CurrentFolder | Self::All => None,
-            Self::Exec => Some(EXEC_REASON),
-            Self::Favorites => Some(FAVORITES_REASON),
-            Self::Archived => Some(ARCHIVED_REASON),
         }
     }
 }
@@ -251,16 +191,11 @@ impl SessionsBrowserState {
     /// contract, so the browser shows the order it received instead of
     /// re-sorting a raw timestamp.
     pub(super) fn refresh(&mut self, sessions: &[SessionSummaryDto]) {
-        let rows = if self.tab.stub_reason().is_some() {
-            Vec::new()
-        } else {
-            sessions
-                .iter()
-                .filter(|summary| self.matches(summary))
-                .map(BrowserRow::from_summary)
-                .collect()
-        };
-        self.rows = rows;
+        self.rows = sessions
+            .iter()
+            .filter(|summary| self.matches(summary))
+            .map(BrowserRow::from_summary)
+            .collect();
         self.clamp_cursor();
     }
 
@@ -290,9 +225,6 @@ impl SessionsBrowserState {
 
     /// Returns the empty-state text of the current tab and filter, if any.
     pub(super) const fn empty_reason(&self, sessions_loaded: bool) -> Option<&'static str> {
-        if let Some(reason) = self.tab.stub_reason() {
-            return Some(reason);
-        }
         if self.rows.is_empty() {
             if !self.filter.is_empty() {
                 return Some(NO_MATCHES_REASON);
@@ -371,24 +303,6 @@ impl AppState {
         self.browser.close();
         self.note(format!("opening session {}", short_identifier(session_id)));
         vec![Effect::OpenSession(session_id)]
-    }
-
-    /// Reports that renaming the selected session needs core support.
-    pub(super) fn request_session_rename(&mut self) -> Vec<Effect> {
-        self.note(RENAME_NOTICE.to_owned());
-        Vec::new()
-    }
-
-    /// Reports that archiving the selected session needs core support.
-    pub(super) fn request_session_archive(&mut self) -> Vec<Effect> {
-        self.note(ARCHIVE_NOTICE.to_owned());
-        Vec::new()
-    }
-
-    /// Reports that the selected session's fork tree needs core support.
-    pub(super) fn request_session_tree(&mut self) -> Vec<Effect> {
-        self.note(TREE_NOTICE.to_owned());
-        Vec::new()
     }
 
     /// Selects one browser tab and rebuilds the rows it shows.

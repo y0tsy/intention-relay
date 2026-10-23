@@ -1,20 +1,20 @@
 //! Typed inputs and client effects of the render-free application state.
 
-use intention_client::SessionStreamState;
+use intention_client::{FrameUpdate, SessionStreamState};
 use intention_proto::{
-    DaemonHealthDto, DaemonReadinessDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto,
-    SessionId, SessionSnapshotDto, SessionSummariesDto, ThemeDto,
+    DaemonHealthDto, ErrorDto, RunId, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
+    SessionSnapshotDto, SessionSummariesDto,
 };
 
-use super::{MenuMove, Theme};
+use super::{MenuMove, ThemePreference};
 
-/// The readiness the client last reported for the local daemon.
+/// The connection state the client last reported for the local daemon.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConnectionStatus {
     /// Bootstrap is in flight.
     Connecting,
-    /// The daemon reported this readiness.
-    Ready(DaemonReadinessDto),
+    /// The daemon answered its health projection, so it can serve requests.
+    Ready,
     /// The last attempt failed; the error line carries the reason.
     Failed,
 }
@@ -131,30 +131,42 @@ pub enum Action {
         /// The typed rejection.
         error: ErrorDto,
     },
-    /// The daemon answered its effective terminal settings.
-    ///
-    /// The same action answers the startup read and a theme selection: the
-    /// daemon is the authority for the committed theme, so the accepted value
-    /// is what moves it, and a selection that is still in flight has not
-    /// committed anything.
-    SettingsReceived(ThemeDto),
-    /// Reading the terminal settings or persisting a selected theme failed.
-    SettingsFailed(ErrorDto),
-    /// The user selected a theme: the daemon is asked to persist it.
-    ThemeSelected(Theme),
-    /// The user highlighted a theme in the picker: it previews until the
+    /// The user selected a theme preference: it applies in memory at once and
+    /// its local file is rewritten.
+    ThemeSelected(ThemePreference),
+    /// The user highlighted a preference in the picker: it previews until the
     /// selection settles.
-    ThemePreviewed(Theme),
+    ThemePreviewed(ThemePreference),
     /// The user left the theme picker: the local preview is dropped.
     ThemePreviewCleared,
+    /// Rewriting the local theme file failed.
+    ///
+    /// The selection already moved the committed preference; the failure names
+    /// why the choice will not survive the next start.
+    ThemePersistFailed(ErrorDto),
     /// A run subscription opened with the daemon's current run state.
     SessionStreamOpened(SessionStreamState),
     /// Opening a run subscription failed.
     SessionStreamFailed(ErrorDto),
     /// The daemon closed the run stream.
     SessionStreamEnded,
-    /// One committed or transient run-stream frame arrived.
-    FrameReceived(SessionFrameDto),
+    /// One committed or transient run-stream frame arrived, already derived.
+    ///
+    /// The client applies every frame to the one session state it exposes and
+    /// hands the frame, what it changed, and its result here: the front end
+    /// takes that state and never replays the frame into a copy of its own.
+    FrameReceived {
+        /// The frame as the daemon sent it.
+        frame: SessionFrameDto,
+        /// What the frame changed in the state beside it.
+        update: FrameUpdate,
+        /// The client's committed session state after the frame.
+        ///
+        /// Boxed because the state is the widest value an action carries: the
+        /// action crosses a channel once per frame, and every other variant is
+        /// far smaller than this one.
+        state: Box<SessionStreamState>,
+    },
     /// The daemon accepted one user turn.
     TurnAccepted(SendUserTurnOutcomeDto),
     /// The front end measured how long a dispatched turn has been in flight.
@@ -232,12 +244,6 @@ pub enum Action {
     BrowserCursorMove(BrowserCursorMove),
     /// The user opened the session the sessions browser cursor points at.
     BrowserSelectionRequested,
-    /// The user asked to rename the selected session.
-    BrowserRenameRequested,
-    /// The user asked to archive the selected session.
-    BrowserArchiveRequested,
-    /// The user asked for the selected session's fork tree.
-    BrowserTreeRequested,
     /// The user asked for a new session.
     NewSessionRequested,
     /// The user pressed Ctrl+C: one key press with layered effects.
@@ -290,9 +296,9 @@ pub enum Action {
 }
 
 impl Action {
-    /// Returns whether this action reports the client's own work.
+    /// Returns whether this action reports work the front end's own tasks did.
     ///
-    /// A client report answers an effect the front end dispatched, carries a
+    /// Such a report answers an effect the front end dispatched, carries a
     /// stream frame, or carries the elapsed time the front end measured. None
     /// of them is something the user asked for, and the layered Ctrl+C arm is
     /// consecutive over the user's own actions only: a live run's frames and a
@@ -310,12 +316,11 @@ impl Action {
                 | Self::SessionSnapshotFailed(_)
                 | Self::SessionCreated(_)
                 | Self::SessionCreateFailed { .. }
-                | Self::SettingsReceived(_)
-                | Self::SettingsFailed(_)
+                | Self::ThemePersistFailed(_)
                 | Self::SessionStreamOpened(_)
                 | Self::SessionStreamFailed(_)
                 | Self::SessionStreamEnded
-                | Self::FrameReceived(_)
+                | Self::FrameReceived { .. }
                 | Self::ElapsedReported { .. }
                 | Self::TurnAccepted(_)
                 | Self::TurnFailed(_)
@@ -333,17 +338,13 @@ impl Action {
 pub enum Effect {
     /// Bootstrap or re-bootstrap the shared local client.
     Connect,
-    /// Read the daemon's effective terminal settings.
+    /// Rewrite the local settings file with one selected theme preference.
     ///
-    /// The settings are read once the connection is ready and whenever a
-    /// reconnect re-establishes it, so the committed theme starts from the
-    /// daemon's own value instead of a terminal guess.
-    LoadSettings,
-    /// Persist one selected theme through the daemon.
-    ///
-    /// The daemon stores the override and answers with the accepted theme;
-    /// only that reply moves the committed theme.
-    PersistTheme(Theme),
+    /// The preference is this front end's own value, so the rewrite is local
+    /// work: no client call carries it and the daemon never learns it. The file
+    /// is what makes the choice survive the next start, and a written `auto`
+    /// leaves the next launch to its own environment detection.
+    PersistTheme(ThemePreference),
     /// Read the bounded current session list.
     ListSessions,
     /// Read the current snapshot of one session.

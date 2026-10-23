@@ -15,14 +15,12 @@ use std::time::{Duration, Instant};
 
 use intention_proto::{
     CancelRunCommandDto, ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto,
-    GetSessionSnapshotQueryDto, IdempotencyKey, MessageId, MessageKindDto, MessageProjectionDto,
-    ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto, RunCancelledAcceptedDto, RunId,
+    DaemonHealthDto, DtoResult, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, MessageId,
+    MessageKindDto, MessageProjectionDto, ProtocolResultDto, RunCancelledAcceptedDto, RunId,
     RunProjectionDto, RunStatusDto, SendUserTurnCommandDto, SendUserTurnOutcomeDto,
-    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SetTuiThemeCommandDto,
-    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, ThemeDto, TuiSettingsDto,
-    TuiThemeAcceptedDto, TurnId, decode_response, encode_request, parse_session_frame,
-    run_status_is_terminal,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto,
+    SubscribeSessionCommandDto, TextDeltaChannelDto, TextDeltaFrameDto, decode_response,
+    encode_request, parse_session_frame, run_status_is_terminal,
 };
 use intention_transport::{
     AsyncLocalClientConnection, AsyncMessageReceiver, AsyncMessageSender, LocalEndpoint,
@@ -263,44 +261,14 @@ impl IntentionClient {
     pub async fn send_user_turn(
         &self,
         session_id: SessionId,
-        idempotency_key: IdempotencyKey,
         content: String,
     ) -> DtoResult<SendUserTurnOutcomeDto> {
-        let command = SendUserTurnCommandDto::new(session_id, idempotency_key, content)?;
+        let command = SendUserTurnCommandDto::new(session_id, content)?;
         match self
             .request(ClientRequestDto::SendUserTurn(command))
             .await?
         {
-            ProtocolResultDto::TurnAccepted(turn) if turn.session_id() == session_id => {
-                Ok(turn.outcome())
-            }
-            _ => Err(invalid_response()),
-        }
-    }
-
-    /// Removes one not-yet-seen pending user turn.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not the removal of this
-    /// session's turn.
-    pub async fn remove_turn(
-        &self,
-        session_id: SessionId,
-        turn_id: TurnId,
-    ) -> DtoResult<RemoveTurnAcceptedDto> {
-        match self
-            .request(ClientRequestDto::RemoveTurn(RemoveTurnCommandDto::new(
-                session_id, turn_id,
-            )))
-            .await?
-        {
-            ProtocolResultDto::TurnRemoved(removed)
-                if removed.session_id() == session_id && removed.turn_id() == turn_id =>
-            {
-                Ok(removed)
-            }
+            ProtocolResultDto::TurnAccepted(turn) => Ok(turn.outcome()),
             _ => Err(invalid_response()),
         }
     }
@@ -326,11 +294,7 @@ impl IntentionClient {
             )))
             .await?
         {
-            ProtocolResultDto::RunCancelled(cancelled)
-                if cancelled.session_id() == session_id && cancelled.run_id() == run_id =>
-            {
-                Ok(cancelled)
-            }
+            ProtocolResultDto::RunCancelled(cancelled) => Ok(cancelled),
             _ => Err(invalid_response()),
         }
     }
@@ -353,9 +317,7 @@ impl IntentionClient {
             ))
             .await?
         {
-            ProtocolResultDto::SessionSnapshot(snapshot) if snapshot.session_id() == session_id => {
-                Ok(snapshot)
-            }
+            ProtocolResultDto::SessionSnapshot(snapshot) => Ok(snapshot),
             _ => Err(invalid_response()),
         }
     }
@@ -396,41 +358,6 @@ impl IntentionClient {
         match sessions.sessions().first() {
             Some(summary) => Ok(summary.session_id()),
             None => Err(no_sessions_to_continue()?),
-        }
-    }
-
-    /// Reads the effective terminal settings.
-    ///
-    /// The daemon answers its stored theme override or, before any set, the
-    /// theme the resolved configuration selected.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not terminal settings.
-    pub async fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
-        match self.request(ClientRequestDto::GetTuiSettings).await? {
-            ProtocolResultDto::TuiSettings(settings) => Ok(settings),
-            _ => Err(invalid_response()),
-        }
-    }
-
-    /// Selects and stores the terminal theme.
-    ///
-    /// # Errors
-    ///
-    /// Returns the daemon's typed rejection, a typed transport or timeout error,
-    /// or an invalid-response error when the reply is not the acceptance of the
-    /// requested theme.
-    pub async fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
-        match self
-            .request(ClientRequestDto::SetTuiTheme(SetTuiThemeCommandDto::new(
-                theme,
-            )))
-            .await?
-        {
-            ProtocolResultDto::TuiThemeSet(accepted) if accepted.theme() == theme => Ok(accepted),
-            _ => Err(invalid_response()),
         }
     }
 
@@ -520,14 +447,13 @@ impl SessionStreamClient {
     ///
     /// # Errors
     ///
-    /// Returns a typed protocol, transport, or scoped-response error, or an
-    /// unavailable timeout error when the correlated reply does not arrive
-    /// before the bounded deadline.
+    /// Returns a typed protocol or transport error, or an unavailable timeout
+    /// error when the correlated reply does not arrive before the bounded
+    /// deadline.
     pub async fn subscribe(
         &self,
         subscription: SubscribeSessionCommandDto,
     ) -> DtoResult<SessionStreamSubscription> {
-        let session_id = subscription.session_id();
         let connection = AsyncLocalClientConnection::connect(&self.endpoint).await?;
         let (mut sender, mut receiver) = connection.split();
         let request = encode_request(REQUEST_ID, ClientRequestDto::SubscribeSession(subscription));
@@ -539,11 +465,6 @@ impl SessionStreamClient {
         else {
             return Err(invalid_response());
         };
-        if snapshot.session_id() != session_id {
-            // The correlated reply belongs to the session this subscription
-            // asked for; another session's snapshot is a scoped-response error.
-            return Err(scope_error());
-        }
         Ok(SessionStreamSubscription {
             sender,
             receiver,
@@ -568,8 +489,18 @@ pub struct SessionStreamSubscription {
 /// One observation of a live session stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StreamStep {
-    /// One committed or transient frame.
-    Frame(SessionFrameDto),
+    /// One committed or transient frame, beside what it changed.
+    Frame {
+        /// The frame as the daemon sent it.
+        frame: SessionFrameDto,
+        /// What the frame changed in the subscription's committed state.
+        ///
+        /// The subscription applies every frame to the one
+        /// [`SessionStreamState`] it exposes, so this value is the derivation's
+        /// own report: a caller reads it instead of re-deriving the acceptance
+        /// decision from the frame.
+        update: FrameUpdate,
+    },
     /// The daemon closed the connection.
     ///
     /// The failure is the client's own local transport classification; a
@@ -583,7 +514,10 @@ impl SessionStreamSubscription {
     ///
     /// Content and status frames are applied to the committed state before they
     /// are returned, and a connection the daemon closed is the client's own
-    /// classification rather than an error.
+    /// classification rather than an error. The state this subscription exposes
+    /// is the one derivation of every frame it received: a caller renders from
+    /// [`SessionStreamSubscription::state`] and reads the reported update, and
+    /// never applies the frame a second time to a copy of its own.
     ///
     /// # Errors
     ///
@@ -602,8 +536,8 @@ impl SessionStreamSubscription {
             Err(error) => return Err(error),
         };
         let frame = parse_session_frame(&line)?;
-        let _update = self.state.apply_frame(frame.clone())?;
-        Ok(StreamStep::Frame(frame))
+        let update = self.state.apply_frame(frame.clone())?;
+        Ok(StreamStep::Frame { frame, update })
     }
 
     /// Returns the committed state of this fixed session scope.
@@ -1181,11 +1115,14 @@ fn no_sessions_to_continue() -> DtoResult<ErrorDto> {
         "no_sessions_to_continue",
         ErrorCategoryDto::NotFound,
         "the daemon reports no session to continue",
-        ErrorRetryDto::Never,
-        None,
+        false,
     )
 }
 
+/// Returns the typed failure for a frame that belongs to another session.
+///
+/// Stream frames are uncorrelated, so the subscribed session identity is the
+/// only thing that proves a frame belongs on this connection.
 fn scope_error() -> ErrorDto {
     ErrorDto::validation(
         "invalid_session_subscription",
@@ -1228,11 +1165,6 @@ fn startup_lock_timeout() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        clippy::panic,
-        reason = "Unit fixtures use direct assertions for precise diagnostics."
-    )]
 
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};

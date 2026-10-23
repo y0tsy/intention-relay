@@ -12,13 +12,21 @@
 //! wire name the product does not expose is an honest durable fact rather than
 //! a silently empty identity.
 
+// The `JsonSchema` derive expands a `serde_json::Map` of its own into a sibling
+// impl block, which the DTO-first type lint cannot attribute to the derived
+// type. No type in this module declares untyped JSON.
+#![allow(
+    clippy::disallowed_types,
+    reason = "the JsonSchema derive expands its own serde_json::Map into a sibling impl block; no type in this module declares untyped JSON"
+)]
+
 use std::fmt::{Display, Formatter};
 
+use schemars::transform::Transform;
+use schemars::{JsonSchema, Schema};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ToolCallId, WorkspaceRelativePathDto,
-};
+use crate::{DtoResult, ErrorCategoryDto, ErrorDto, ToolCallId, WorkspaceRelativePathDto};
 
 /// The fixed set of tools exposed by the product boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -79,8 +87,7 @@ impl ToolId {
                 "invalid_tool_id",
                 ErrorCategoryDto::Internal,
                 "the tool name is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -474,8 +481,7 @@ impl ToolResultStatusDto {
                 "invalid_tool_result_status",
                 ErrorCategoryDto::Internal,
                 "the durable tool result status is not declared",
-                ErrorRetryDto::Never,
-                None,
+                false,
             )?),
         }
     }
@@ -540,7 +546,10 @@ impl ToolResultMetadataEntryDto {
 ///
 /// Deserialization is validating: JSON arriving at the daemon tool boundary
 /// cannot bypass the constructor's NUL check (PR24-023).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+///
+/// The derived JSON Schema is the string type: the bound is a runtime
+/// validation the model describes in prose rather than a schema keyword.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct BoundedText(String);
 
@@ -597,44 +606,63 @@ pub enum ToolInput {
 }
 
 /// The `read` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `read` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `read` tool's typed parameters.")]
 pub struct ReadInput {
     /// Workspace-relative path of the file to read.
     pub path: WorkspaceRelativePathDto,
 }
 
 /// The `glob` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `glob` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `glob` tool's typed parameters.")]
 pub struct GlobInput {
-    /// Path pattern to match.
+    /// Glob pattern matched against workspace-relative paths.
     pub pattern: BoundedText,
 }
 
 /// The `grep` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `grep` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `grep` tool's typed parameters.")]
 pub struct GrepInput {
-    /// Text pattern to search for.
+    /// Text pattern to search for inside workspace files.
     pub pattern: BoundedText,
     /// Optional typed search scope.
     #[serde(default)]
+    #[schemars(with = "GrepScope")]
     pub scope: Option<GrepScope>,
     /// Optional workspace-relative path narrowing the search.
     #[serde(default)]
+    #[schemars(with = "WorkspaceRelativePathDto")]
     pub path: Option<WorkspaceRelativePathDto>,
 }
 
 /// The `grep` tool's typed search scope.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// The derived JSON Schema names the three scope kinds (`file`, `directory`,
+/// `workspace`) through the serde tag vocabulary; the `path` entry carries a
+/// description naming the kinds that require it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `grep` tool's typed search scope.")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GrepScope {
     /// One workspace file.
     File {
-        /// Workspace-relative path of the file to search.
+        /// Workspace-relative path required by the file and directory scope kinds.
         path: WorkspaceRelativePathDto,
     },
     /// One workspace directory.
     Directory {
-        /// Workspace-relative path of the directory to search.
+        /// Workspace-relative path required by the file and directory scope kinds.
         path: WorkspaceRelativePathDto,
     },
     /// The whole workspace root.
@@ -642,19 +670,28 @@ pub enum GrepScope {
 }
 
 /// The `write` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `write` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `write` tool's typed parameters.")]
 pub struct WriteInput {
     /// Workspace-relative path of the file to write.
     pub path: WorkspaceRelativePathDto,
-    /// Bounded text to write.
+    /// Bounded text to write to the file.
     pub content: BoundedText,
     /// Optional guard: the write applies only while the file holds exactly this text.
     #[serde(default)]
+    #[schemars(with = "BoundedText")]
     pub expected_content: Option<BoundedText>,
 }
 
 /// The `edit` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `edit` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `edit` tool's typed parameters.")]
 pub struct EditInput {
     /// Workspace-relative path of the file to edit.
     pub path: WorkspaceRelativePathDto,
@@ -664,6 +701,7 @@ pub struct EditInput {
     pub new: BoundedText,
     /// Optional guard: the edit applies only while the file holds exactly this text.
     #[serde(default)]
+    #[schemars(with = "BoundedText")]
     pub expected_content: Option<BoundedText>,
 }
 
@@ -672,7 +710,7 @@ pub struct EditInput {
 /// The text is the model's command exactly as given; the platform shell that
 /// interprets it and the executable path behind it are code-owned tool
 /// semantics and never cross a public DTO boundary.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ShellCommandTextDto(String);
 
@@ -710,7 +748,7 @@ impl<'de> Deserialize<'de> for ShellCommandTextDto {
 }
 
 /// A validated environment variable name for the `execute` tool.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct EnvVarNameDto(String);
 
@@ -753,16 +791,17 @@ impl<'de> Deserialize<'de> for EnvVarNameDto {
 }
 
 /// One environment variable a call overlays on the inherited environment.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "One environment variable a call overlays on the inherited environment.")]
 pub struct EnvVarDto {
-    /// The variable name.
+    /// Environment variable name.
     pub name: EnvVarNameDto,
-    /// The variable value.
+    /// Environment variable value.
     pub value: BoundedText,
 }
 
 /// A non-zero per-call timeout for the `execute` tool.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct ToolTimeoutSecondsDto(u64);
 
@@ -799,19 +838,88 @@ impl<'de> Deserialize<'de> for ToolTimeoutSecondsDto {
 }
 
 /// The `execute` tool's typed parameters.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+///
+/// This type is the single definition of the `execute` tool's model arguments:
+/// the model-facing JSON Schema document is derived from it.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[schemars(description = "The `execute` tool's typed parameters.")]
 pub struct ExecuteInput {
-    /// The shell command text.
+    /// Shell command text with shell semantics: pipelines, redirects, and compound commands.
     pub command: ShellCommandTextDto,
-    /// Optional workspace-relative working directory.
+    /// Optional workspace-relative working directory; the workspace root by default.
     #[serde(default)]
+    #[schemars(with = "WorkspaceRelativePathDto")]
     pub cwd: Option<WorkspaceRelativePathDto>,
-    /// Environment variables overlaid on the inherited environment.
+    /// Optional environment variables overlaid on the inherited environment.
     #[serde(default)]
     pub env: Vec<EnvVarDto>,
-    /// Optional per-call timeout in seconds.
+    /// Optional per-call timeout in whole seconds.
     #[serde(default)]
+    #[schemars(
+        with = "ToolTimeoutSecondsDto",
+        range(min = 1),
+        description = "Optional per-call deadline in whole seconds. Without it the command runs until it finishes or the run is cancelled; when it elapses the command is terminated and the call returns the captured output as a partial result whose notice names the timeout."
+    )]
     pub timeout_seconds: Option<ToolTimeoutSecondsDto>,
+}
+
+impl ToolId {
+    /// Returns the JSON Schema document of this tool's typed model arguments.
+    ///
+    /// The document is rendered from the typed input DTO that decodes those
+    /// arguments, so the parameters have one definition and the schema the
+    /// model reads cannot describe a different shape. The document carries
+    /// only the model-facing `type`, `properties`, `required`, `description`,
+    /// `enum`, `const`, and unbounded `minimum` keywords (one of them is the
+    /// `timeout_seconds` floor of one); the generator's title, `$schema`,
+    /// format, and null-default annotations are model-irrelevant noise the
+    /// transform strips.
+    #[must_use]
+    pub fn input_schema(self) -> String {
+        let mut generator = input_schema_generator();
+        let schema = match self {
+            Self::Read => generator.root_schema_for::<ReadInput>(),
+            Self::Write => generator.root_schema_for::<WriteInput>(),
+            Self::Edit => generator.root_schema_for::<EditInput>(),
+            Self::Execute => generator.root_schema_for::<ExecuteInput>(),
+            Self::Glob => generator.root_schema_for::<GlobInput>(),
+            Self::Grep => generator.root_schema_for::<GrepInput>(),
+        };
+        serde_json::to_string(&schema).unwrap_or_else(|error| {
+            unreachable!("a JSON Schema document is a JSON tree and always serializes: {error}")
+        })
+    }
+}
+
+/// Builds the generator that renders one model-facing input schema document.
+fn input_schema_generator() -> schemars::generate::SchemaGenerator {
+    schemars::generate::SchemaSettings::draft2020_12()
+        .with(|settings| {
+            settings.inline_subschemas = true;
+            settings.meta_schema = None;
+            settings.transforms = vec![Box::new(StripModelIrrelevantSchemaKeywords)];
+        })
+        .into_generator()
+}
+
+/// Strips every schema keyword the model never reads.
+///
+/// Schemars renders each workload schema together with its generator metadata
+/// (root and subschema titles, the `$schema` dialect URI, integer `format`
+/// names) and serde's null defaults on optional entries. The model-facing
+/// contract is six JSON type keywords only, so the transform removes whatever
+/// is outside that vocabulary on every schema node, including subschemas.
+#[derive(Clone, Debug)]
+struct StripModelIrrelevantSchemaKeywords;
+
+impl Transform for StripModelIrrelevantSchemaKeywords {
+    fn transform(&mut self, schema: &mut Schema) {
+        schemars::transform::transform_subschemas(self, schema);
+        schema.remove("$schema");
+        schema.remove("title");
+        schema.remove("format");
+        schema.remove("default");
+    }
 }
 
 impl ToolInput {
@@ -1018,10 +1126,6 @@ impl ToolProcessStatus {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Unit fixtures use expect to provide precise test failure messages."
-    )]
 
     use super::*;
 

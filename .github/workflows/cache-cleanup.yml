@@ -8,6 +8,9 @@ on:
     # the retention window are removed so the repository never drifts back to
     # the cache limit between merges.
     - cron: "0 3 * * 1"
+  # On-demand pruning for when the cache budget is reached between merges and
+  # the next scheduled run is too far away.
+  workflow_dispatch:
 
 permissions:
   contents: read

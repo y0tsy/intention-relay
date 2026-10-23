@@ -1,19 +1,17 @@
-#![allow(
-    clippy::expect_used,
-    reason = "Contract fixtures use expect to provide precise test failure messages."
-)]
-
 //! DTO contract evidence for the `intention-proto` public API: identity, error, shared
 //! model-value wire contracts, the workspace-root and turn-command value contracts, and
 //! the run-lifecycle rules.
 
+#![expect(
+    clippy::disallowed_types,
+    reason = "Contract tests decode and index raw wire JSON by shape; DTO-first binds production code."
+)]
+
 use intention_proto::{
-    ConfigRevisionId, CorrelationIdDto, CreateSessionCommandDto, ErrorCategoryDto, ErrorDto,
-    ErrorRetryDto, GetSessionSnapshotQueryDto, IdempotencyKey, ProjectId, ProviderErrorDto,
-    RemoveTurnCommandDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto,
-    SendUserTurnCommandDto, SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId,
-    TurnId, UsageDto, WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto,
-    run_status_is_terminal,
+    CreateSessionCommandDto, ErrorCategoryDto, ErrorDto, GetSessionSnapshotQueryDto, ProjectId,
+    ProviderErrorDto, RunId, RunModeDto, RunProjectionDto, RunStatusDto, SendUserTurnCommandDto,
+    SessionId, SessionProjectionDto, TimestampDto, ToolCallDto, ToolCallId, TurnId, UsageDto,
+    WorkspaceId, WorkspaceRelativePathDto, WorkspaceRootDto, run_status_is_terminal,
 };
 
 fn workspace_root() -> WorkspaceRootDto {
@@ -56,21 +54,14 @@ fn validated_value_dtos_reject_invalid_wire_values() {
 }
 
 #[test]
-fn current_shape_minimal_error_decodes_absent_optional_fields_as_none() {
-    // The current ErrorDto shape keeps `correlation_id` optional on the wire: a
-    // minimal current error without it must decode as None and re-encode
-    // without inventing a value.
+fn current_shape_minimal_error_round_trips_its_retry_flag() {
     let error: ErrorDto = serde_json::from_str(
-        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual"}"#,
+        r#"{"code":"fixture","category":"not_found","message":"safe","retryable":false}"#,
     )
     .expect("minimal current-shape error decodes");
     assert_eq!(error.code(), "fixture");
     assert_eq!(error.category(), ErrorCategoryDto::NotFound);
-    assert_eq!(error.retry(), ErrorRetryDto::Manual);
-    assert!(
-        error.correlation_id().is_none(),
-        "absent correlation is None"
-    );
+    assert!(!error.retryable());
     let encoded = serde_json::to_string(&error).expect("test serialization must succeed");
     let decoded: ErrorDto =
         serde_json::from_str(&encoded).expect("round trip must decode identically");
@@ -88,26 +79,14 @@ fn malformed_error_wire_data_is_rejected() {
     ] {
         assert!(WorkspaceRelativePathDto::parse(invalid_path).is_err());
     }
-    let correlation = CorrelationIdDto::new();
-    let encoded = serde_json::to_string(&correlation).expect("correlation serializes");
-    assert_eq!(
-        serde_json::from_str::<CorrelationIdDto>(&encoded).expect("correlation decodes"),
-        correlation
-    );
     let parsed_path =
         WorkspaceRelativePathDto::parse("src/parsed.rs").expect("fixture path is valid");
     assert_eq!(parsed_path.as_str(), "src/parsed.rs");
-    for non_canonical in [
-        "aaaaaaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
-        "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
-    ] {
-        assert!(CorrelationIdDto::parse(non_canonical).is_err());
-    }
 
     for wire in [
-        r#"{"code":"","category":"not_found","message":"safe","retry":"manual"}"#,
-        r#"{"code":"fixture","category":"not_found","message":" ","retry":"manual"}"#,
-        r#"{"code":"fixture","category":"not_found","message":"safe","retry":"manual","correlation_id":"not-a-uuid"}"#,
+        r#"{"code":"","category":"not_found","message":"safe","retryable":false}"#,
+        r#"{"code":"fixture","category":"not_found","message":" ","retryable":false}"#,
+        r#"{"code":"fixture","category":"not_found","message":"safe","retryable":"never"}"#,
     ] {
         assert!(serde_json::from_str::<ErrorDto>(wire).is_err());
     }
@@ -128,11 +107,9 @@ fn model_values_are_owned_by_types_and_preserve_the_contract() {
     assert!(UsageDto::reported(u64::MAX, 1, 0).is_err());
     assert!(UsageDto::reported(u64::MAX, 1, u64::MAX).is_err());
 
-    let correlation = CorrelationIdDto::new();
-    let error = ProviderErrorDto::unavailable("provider_unavailable", true, Some(correlation))
+    let error = ProviderErrorDto::unavailable("provider_unavailable", true)
         .expect("safe provider failure is valid");
-    assert_eq!(error.retry(), ErrorRetryDto::Delayed);
-    assert_eq!(error.correlation_id(), Some(correlation));
+    assert!(error.retryable());
     assert_eq!(error.to_string(), "provider_unavailable");
 }
 
@@ -163,9 +140,9 @@ fn model_values_reject_invalid_and_decode_valid_wire_forms() {
         .is_err()
     );
 
-    let error = ProviderErrorDto::unavailable("failed", false, None).expect("valid error");
-    assert_eq!(error.retry(), ErrorRetryDto::Never);
-    assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retry":"never"}"#).is_err());
+    let error = ProviderErrorDto::unavailable("failed", false).expect("valid error");
+    assert!(!error.retryable());
+    assert!(serde_json::from_str::<ProviderErrorDto>(r#"{"code":"","retryable":false}"#).is_err());
 }
 
 #[test]
@@ -194,17 +171,14 @@ fn workspace_root_accepts_only_absolute_non_empty_native_paths() {
 }
 
 #[test]
-fn send_turn_requires_content_and_typed_identity() {
+fn send_turn_requires_content() {
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
-    let command = SendUserTurnCommandDto::new(session_id, idempotency_key, "Explain M1")
+    let command = SendUserTurnCommandDto::new(session_id, "Explain M1")
         .expect("non-empty fixture message is valid");
 
     assert_eq!(command.session_id(), session_id);
-    assert_eq!(command.idempotency_key(), idempotency_key);
     assert_eq!(command.content(), "Explain M1");
-    assert_ne!(idempotency_key, IdempotencyKey::new());
-    assert!(SendUserTurnCommandDto::new(SessionId::new(), IdempotencyKey::new(), "   ").is_err());
+    assert!(SendUserTurnCommandDto::new(SessionId::new(), "   ").is_err());
 
     let decoded: SendUserTurnCommandDto =
         serde_json::from_str(&serde_json::to_string(&command).expect("command serializes"))
@@ -214,7 +188,6 @@ fn send_turn_requires_content_and_typed_identity() {
     assert!(
         serde_json::from_value::<SendUserTurnCommandDto>(serde_json::json!({
             "session_id": session_id,
-            "idempotency_key": idempotency_key,
             "content": " "
         }))
         .is_err()
@@ -224,12 +197,11 @@ fn send_turn_requires_content_and_typed_identity() {
             "session_id": session_id,
             "content": "Explain M1"
         }))
-        .is_err()
+        .is_ok()
     );
     assert!(
         serde_json::from_value::<SendUserTurnCommandDto>(serde_json::json!({
             "session_id": session_id,
-            "idempotency_key": idempotency_key,
             "content": "Explain M1",
             "future_additive_field": true
         }))
@@ -290,16 +262,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
         serde_json::json!("plan")
     );
 
-    let turn_id = TurnId::new();
-
-    let removal = RemoveTurnCommandDto::new(session_id, turn_id);
-    assert_eq!(removal.session_id(), session_id);
-    assert_eq!(removal.turn_id(), turn_id);
-    let decoded: RemoveTurnCommandDto =
-        serde_json::from_str(&serde_json::to_string(&removal).expect("removal serializes"))
-            .expect("removal decodes");
-    assert_eq!(decoded, removal);
-
     let query = GetSessionSnapshotQueryDto::new(session_id);
     assert_eq!(query.session_id(), session_id);
     let decoded: GetSessionSnapshotQueryDto =
@@ -312,7 +274,6 @@ fn commands_round_trip_with_typed_identity_and_mode() {
 fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let revision = ConfigRevisionId::new();
     let started_at = fixture_time(1_726_000_000);
     let finished_at = fixture_time(1_726_000_013);
     let usage = UsageDto::reported(1_200, 300, 1_500).expect("fixture usage is consistent");
@@ -321,7 +282,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
         run_id,
         TurnId::new(),
         RunStatusDto::Completed,
-        revision,
         Some(usage),
         started_at,
         Some(finished_at),
@@ -332,7 +292,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
     assert_eq!(run.session_id(), session_id);
     assert_eq!(run.run_id(), run_id);
     assert_eq!(run.status(), RunStatusDto::Completed);
-    assert_eq!(run.config_revision_id(), revision);
     assert_eq!(run.usage(), Some(usage));
     assert_eq!(run.started_at(), started_at);
     assert_eq!(run.finished_at(), Some(finished_at));
@@ -350,7 +309,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
         run_id,
         TurnId::new(),
         RunStatusDto::Running,
-        revision,
         None,
         started_at,
         None,
@@ -379,7 +337,6 @@ fn a_run_projection_carries_its_durable_times_usage_and_open_calls() {
 fn a_terminal_run_projection_requires_its_finish_time() {
     let session_id = SessionId::new();
     let run_id = RunId::new();
-    let revision = ConfigRevisionId::new();
     let started_at = fixture_time(1_726_000_000);
     for status in [
         RunStatusDto::Completed,
@@ -391,7 +348,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
             run_id,
             TurnId::new(),
             status,
-            revision,
             None,
             started_at,
             None,
@@ -408,7 +364,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
                 run_id,
                 TurnId::new(),
                 status,
-                revision,
                 None,
                 started_at,
                 Some(started_at),
@@ -424,7 +379,6 @@ fn a_terminal_run_projection_requires_its_finish_time() {
             run_id,
             TurnId::new(),
             RunStatusDto::Completed,
-            revision,
             None,
             started_at,
             Some(started_at),
@@ -446,7 +400,6 @@ fn a_finish_time_precedes_its_start_time_never() {
         run_id,
         TurnId::new(),
         RunStatusDto::Completed,
-        ConfigRevisionId::new(),
         None,
         started_at,
         Some(earlier),
@@ -467,8 +420,6 @@ fn a_session_projection_carries_an_optional_provider_model() {
         workspace_root(),
         RunModeDto::Build,
         None,
-        None,
-        Vec::new(),
     )
     .expect("the fixture session projection is coherent");
     assert_eq!(projection.provider_model(), None);

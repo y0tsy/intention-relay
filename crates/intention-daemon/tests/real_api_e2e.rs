@@ -43,11 +43,9 @@
 //! lives only in a private temporary configuration file, and is never printed
 //! by the test.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::print_stderr,
-    reason = "Opt-in live-provider end-to-end fixtures use assertion conveniences and one stderr diagnostic on the unwind path for precise failures."
+#![expect(
+    clippy::disallowed_types,
+    reason = "The live-provider test decodes raw provider responses to assert their shape; DTO-first binds production code."
 )]
 
 use std::path::{Path, PathBuf};
@@ -56,14 +54,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use intention_client::{IntentionClient, ProcessDaemonLauncher, SessionStreamClient, StreamStep};
-use intention_config::{
-    ConfigPathDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto, ResolvedConfigDto,
-};
+use intention_config::{ProviderKindDto, RawConfigInputDto, ResolvedConfigDto};
 use intention_proto::{
     CreateSessionCommandDto, MessageKindDto, MessageProjectionDto, RunModeDto, RunProjectionDto,
     RunStatusDto, ToolIdentityDto, WorkspaceRootDto, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, ProjectId, RunId, SessionId, WorkspaceId};
+use intention_proto::{ProjectId, RunId, SessionId, WorkspaceId};
 use intention_proto::{SendUserTurnOutcomeDto, SessionSnapshotDto, SubscribeSessionCommandDto};
 use intention_test_support::daemon_process::{
     config_path, spawn_daemon, unique_endpoint, write_config_document,
@@ -121,12 +117,9 @@ const TOOL_TURN_ATTEMPTS: u8 = 3;
 // minutes instead of hanging until the CI timeout. The session reads carry the
 // harness `SESSION_READ_DEADLINE` on top of the same client bound.
 //
-// `.github/workflows/real-api-e2e.yml` gives the run step 120 minutes and the
-// job 150 minutes: the 74-minute worst case leaves a 46-minute step margin for
-// the build, and the job keeps a 30-minute overhead above the step. A degraded
-// live run reports the harness diagnostic ("did not record a succeeded <tool>
-// call within 3 turns") instead of an opaque GitHub timeout; a change to any
-// budget constant must keep that relation.
+// A degraded live run reports the harness diagnostic ("did not record a
+// succeeded <tool> call within 3 turns") instead of hanging: a change to any
+// budget constant must keep the total below the caller's own timeout.
 
 /// Environment variables that must never reach the spawned daemon.
 ///
@@ -299,14 +292,9 @@ fn fixture_state_directory(host: &LiveE2eHost) -> PathBuf {
 ///
 /// The document passes through opaque configuration input only and is never
 /// printed, even on failure.
-fn preflight_config_document(path: &Path, provider: &LiveProviderConfig, document: &str) {
-    let source = ConfigSourceDto::Explicit(
-        ConfigPathDto::parse(path.to_string_lossy().into_owned())
-            .expect("the fixture configuration path is absolute"),
-    );
-    let resolved =
-        ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(document.to_owned(), source))
-            .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
+fn preflight_config_document(provider: &LiveProviderConfig, document: &str) {
+    let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(document.to_owned()))
+        .unwrap_or_else(|_| panic!("the live provider configuration document resolves"));
     assert_eq!(
         resolved.provider().kind(),
         provider.kind,
@@ -365,9 +353,8 @@ impl LiveE2eHost {
         for (name, content) in workspace_files {
             std::fs::write(workspace.path().join(name), content).expect("workspace fixture writes");
         }
-        let config_path = config_path(config_home.path());
         let config_document = provider.config_document();
-        preflight_config_document(&config_path, provider, &config_document);
+        preflight_config_document(provider, &config_document);
         write_config_document(config_home.path(), &config_document);
         let endpoint = unique_endpoint("real-api-e2e");
         let log_path = config_home.path().join("daemon-live-e2e.log");
@@ -551,7 +538,7 @@ async fn create_session(host: &LiveE2eHost, session_id: SessionId, label: &str) 
 /// Sends one user turn and returns the run it started.
 async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content: &str) -> RunId {
     let outcome = live_client(endpoint)
-        .send_user_turn(session_id, IdempotencyKey::new(), content.to_owned())
+        .send_user_turn(session_id, content.to_owned())
         .await
         .expect("user turn is accepted");
     let SendUserTurnOutcomeDto::Started { run_id, .. } = outcome else {
@@ -564,10 +551,10 @@ async fn send_user_turn(endpoint: &LocalEndpoint, session_id: SessionId, content
 /// committed transcript rows that carry the run's history.
 ///
 /// The transcript is the durable record of user, assistant, tool-call,
-/// tool-result, and notice content. The repository writes each `tool_results`
-/// evidence row and its answering `tool_result` transcript row in one
-/// transaction, so a call row paired with a result row of the same call
-/// identity is the durable evidence of one recorded tool outcome.
+/// tool-result, and notice content. Each completed tool call commits one
+/// `tool_result` transcript row whose projection carries the result status and
+/// metadata, so a call row paired with a result row of the same call identity
+/// is the durable evidence of one recorded tool outcome.
 struct ObservedRun {
     run: RunProjectionDto,
     messages: Vec<MessageProjectionDto>,
@@ -711,7 +698,7 @@ async fn collect_session_frames(endpoint: &LocalEndpoint, session_id: SessionId)
             }));
         }
         match subscription.receive().await {
-            Ok(StreamStep::Frame(_)) => {}
+            Ok(StreamStep::Frame { .. }) => {}
             Ok(StreamStep::Closed(_)) => {
                 return RunObservation::Lost(format!(
                     "the daemon closed the run stream after {} committed rows",

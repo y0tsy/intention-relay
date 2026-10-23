@@ -2,9 +2,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{
-    DtoResult, ErrorDto, IdempotencyKey, ProjectId, RunId, SessionId, TurnId, WorkspaceId,
-};
+use crate::{DtoResult, ErrorDto, ProjectId, RunId, SessionId, WorkspaceId};
 use crate::{RunModeDto, WorkspaceRootDto};
 
 /// A command requesting a new durable session.
@@ -123,7 +121,6 @@ impl CreateSessionCommandDto {
 /// blank prompt is never a turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CreateSessionFirstTurnDto {
-    idempotency_key: IdempotencyKey,
     content: String,
 }
 
@@ -134,12 +131,11 @@ impl<'de> Deserialize<'de> for CreateSessionFirstTurnDto {
     {
         #[derive(Deserialize)]
         struct RawCreateSessionFirstTurnDto {
-            idempotency_key: IdempotencyKey,
             content: String,
         }
 
         let raw = RawCreateSessionFirstTurnDto::deserialize(deserializer)?;
-        Self::new(raw.idempotency_key, raw.content).map_err(de::Error::custom)
+        Self::new(raw.content).map_err(de::Error::custom)
     }
 }
 
@@ -149,7 +145,7 @@ impl CreateSessionFirstTurnDto {
     /// # Errors
     ///
     /// Returns a validation error when the requested content is empty.
-    pub fn new(idempotency_key: IdempotencyKey, content: impl Into<String>) -> DtoResult<Self> {
+    pub fn new(content: impl Into<String>) -> DtoResult<Self> {
         let content = content.into();
         if content.trim().is_empty() {
             Err(ErrorDto::validation(
@@ -157,17 +153,8 @@ impl CreateSessionFirstTurnDto {
                 "user turn content must not be empty",
             ))
         } else {
-            Ok(Self {
-                idempotency_key,
-                content,
-            })
+            Ok(Self { content })
         }
-    }
-
-    /// Returns the caller-supplied repeatable-operation identity.
-    #[must_use]
-    pub const fn idempotency_key(&self) -> IdempotencyKey {
-        self.idempotency_key
     }
 
     /// Returns the requested user-authored content.
@@ -177,41 +164,10 @@ impl CreateSessionFirstTurnDto {
     }
 }
 
-/// A command requesting removal of one not-yet-seen pending turn.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RemoveTurnCommandDto {
-    session_id: SessionId,
-    turn_id: TurnId,
-}
-
-impl RemoveTurnCommandDto {
-    /// Creates a typed pending-turn removal request.
-    #[must_use]
-    pub const fn new(session_id: SessionId, turn_id: TurnId) -> Self {
-        Self {
-            session_id,
-            turn_id,
-        }
-    }
-
-    /// Returns the owning durable session identity.
-    #[must_use]
-    pub const fn session_id(self) -> SessionId {
-        self.session_id
-    }
-
-    /// Returns the pending user turn identity.
-    #[must_use]
-    pub const fn turn_id(self) -> TurnId {
-        self.turn_id
-    }
-}
-
 /// A command requesting that the daemon accept a new user turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SendUserTurnCommandDto {
     session_id: SessionId,
-    idempotency_key: IdempotencyKey,
     content: String,
 }
 
@@ -223,12 +179,11 @@ impl<'de> Deserialize<'de> for SendUserTurnCommandDto {
         #[derive(Deserialize)]
         struct RawSendUserTurnCommandDto {
             session_id: SessionId,
-            idempotency_key: IdempotencyKey,
             content: String,
         }
 
         let raw = RawSendUserTurnCommandDto::deserialize(deserializer)?;
-        Self::new(raw.session_id, raw.idempotency_key, raw.content).map_err(de::Error::custom)
+        Self::new(raw.session_id, raw.content).map_err(de::Error::custom)
     }
 }
 
@@ -238,11 +193,7 @@ impl SendUserTurnCommandDto {
     /// # Errors
     ///
     /// Returns a validation error when the requested content is empty.
-    pub fn new(
-        session_id: SessionId,
-        idempotency_key: IdempotencyKey,
-        content: impl Into<String>,
-    ) -> DtoResult<Self> {
+    pub fn new(session_id: SessionId, content: impl Into<String>) -> DtoResult<Self> {
         let content = content.into();
         if content.trim().is_empty() {
             Err(ErrorDto::validation(
@@ -252,7 +203,6 @@ impl SendUserTurnCommandDto {
         } else {
             Ok(Self {
                 session_id,
-                idempotency_key,
                 content,
             })
         }
@@ -262,12 +212,6 @@ impl SendUserTurnCommandDto {
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
-    }
-
-    /// Returns the caller-supplied repeatable-operation identity.
-    #[must_use]
-    pub const fn idempotency_key(&self) -> IdempotencyKey {
-        self.idempotency_key
     }
 
     /// Returns the requested user-authored content.

@@ -11,33 +11,26 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
-use intention_config::ConfigPathDto;
 use intention_config::{
-    ConfigPathResolver, ConfigSnapshotDto, ConfigSourceDto, ProviderKindDto, RawConfigInputDto,
+    ConfigPathDto, ConfigPathResolver, ConfigSnapshotDto, ProviderKindDto, RawConfigInputDto,
     ResolvedConfigDto, StartupProviderMaterial,
 };
 #[cfg(test)]
 use intention_engine::ToolInvocationRequestDto;
 use intention_engine::{ApplicationService, SessionCommitDto, SessionCommitObserver};
 use intention_proto::DaemonHealthDto;
-use intention_proto::{
-    CancelRunCommandDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    DtoResult, ErrorDto, ProtocolResultDto, RemoveTurnAcceptedDto, RemoveTurnCommandDto,
-    RunCancelledAcceptedDto, RunId, SchemaVersionDto, SendUserTurnAcceptedDto,
-    SendUserTurnCommandDto, SendUserTurnOutcomeDto, SessionId, SessionProjectionDto,
-    SessionSnapshotDto, SessionSummariesDto, ThemeDto, TimestampDto, TuiSettingsDto,
-    TuiThemeAcceptedDto,
-};
 #[cfg(test)]
-use intention_proto::{ProjectId, RunModeDto, WorkspaceId, WorkspaceRootDto};
+use intention_proto::WorkspaceRootDto;
+use intention_proto::{
+    CancelRunCommandDto, CreateSessionAcceptedDto, CreateSessionCommandDto, DtoResult, ErrorDto,
+    ProtocolResultDto, RunCancelledAcceptedDto, SendUserTurnAcceptedDto, SendUserTurnCommandDto,
+    SendUserTurnOutcomeDto, SessionId, SessionSnapshotDto, SessionSummariesDto, TimestampDto,
+};
 use intention_providers::GenericChatDriver;
 use intention_providers::ModelExecutionDriver;
 use intention_providers::OpenRouterDriver;
 #[cfg(any(test, feature = "test-support"))]
 use intention_providers::{ModelCancellationSignal, ModelCapabilitiesDto, ModelEventStream};
-#[cfg(test)]
-use intention_storage::ToolResultEvidenceDto;
 use intention_storage::{
     AcceptedTurnOutcomeDto, SqliteDatabaseLocationDto, SqliteStorageRepository,
     StorageRepositoryDto,
@@ -46,8 +39,6 @@ use intention_storage::{
 use intention_tools::WorkspaceRoot;
 use intention_transport::MAX_TRANSCRIPT_SNAPSHOT_BYTES;
 
-/// The single live configuration snapshot schema (intention-config current schema).
-const CONFIG_SCHEMA_VERSION: SchemaVersionDto = SchemaVersionDto::new(1, 0);
 const DATABASE_FILENAME: &str = "intention-relay.sqlite";
 /// The retained bounded size of a current-state snapshot's recent transcript.
 ///
@@ -75,7 +66,7 @@ pub struct DaemonApplicationFacade {
 struct FacadeInner {
     repository: SqliteStorageRepository,
     config_snapshot: ConfigSnapshotDto,
-    selected_provider: SelectedProvider,
+    selected_provider: ConfiguredProvider,
     command_gate: CommandGate,
 }
 
@@ -124,27 +115,18 @@ impl CommandGate {
     }
 }
 
-/// The provider driver the platform configuration selected at open time.
+/// The one provider driver slot this composition root serves.
+///
+/// A production build holds one of the configured providers; a test or
+/// test-support build additionally holds the driver the caller injected, so no
+/// production shape carries a test-only variant.
 enum ConfiguredProvider {
     OpenRouter(OpenRouterDriver),
     GenericChat(GenericChatDriver),
+    /// The driver a test or test-support caller supplied.
+    #[cfg(any(test, feature = "test-support"))]
+    Injected(Arc<dyn ModelExecutionDriver + Send + Sync>),
 }
-
-/// The one provider driver slot this composition root serves.
-///
-/// A production build holds the configured provider; a test or test-support
-/// build holds the driver the caller injected instead. Only the slot
-/// implementation is conditional, so no production shape carries a test-only
-/// provider variant.
-#[cfg(not(any(test, feature = "test-support")))]
-type SelectedProvider = ConfiguredProvider;
-
-#[cfg(any(test, feature = "test-support"))]
-type SelectedProvider = InjectedProvider;
-
-/// The driver slot of a test or test-support build.
-#[cfg(any(test, feature = "test-support"))]
-struct InjectedProvider(Arc<dyn ModelExecutionDriver + Send + Sync>);
 
 #[cfg(any(test, feature = "test-support"))]
 struct TestSupportUnconfiguredDriver;
@@ -152,7 +134,7 @@ struct TestSupportUnconfiguredDriver;
 #[cfg(any(test, feature = "test-support"))]
 impl ModelExecutionDriver for TestSupportUnconfiguredDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(false, false, false, false, false, false)
+        ModelCapabilitiesDto::new(false)
     }
 
     fn execute(
@@ -187,29 +169,15 @@ impl ConfiguredProvider {
         match self {
             Self::OpenRouter(driver) => driver,
             Self::GenericChat(driver) => driver,
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Injected(driver) => driver.as_ref(),
         }
     }
-}
 
-#[cfg(any(test, feature = "test-support"))]
-impl InjectedProvider {
-    /// Resolves the configured provider so a test-support build can still open
-    /// from real platform configuration.
-    fn from_startup_material(material: StartupProviderMaterial) -> DtoResult<Self> {
-        let configured = ConfiguredProvider::from_startup_material(material)?;
-        let driver: Arc<dyn ModelExecutionDriver + Send + Sync> = match configured {
-            ConfiguredProvider::OpenRouter(driver) => Arc::new(driver),
-            ConfiguredProvider::GenericChat(driver) => Arc::new(driver),
-        };
-        Ok(Self(driver))
-    }
-
+    /// Holds the driver a test or test-support caller supplied.
+    #[cfg(any(test, feature = "test-support"))]
     const fn for_test_support(driver: Arc<dyn ModelExecutionDriver + Send + Sync>) -> Self {
-        Self(driver)
-    }
-
-    fn driver(&self) -> &(dyn ModelExecutionDriver + Send + Sync) {
-        self.0.as_ref()
+        Self::Injected(driver)
     }
 }
 
@@ -263,7 +231,7 @@ impl DaemonApplicationFacade {
         Self::open_with_selected_provider(
             database_location,
             config_snapshot,
-            SelectedProvider::for_test_support(driver),
+            ConfiguredProvider::for_test_support(driver),
         )
     }
 
@@ -283,13 +251,12 @@ impl DaemonApplicationFacade {
     fn open_with_selected_provider(
         database_location: impl AsRef<Path>,
         config_snapshot: ConfigSnapshotDto,
-        selected_provider: SelectedProvider,
+        selected_provider: ConfiguredProvider,
     ) -> DtoResult<Self> {
         let location = SqliteDatabaseLocationDto::new(
             database_location.as_ref().to_string_lossy().into_owned(),
         )?;
         let repository = SqliteStorageRepository::open(location)?;
-        repository.accept_configuration_revision(config_snapshot.clone())?;
         let facade = Self {
             inner: Arc::new(FacadeInner {
                 repository,
@@ -328,7 +295,8 @@ impl DaemonApplicationFacade {
         // two can never disagree about the model.
         let projection = projection
             .with_provider_model(self.inner.config_snapshot.resolved().provider().model())?;
-        let projection_bytes = session_projection_bytes(&projection)?;
+        let projection_bytes =
+            CountingWriter::encoded_bytes(|writer| serde_json::to_writer(writer, &projection))?;
         let messages = bounded_snapshot_messages(
             projection_bytes,
             self.inner
@@ -388,11 +356,9 @@ impl DaemonApplicationFacade {
 
     /// Accepts one user turn and assembles its typed reply evidence.
     ///
-    /// The proposed run identity is derived from the caller's idempotency key,
-    /// so a repeated command proposes the identity the durable turn already
-    /// recorded and the repository replays its outcome instead of reporting a
-    /// conflict. Both identities are canonical UUIDs, so one caller identity
-    /// selects exactly one run.
+    /// A turn that starts a run freezes the daemon's startup configuration on
+    /// that run's row; a turn that queues behind an active run carries no
+    /// configuration of its own.
     ///
     /// `observer` receives the committed acceptance the way every other durable
     /// commit reaches the host's one sink, so a session's subscribers learn of
@@ -407,31 +373,13 @@ impl DaemonApplicationFacade {
         observer: &dyn SessionCommitObserver,
     ) -> DtoResult<ProtocolResultDto> {
         self.inner.command_gate.run(|| {
-            let proposed_run_id = RunId::parse(&command.idempotency_key().to_string())?;
             let outcome = ApplicationService::new(&self.inner.repository).send_user_turn(
                 command,
-                proposed_run_id,
                 self.inner.config_snapshot.clone(),
                 now()?,
                 observer,
             )?;
             Ok(turn_accepted(&outcome))
-        })
-    }
-
-    /// Removes one not-yet-seen pending user turn and assembles its typed reply evidence.
-    ///
-    /// # Errors
-    ///
-    /// Returns the typed durable failure when no pending turn can be removed.
-    pub fn remove_turn(&self, command: RemoveTurnCommandDto) -> DtoResult<ProtocolResultDto> {
-        self.inner.command_gate.run(|| {
-            let turn =
-                ApplicationService::new(&self.inner.repository).remove_turn(command, now()?)?;
-            Ok(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                turn.session_id(),
-                turn.turn_id(),
-            )))
         })
     }
 
@@ -451,40 +399,6 @@ impl DaemonApplicationFacade {
         Ok(ProtocolResultDto::RunCancelled(
             RunCancelledAcceptedDto::new(run.session_id(), run.run_id()),
         ))
-    }
-
-    /// Returns the effective terminal settings a client renders with.
-    ///
-    /// The stored override wins; without one the answer is the resolved
-    /// configuration's `[tui]` theme, which the configuration document already
-    /// resolved to light when no section was declared. Reading the theme is
-    /// presentation-only: it touches no configuration revision and no run
-    /// selection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed storage error when the stored override cannot be read.
-    pub fn tui_settings(&self) -> DtoResult<TuiSettingsDto> {
-        let theme = self
-            .inner
-            .repository
-            .load_tui_theme()?
-            .unwrap_or_else(|| self.inner.config_snapshot.resolved().tui().theme());
-        Ok(TuiSettingsDto::new(theme))
-    }
-
-    /// Commits one terminal theme override and answers the accepted theme.
-    ///
-    /// The override lives in the settings row alone: it records no
-    /// configuration revision and never enters the immutable configuration
-    /// snapshot, so a run selection captured before the set stays valid.
-    ///
-    /// # Errors
-    ///
-    /// Returns a typed storage error when the override cannot be committed.
-    pub fn set_tui_theme(&self, theme: ThemeDto) -> DtoResult<TuiThemeAcceptedDto> {
-        self.inner.repository.save_tui_theme(theme)?;
-        Ok(TuiThemeAcceptedDto::new(theme))
     }
 
     fn recover_before_ready(&self) -> DtoResult<()> {
@@ -535,7 +449,6 @@ const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAccept
             run.turn_id(),
             SendUserTurnOutcomeDto::Started {
                 run_id: run.run_id(),
-                config_revision_id: run.config_revision_id(),
             },
         ),
         AcceptedTurnOutcomeDto::Pending(turn) => SendUserTurnAcceptedDto::new(
@@ -546,38 +459,45 @@ const fn turn_acceptance(outcome: &AcceptedTurnOutcomeDto) -> SendUserTurnAccept
     }
 }
 
-fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    load_provider_configuration(ConfigPathResolver::resolve(None)?)
+fn load_platform_provider_configuration() -> DtoResult<(ConfigSnapshotDto, ConfiguredProvider)> {
+    load_provider_configuration(&ConfigPathResolver::resolve(None)?)
 }
 
 fn load_provider_configuration(
-    source: ConfigSourceDto,
-) -> DtoResult<(ConfigSnapshotDto, SelectedProvider)> {
-    #[cfg(unix)]
-    intention_config::ensure_user_only_permissions(source.path())?;
-    let raw_toml = fs::read_to_string(source.path().as_str()).map_err(|_| {
+    path: &ConfigPathDto,
+) -> DtoResult<(ConfigSnapshotDto, ConfiguredProvider)> {
+    let raw_toml = fs::read_to_string(path.as_str()).map_err(|_| {
         ErrorDto::unavailable(
             "daemon_configuration_read_unavailable",
             "daemon configuration could not be read",
         )
     })?;
-    let material =
-        ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml, source))?;
-    let snapshot = ConfigSnapshotDto::new(
-        CONFIG_SCHEMA_VERSION,
-        ConfigRevisionId::new(),
-        now()?,
-        material.safe_resolved().clone(),
-    )?;
-    let selected_provider = SelectedProvider::from_startup_material(material)?;
+    let material = ResolvedConfigDto::parse_startup_material(RawConfigInputDto::new(raw_toml))?;
+    let snapshot = ConfigSnapshotDto::new(now()?, material.safe_resolved().clone());
+    let selected_provider = ConfiguredProvider::from_startup_material(material)?;
     Ok((snapshot, selected_provider))
 }
 
-/// Counts the bytes one typed message encodes to without buffering them.
+/// Counts the bytes one typed value encodes to without buffering them.
 ///
 /// The snapshot budget needs the encoded length only, so encoding writes into
-/// this counter instead of one intermediate `Vec<u8>` per committed row.
+/// this counter instead of one intermediate `Vec<u8>` per charged value.
 struct CountingWriter(usize);
+
+impl CountingWriter {
+    /// Returns the encoded byte count of one value written by `encode`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed local encode failure when the value cannot be encoded.
+    fn encoded_bytes(
+        encode: impl FnOnce(&mut Self) -> Result<(), serde_json::Error>,
+    ) -> DtoResult<usize> {
+        let mut counter = Self(0);
+        encode(&mut counter).map_err(|_| encode_failure())?;
+        Ok(counter.0)
+    }
+}
 
 impl std::io::Write for CountingWriter {
     fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
@@ -593,14 +513,20 @@ impl std::io::Write for CountingWriter {
 /// Trims one snapshot transcript to the representation budget derived from the
 /// single transport envelope cap, keeping the newest committed rows that fit.
 ///
-/// A transcript snapshot is the only legitimate response large enough to
-/// approach the envelope cap, so the read path owns the byte budget and the
-/// transport owns the cap: no legitimate snapshot can be dropped silently at
-/// the connection level. The whole message is charged, so the encoded
-/// projection that travels beside the transcript is subtracted before the rows
-/// are measured, and the newest row is kept unconditionally: a row that alone
-/// exceeds the budget must reach the transport, which answers with its typed
-/// over-size failure instead of serving an empty transcript.
+/// The bound is the snapshot's liveness guarantee: a transcript snapshot is the
+/// only legitimate response large enough to approach the envelope cap, so the
+/// read path trims it here and the transport keeps the cap. Without the bound a
+/// legitimate bounded-row snapshot could exceed the cap and be rejected at the
+/// connection level, so it stays.
+///
+/// Each row is charged its exact encoded size, because the size decides which
+/// rows survive: a cheaper estimate would either cut rows that fit or let the
+/// snapshot cross the cap. The loop walks newest-first and stops at the first
+/// row that does not fit, so only the served rows and the first rejected one
+/// are ever encoded. The encoded projection that travels beside the transcript
+/// is subtracted first, and the newest row is kept unconditionally: a row that
+/// alone exceeds the budget must reach the transport, which answers with its
+/// typed over-size failure instead of serving an empty transcript.
 ///
 /// # Errors
 ///
@@ -614,7 +540,8 @@ pub fn bounded_snapshot_messages(
     let newest = messages.len().saturating_sub(1);
     let mut keep_from = messages.len();
     for (index, message) in messages.iter().enumerate().rev() {
-        let size = encoded_message_bytes(message)?.saturating_add(1);
+        let size = CountingWriter::encoded_bytes(|writer| serde_json::to_writer(writer, message))?
+            .saturating_add(1);
         if size > budget && index != newest {
             break;
         }
@@ -623,28 +550,6 @@ pub fn bounded_snapshot_messages(
     }
     messages.drain(..keep_from);
     Ok(messages)
-}
-
-/// Counts the encoded bytes one session projection adds to its snapshot.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the projection cannot be encoded.
-fn session_projection_bytes(projection: &SessionProjectionDto) -> DtoResult<usize> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, projection).map_err(|_| encode_failure())?;
-    Ok(counter.0)
-}
-
-/// Counts the encoded bytes one transcript row adds to its snapshot.
-///
-/// # Errors
-///
-/// Returns the typed local encode failure when the row cannot be encoded.
-fn encoded_message_bytes(message: &intention_proto::MessageProjectionDto) -> DtoResult<usize> {
-    let mut counter = CountingWriter(0);
-    serde_json::to_writer(&mut counter, message).map_err(|_| encode_failure())?;
-    Ok(counter.0)
 }
 
 /// The one typed failure of a local protocol value that cannot be encoded.
@@ -719,82 +624,31 @@ fn unavailable_storage() -> ErrorDto {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::expect_used,
-        reason = "Composition internals use controlled durable fixtures."
-    )]
 
     use super::*;
 
     use intention_engine::{RunCancellation, SessionCommitDto};
     use intention_proto::{
-        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, SendUserTurnCommandDto,
-        ToolResultStatusDto,
+        MessageId, MessageKindDto, MessageProjectionDto, NewMessageDto, RunId,
+        SendUserTurnCommandDto, ToolResultStatusDto,
     };
+    use intention_test_support::{fixture_session_command, fixture_snapshot};
     use tempfile::TempDir;
 
     fn test_facade() -> (TempDir, DaemonApplicationFacade) {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
             directory.path().join("facade.sqlite"),
-            fixture_config_snapshot(),
+            fixture_snapshot(),
         )
         .expect("durable facade opens");
         (directory, facade)
     }
 
-    fn fixture_workspace_root() -> WorkspaceRootDto {
-        WorkspaceRootDto::parse(
-            std::env::temp_dir()
-                .join("intention-composition-workspace")
-                .to_string_lossy()
-                .into_owned(),
-        )
-        .expect("native fixture workspace is absolute")
-    }
-
-    fn fixture_config_snapshot() -> ConfigSnapshotDto {
-        fixture_config_snapshot_with_tui("")
-    }
-
-    /// Builds the fixture configuration snapshot with one optional `[tui]` section.
-    fn fixture_config_snapshot_with_tui(tui: &str) -> ConfigSnapshotDto {
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(
-                std::env::temp_dir()
-                    .join("intention-composition-fixture.toml")
-                    .to_string_lossy()
-                    .into_owned(),
-            )
-            .expect("fixture configuration source is absolute"),
-        );
-        let resolved = ResolvedConfigDto::parse_resolve(RawConfigInputDto::new(
-            format!(
-                "schema_version = 1\n[provider]\nkind = \"openrouter\"\nmodel = \"fixture\"\ncredential = \"fixture-credential\"\n{tui}"
-            ),
-            source,
-        ))
-        .expect("fixture configuration resolves");
-        ConfigSnapshotDto::new(
-            CONFIG_SCHEMA_VERSION,
-            ConfigRevisionId::new(),
-            TimestampDto::from_unix_seconds(1).expect("fixture timestamp is valid"),
-            resolved,
-        )
-        .expect("fixture snapshot is credential-free")
-    }
-
     fn create(facade: &DaemonApplicationFacade, session_id: SessionId) {
         let accepted = facade
             .create_session(
-                CreateSessionCommandDto::new(
-                    ProjectId::new(),
-                    session_id,
-                    WorkspaceId::new(),
-                    fixture_workspace_root(),
-                    Some(RunModeDto::Build),
-                    None,
-                ),
+                fixture_session_command(session_id, "composition"),
                 &SilentCommitObserver::new(),
             )
             .expect("fixture session creates");
@@ -831,12 +685,7 @@ mod tests {
         content: &str,
     ) -> DtoResult<ProtocolResultDto> {
         facade.send_user_turn(
-            SendUserTurnCommandDto::new(
-                session_id,
-                intention_proto::IdempotencyKey::new(),
-                content,
-            )
-            .expect("fixture user turn is valid"),
+            SendUserTurnCommandDto::new(session_id, content).expect("fixture user turn is valid"),
             &RecordingPublisher::new(),
         )
     }
@@ -855,32 +704,33 @@ mod tests {
             .expect("committed run transcript reads")
     }
 
-    /// Reads the durable tool-result evidence of one exact invocation.
+    /// Reads the committed tool-result row of one exact invocation.
     fn tool_evidence(
         facade: &DaemonApplicationFacade,
         session_id: SessionId,
         run_id: RunId,
         call_id: intention_proto::ToolCallId,
-    ) -> ToolResultEvidenceDto {
-        facade
-            .inner
-            .repository
-            .load_tool_result(session_id, run_id, call_id)
-            .expect("committed tool evidence reads")
+    ) -> intention_proto::MessageProjectionDto {
+        run_messages(facade, session_id, run_id)
+            .into_iter()
+            .find(|message| {
+                message.kind() == MessageKindDto::ToolResult
+                    && message.tool_call_id() == Some(call_id)
+            })
+            .expect("the committed tool-result row exists")
     }
 
     #[test]
-    fn facade_replay_of_the_same_user_turn_returns_the_recorded_outcome() {
+    fn a_repeated_turn_command_is_an_ordinary_second_turn() {
         let directory = TempDir::new().expect("temporary directory exists");
         let facade = DaemonApplicationFacade::open_for_test_support(
-            directory.path().join("idempotent-turn.sqlite"),
-            fixture_config_snapshot(),
+            directory.path().join("repeated-turn.sqlite"),
+            fixture_snapshot(),
         )
         .expect("durable facade opens");
         let session_id = SessionId::new();
         create(&facade, session_id);
-        let key = intention_proto::IdempotencyKey::new();
-        let command = SendUserTurnCommandDto::new(session_id, key, "idempotent turn")
+        let command = SendUserTurnCommandDto::new(session_id, "repeated turn")
             .expect("fixture user turn is valid");
 
         let initial = facade
@@ -889,44 +739,31 @@ mod tests {
         let ProtocolResultDto::TurnAccepted(initial_turn) = initial else {
             unreachable!("the first user turn returns user-turn evidence")
         };
-        let SendUserTurnOutcomeDto::Started {
-            run_id,
-            config_revision_id,
-        } = initial_turn.outcome()
-        else {
+        let SendUserTurnOutcomeDto::Started { run_id, .. } = initial_turn.outcome() else {
             unreachable!("the first user turn starts a run")
         };
-        let committed = run_messages(&facade, session_id, run_id);
 
-        // The proposed run identity is derived from the caller's idempotency
-        // key, so a repeated command proposes the identity the durable turn
-        // already recorded and replays its outcome instead of conflicting.
-        let replayed = facade
+        // A turn carries no caller identity, so the same content accepted again
+        // is an ordinary second turn: it queues behind the active run instead of
+        // replaying or conflicting.
+        let repeated = facade
             .send_user_turn(command, &RecordingPublisher::new())
-            .expect("a repeated command replays its recorded outcome");
-        let ProtocolResultDto::TurnAccepted(replayed_turn) = replayed else {
-            unreachable!("the replay returns user-turn evidence")
+            .expect("the repeated turn is accepted");
+        let ProtocolResultDto::TurnAccepted(repeated_turn) = repeated else {
+            unreachable!("the repeated turn returns user-turn evidence")
         };
+        assert_eq!(repeated_turn.outcome(), SendUserTurnOutcomeDto::Pending);
         assert_eq!(
-            replayed_turn.outcome(),
-            SendUserTurnOutcomeDto::Started {
-                run_id,
-                config_revision_id,
-            }
+            facade
+                .session_snapshot(session_id)
+                .expect("the session snapshot reads")
+                .projection()
+                .active_run()
+                .expect("the first run is still active")
+                .run_id(),
+            run_id,
+            "a queued turn starts no second run"
         );
-        assert_eq!(
-            run_messages(&facade, session_id, run_id),
-            committed,
-            "the replayed command duplicates no transcript row"
-        );
-
-        // The same key bound to different content stays a durable conflict.
-        let conflicting = SendUserTurnCommandDto::new(session_id, key, "different turn")
-            .expect("fixture user turn is valid");
-        let error = facade
-            .send_user_turn(conflicting, &RecordingPublisher::new())
-            .expect_err("one key bound to different content conflicts");
-        assert_eq!(error.code(), "turn_idempotency_conflict");
     }
 
     #[test]
@@ -974,99 +811,6 @@ mod tests {
                 .iter()
                 .all(|summary| (summary.project_id(), summary.workspace_id()) == binding),
             "one root keeps one durable project and workspace identity"
-        );
-    }
-
-    #[test]
-    fn tui_settings_come_from_configuration_and_the_override_survives_a_reopen() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let path = directory.path().join("tui-settings.sqlite");
-        let facade = DaemonApplicationFacade::open_for_test_support(
-            &path,
-            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
-        )
-        .expect("durable facade opens");
-
-        // Before any set the answer is the configuration document's theme.
-        assert_eq!(
-            facade.tui_settings().expect("settings read").theme(),
-            ThemeDto::Dark
-        );
-
-        let accepted = facade
-            .set_tui_theme(ThemeDto::Light)
-            .expect("the theme commits");
-        assert_eq!(accepted.theme(), ThemeDto::Light);
-        assert_eq!(
-            facade.tui_settings().expect("settings read").theme(),
-            ThemeDto::Light
-        );
-        drop(facade);
-
-        // A restarted daemon answers the stored override, not the document.
-        let reopened = DaemonApplicationFacade::open_for_test_support(
-            &path,
-            fixture_config_snapshot_with_tui("[tui]\ntheme = \"dark\"\n"),
-        )
-        .expect("durable facade reopens");
-        assert_eq!(
-            reopened
-                .tui_settings()
-                .expect("settings read after the reopen")
-                .theme(),
-            ThemeDto::Light,
-            "the stored override wins after a restart"
-        );
-    }
-
-    #[test]
-    fn setting_the_theme_creates_no_configuration_revision() {
-        let directory = TempDir::new().expect("temporary directory exists");
-        let facade = DaemonApplicationFacade::open_for_test_support(
-            directory.path().join("tui-revision.sqlite"),
-            fixture_config_snapshot(),
-        )
-        .expect("durable facade opens");
-        let snapshot = facade.inner.config_snapshot.clone();
-
-        let before_session = SessionId::new();
-        create(&facade, before_session);
-        let before_run = started_run(&facade, before_session, "before the theme change");
-
-        facade
-            .set_tui_theme(ThemeDto::Dark)
-            .expect("the theme commits");
-
-        // A run started before the theme change keeps the exact immutable
-        // selection it captured, so its validation inputs are unchanged.
-        assert_eq!(
-            facade
-                .inner
-                .repository
-                .load_run_config_snapshot(before_session, before_run)
-                .expect("the started run selection reads"),
-            snapshot,
-            "a theme change never rewrites a captured run selection"
-        );
-
-        // A later run carries the same configuration revision identity.
-        let after_session = SessionId::new();
-        create(&facade, after_session);
-        let accepted = send_user_turn(&facade, after_session, "after the theme change")
-            .expect("a later turn is accepted");
-        let ProtocolResultDto::TurnAccepted(turn) = accepted else {
-            unreachable!("a user turn answers with turn evidence")
-        };
-        let SendUserTurnOutcomeDto::Started {
-            config_revision_id, ..
-        } = turn.outcome()
-        else {
-            unreachable!("the first turn of a new session starts a run")
-        };
-        assert_eq!(
-            config_revision_id,
-            snapshot.revision_id(),
-            "a theme set records no new configuration revision"
         );
     }
 
@@ -1135,12 +879,10 @@ mod tests {
             }
         }
 
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(path.to_string_lossy().into_owned())
-                .expect("fixture config path is absolute"),
-        );
+        let source = ConfigPathDto::parse(path.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
         let (snapshot, selected_provider) =
-            load_provider_configuration(source).expect("valid provider config composes");
+            load_provider_configuration(&source).expect("valid provider config composes");
         DaemonApplicationFacade::open_with_selected_provider(
             directory.path().join("provider.sqlite"),
             snapshot.clone(),
@@ -1156,11 +898,9 @@ mod tests {
         let encoded = serde_json::to_string(&snapshot).expect("safe snapshot serializes");
         assert!(!encoded.contains("selected-provider-secret"));
 
-        let source = ConfigSourceDto::Explicit(
-            ConfigPathDto::parse(invalid.to_string_lossy().into_owned())
-                .expect("fixture config path is absolute"),
-        );
-        let error = load_provider_configuration(source)
+        let source = ConfigPathDto::parse(invalid.to_string_lossy().into_owned())
+            .expect("fixture config path is absolute");
+        let error = load_provider_configuration(&source)
             .err()
             .expect("invalid provider configuration must fail safely");
         assert_eq!(error.code(), "invalid_config_schema");
@@ -1222,8 +962,11 @@ mod tests {
             .expect("worker completes")
             .expect("in-flight execution observes the interrupt as a partial outcome");
         let evidence = tool_evidence(&facade, session_id, run_id, call_id);
+        let Some(intention_proto::ToolRowDto::Result(row)) = evidence.tool() else {
+            unreachable!("the committed result row carries its result evidence")
+        };
         assert_eq!(
-            evidence.status(),
+            row.status(),
             ToolResultStatusDto::Partial,
             "the stopped execute commits its partial result"
         );
@@ -1285,9 +1028,17 @@ mod tests {
         );
         for call_id in call_ids {
             let evidence = tool_evidence(&facade, session_id, run_id, call_id);
-            assert_eq!(evidence.status(), ToolResultStatusDto::Completed);
-            assert_eq!(evidence.tool_id(), "read");
-            assert_eq!(evidence.content(), "hello");
+            let Some(intention_proto::ToolRowDto::Result(row)) = evidence.tool() else {
+                unreachable!("the committed result row carries its result evidence")
+            };
+            assert_eq!(row.status(), ToolResultStatusDto::Completed);
+            assert_eq!(
+                evidence
+                    .tool_id()
+                    .map(intention_proto::ToolIdentityDto::wire_name),
+                Some("read")
+            );
+            assert_eq!(evidence.text(), "hello");
         }
     }
 

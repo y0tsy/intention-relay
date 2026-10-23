@@ -1,50 +1,42 @@
-# Goals, Skills, Context, Memory, and Compaction
+# Goals, Skills, Context, and Compaction
 
 **Approved future design. Not implemented; activation requires an activating specification.**
 
 Owner: architecture 21.
 
-This document owns future Goal scope and evidence, Skill selection and safe disclosure, context-source manifests,
-model-step projections, typed memory records, and immutable compaction. It applies only to future run execution.
-Retained Goal, Skill, memory, or compaction material remains research provenance and historical-only where it conflicts
-with architectures 15--20.
+This document owns future Goal context selection and evidence, Skill discovery and selection, the frozen context-source
+selection, and immutable compaction. It applies only to future run execution.
 
 ## Ownership and non-authorities
 
 The removed execution-meaning envelope and decoders ([architecture
 02](02-dto-and-contract-policy.md)) leave no live path; 15 owns tool
 identity, frozen direct-tool selection, tool admission, model-tool loop, `ToolCallId`, and generic effect facts; 18 owns
-MCP lifecycle; 19 owns bridge grants, ingress, operation correlation, and bridge delivery; 20 owns kernel epochs, cells,
-checkpoints, and kernel-local safe projection.
+MCP connection records; 19 owns kernel-child ingress, safe committed-result delivery, and bridge-local recovery; 20 owns kernel
+epochs, cells, checkpoints, and kernel-local safe projection.
 
-This document owns only future non-authorizing context/evidence selection and safe representation. A Goal, Skill, source
-manifest, projection, memory record, card, disclosure, summary, omission, or compaction never creates or mutates a
-`RunId`, lifecycle state, tool permission, tool selection, `WorkspaceRoot`, MCP capability, bridge grant, kernel epoch,
-provider route, or reconciliation decision. Context is not a hidden prompt-mutation channel, sandbox, policy engine, or
-continuation mechanism.
+A Goal, Skill, source selection, card, summary, omission, or compaction never creates or mutates a `RunId`, lifecycle
+state, tool selection, `WorkspaceRoot`, MCP connection, kernel epoch, provider route, or reconciliation decision.
+Context is not a hidden prompt-mutation channel, sandbox, policy engine, or continuation mechanism.
 
-## Immutable selection and Goal scope
+## Immutable selection and Goal context
 
-This document owns detailed semantics of these credential-free nested future run-record fields (typed serde JSON,
-[architecture 02](02-dto-and-contract-policy.md)):
-
-| Nested selection | Selection owner | Meaning |
-| --- | --- | --- |
-| Context projection selection | Admission source-manifest and projection contract. |
-| Goal context selection | Selected scoped Goal revisions and applicability links. |
-| Skill selection | Selected immutable Skill revisions and disclosure contract. |
-
-Each optional selection remains exactly `Disabled` or `Selected`. Unknown, corrupt, unsupported, mismatched, or
+Admission freezes the run's ordered, revision-pinned selections before a dependent model step begins. Each optional
+selection remains exactly `Disabled` or `Selected`. Unknown, corrupt, unsupported, mismatched, or
 unavailable required selection blocks dependent future work before a model, provider, tool, process, bridge, kernel,
-child, or MCP effect. No current file, catalog, index, Goal, Skill, memory, configuration, UI, ancestry, model,
+child, or MCP effect. No current file, catalog, index, Goal, Skill, configuration, UI, ancestry, model,
 provider, bridge, kernel, or MCP state may repair missing meaning.
 
-A Goal is a user-managed, immutable revisioned acceptance/evidence record. It is not an instruction channel or execution
-authority. A Goal has exactly one scope: `Project` or `Session`. A project-scoped Goal applies to a session only through
-an explicit immutable project-Goal-to-session applicability link selected at admission. There is no implicit
-project-wide inheritance. A session-scoped Goal does not silently become project-scoped.
+Goal identity, scope, revisions, and session applicability belong to [architecture
+28](28-goal-domain-and-verification.md). This document owns the frozen Goal context selection:
 
 ```text
+ContextSourceSelectionV1
+  selection_contract_revision
+  ordered_source_references
+  source_revision_references
+  omission_references
+
 GoalContextSelectionV1
   selection_contract_revision
   ordered_goal_references
@@ -56,258 +48,78 @@ A selected reference freezes typed identity, revision, scope, and safe acceptanc
 creates a new Goal revision; it cannot rewrite admitted or model-step context. Goal evidence is not authority:
 a Goal cannot create a target, verdict, target mutation, child, or lifecycle transition.
 
-## Skills and progressive disclosure
+## Skills
 
-A Skill is immutable, versioned, untrusted instructional content with typed provenance, declared audience, and safe
-disclosure policy. A Skill cannot contain executable authority, hidden tool permissions, registry mutation, provider
-credential, bridge/kernel/MCP resource, or implicit child/lifecycle power.
-
-```text
-SkillSelectionV1
-  skill_contract_revision
-  ordered_skill_references
-  disclosure_policy_revision
-  safe_projection_revision
-```
-
-A model step receives only its explicitly selected bounded safe Skill projection. Full source remains private unless the
-selection's disclosure policy expressly permits its safe representation. Omitted, incompatible, or unsafe material is
-recorded as a typed omission/degradation outcome; it is never silently replaced with current catalog content or hidden
-injected text.
-
-## Factory-aligned Skill model
-
-This section adopts the Factory Droid Skill interaction model as the detailed Skill shape: a reusable workflow has a
-mandatory `SKILL.md`-equivalent entry record, validated frontmatter, an instructional body, and optional supporting
-resources. Its required `name` and `description` are the routing surface: the description states the action, trigger,
-and boundary by which a model or user can select the Skill. A Skill is distinct from always-on instructions
-([architecture 30](30-instruction-sources-and-system-context.md) owns that channel, and a Skill body never enters it), a
-user command, a delegated agent, an MCP server, and a model-visible tool.
+A Skill is one bounded textual procedure: a `SKILL.md` entry with a canonical `name` and a bounded `description`, plus
+an instructional body. Skills are discovered from exactly two origins: the project directory
+`<WorkspaceRoot>/.ir/skills` and the `skills` directory under the user's Intention Relay configuration directory. For
+one canonical name the project origin wins over the personal origin; a duplicate canonical name inside one origin is
+invalid. Skill text is untrusted instructional content, never authority: it cannot grant, widen, or remove a tool,
+provider selection, admission decision, child, MCP connection, kernel epoch, or reconciliation outcome, and it never
+enters the instruction channel of [architecture 30](30-instruction-sources-and-system-context.md).
 
 ```text
-SkillDto
+SkillCardDto
   skill_id
   canonical_name
-  origin
-  owner_scope
-  lifecycle_state
-  active_revision
-  safe_card
-  provenance
+  description
+  origin           (Project | Personal)
+  enabled          (Enabled | Disabled)
+  exact_revision
 
 SkillRevisionDto
   skill_id
   revision
-  frontmatter
-  textual_body_reference
-  supplemental_resource_references
-  typed_reference_set
-  replacement_reference_when_present
-  rollback_reference_when_present
-
-SkillFrontmatterV1
   name
   description
-  allowed_tool_ids
   enabled
-  user_invocable
-  model_invocable
-  license_when_present
-  compatibility_when_present
-  validated_metadata
-  declared_version_when_present
+  body             (bounded immutable UTF-8 text)
 
-SkillCardDto
-  skill_id
-  canonical_name
-  origin
-  owner_scope
-  lifecycle_state
-  exact_revision
-  description
-  safe_purpose
-  applicability
-  model_invocable
-  user_invocable
-  allowed_tool_ids
-  content_reference
-
-SkillSupplementDto
-  supplement_id
-  skill_revision_reference
-  logical_name
-  kind = Checklist | Schema | ReferenceText
-  retained_content_reference
-```
-
-`name` is a canonical lowercase letters/numbers/hyphens identifier and `description` is bounded safe routing text.
-`allowed_tool_ids` is declarative review/presentation metadata only: it neither grants unavailable tools nor sandboxes
-an invocation. `enabled = false` disables all invocation; `user_invocable = false` suppresses the slash-like user
-command only; and `model_invocable = false` suppresses model matching only. Validated optional license, compatibility,
-version, and metadata values carry no credential, authority, executable, or configuration semantics. Unknown or untyped
-frontmatter cannot change behavior.
-
-Bodies and supplements are bounded immutable UTF-8 text or typed structured reference content only. They contain no
-binary/image/rich-MIME payload, executable code, shell template, Python package, install instruction, plug-in runtime,
-raw JSON schema, arbitrary URL/host/header, endpoint, credential, provider/SDK value, process/kernel/socket handle,
-hidden external effect, or dynamic registration. The only typed references are immutable memory, role, gate-template,
-registered descriptor revision, retained content, and an exact MCP capability revision already present
-in the same frozen run-local MCP selection.
-
-```text
-SkillOriginDto
-  Session
-  Goal
-  Project
-  Personal
-  ProjectPlugin
-  UserPlugin
-  Builtin
-
-SkillLifecycleStateDto
-  Enabled
-  Disabled
-  Archived
-  Revoked
-  Overridden
-  Invalid
-```
-
-The first three origins retain their selected durable IR scope. `Personal`, `ProjectPlugin`, `UserPlugin`, and `Builtin`
-preserve Factory distribution and resolution semantics as daemon-owned provenance, not ambient filesystem authority: no
-recursive path scan, symlink traversal, remote fetch, marketplace activity, executable package, MCP/server activation,
-or installation occurs at runtime. A user may explicitly import a reviewed Factory-compatible textual bundle; the daemon
-validates it and creates an immutable Skill revision with source identity/revision, importer, and time. An import never
-installs or activates another plugin component.
-
-For one canonical name, effective resolution is `Session`, then nearest selected Goal, then `Project`, `ProjectPlugin`,
-`Personal`, `UserPlugin`, and `Builtin`. Same-name records across origins are not merged: the winner and every
-overridden loser remain safely queryable with identity, revision, origin, and resolution reason. A duplicate canonical
-name in one origin is invalid. A disabled effective record prevents invocation. Explicit replacement is still required
-to replace a record's semantic content; precedence selects one exposed name and never invents a text conflict
-resolution.
-
-Discovery, selection, and invocation use progressive disclosure: the model initially receives only applicable enabled
-model-invocable cards, ordered deterministically and pinned to one catalog revision. It compares the request to
-description and applicability, then records a selected exact revision before the full body is disclosed. A user may
-invoke `/skill:<name> <arguments>` through an equivalent typed command when the effective Skill is enabled and
-user-invocable; the arguments are bounded user text attached to the procedure, not authority to widen its scope or
-capabilities. User and model invocation have identical freeze, disclosure, audit, redaction, and no-authority semantics
-and differ only in invocation origin. A custom user command of the same name remains its own command; it does not alter
-model Skill matching.
-
-Supporting resources are never implicitly loaded. The body may name a `SkillSupplementDto`, but only an explicit
-`retrieve` against that exact frozen reference discloses its bounded content. A Skill invocation is instructional
-context and selected references only. Every actual action still travels through the selected Rust-owned
-descriptor/gateway path. A card, body, supplement, frontmatter, declared tools, origin, role link, Goal, child,
-IPython facade, MCP server, or model request cannot create a ToolId, descriptor, registry entry, credential access,
-provider selection, authorization, confirmation, policy/quota, lifecycle mutation, child authority, gate success, or
-external effect.
-
-Skill text is untrusted model-visible data, not policy or executable authority. It may recommend already available work
-and may narrow a task, class, context/result bound, or selected descriptor subset through an exact typed role or
-delegation reference. It cannot widen any of them. A Skill reference to MCP cannot acquire, discover, refresh, install,
-register, or invoke an unselected capability. Python/IPython may render a selected Skill as convenience documentation
-only; it cannot import a Skill package, execute a body, or bypass the typed Skill disclosure and tool gateway paths.
-
-The project script library ([architecture 20](20-ipython-kernel-lifecycle.md)) is not a Skill
-body, supplement, or package reference. A Skill may name a library module only as untrusted instructional text, and the
-module itself stays an ordinary project file created and run through the registered tools. This document adds no script
-supplement kind, and a script never becomes Skill content, Skill authority, or Skill disclosure.
-
-```text
 SkillSelectionV1
-  skill_id
-  exact_revision
-  origin
-  owner_scope_provenance
-  card_reference
-  body_reference_when_disclosed
-  disclosed_supplement_references
-  typed_reference_set_reference
-  invocation_origin = UserSlash | ModelMatch
+  ordered references { skill_id, exact_revision }
 ```
 
-Selection is immutable before the next affected model step or external action. `GoalRunSelectionV1` records exact Skill
-selections; ordinary runs use a separately versioned optional selection carrying the same non-authorizing frozen Skill
-context. A child run receives only exact selected Skill/role/reference values explicitly selected for it. Forks retain
-the exact selected card/revision/disclosure references in their immutable base snapshot. Retry and recovery validate
-stored selection and never rediscover a current Skill. A new revision, disable, archive, revoke, replacement,
-or restore affects future discovery/admission only; it never rewrites an admitted run, child, fork, historical
-selection, or body.
+Bodies are bounded immutable UTF-8 text only: no binary, image, executable code, shell template, install instruction,
+plug-in runtime, raw schema, arbitrary URL or header, endpoint, credential, provider/SDK value, or process handle. A
+disabled record is invisible to selection. Discovery lists the applicable enabled cards in deterministic canonical-name
+order pinned to one exact revision; the model compares the request to a card's `canonical_name` and `description`
+and selects one exact revision before the body is attached to its model step. A selected revision is immutable: a later
+edit, disable, or removal affects future discovery only and never rewrites an admitted run, child, fork, or historical
+selection. Unknown, disabled, stale, or over-limit material blocks only the dependent attachment before external work.
 
-Skill records are session-scoped: `SkillCreated`, `SkillImported`, `SkillRevisionCreated`, `SkillReplacementLinked`,
-`SkillRolledBack`, `SkillArchived`, `SkillRestored`, `SkillRevoked`, `SkillResolutionRecorded`, `SkillSelected`,
-`SkillDisclosed`, `SkillSupplementDisclosed`, `SkillProposalAccepted`, and `SkillProposalRejected` are typed records
-committed in exactly one session under the one-transaction state-change law of [architecture
-04](04-sessions-runs-events-and-storage.md). The one cross-session aspect is catalog state, not a record family:
-records, revisions, and cards carry identity and exact revision, and a list binds the catalog revision and opaque token
-below, so catalog state has no durable order. Current cards and catalog caches accelerate queries but never reconstruct
-historical use.
+Skill records are session-scoped and committed in exactly one session under the one-transaction state-change law of
+[architecture 04](04-sessions-runs-events-and-storage.md): `SkillSelected` and `SkillBodyAttached`. The closed failures
+are `skill_invalid`, `skill_disabled`, `skill_unknown`, `skill_revision_stale`, `skill_content_too_large`, and
+`skill_name_collision`; none reveals a body, path, or implementation resource. One frozen `SkillSelectionV1` rides the
+run's immutable selection record, for a goal-directed run and an ordinary run alike. A child run receives only exact
+selected values explicitly selected for it. Forks retain the exact selected references in their immutable base
+snapshot. The project script library ([architecture 20](20-ipython-kernel-lifecycle.md)) is not a Skill: a Skill may
+name a module only as untrusted instructional text, and the module itself stays an ordinary project file.
 
-Skill operations are typed requests (card-only listing, exact inspect/disclosure, user invocation, lifecycle
-commands, and durable skill audit; [architecture
-03](03-daemon-transport-and-adapters.md)). A list captures one catalog revision, uses stable ordering and an opaque
-token, and returns `has_more`; a malformed, cross-scope, or stale token fails with a typed conflict.
-Skill records are typed serde JSON ([architecture
-02](02-dto-and-contract-policy.md)) with no canonical tags or digest framing. Unknown, corrupt, incompatible,
-stale, missing, archived, revoked, or over-limit content blocks only the dependent disclosure/model step before external
-work while unrelated history remains readable; no current card, body, origin, or live path is substituted.
-
-At minimum, closed failures are `skill_invalid`, `skill_disabled`, `skill_overridden`, `skill_not_user_invocable`,
-`skill_not_model_invocable`, `skill_scope_unavailable`, `skill_revision_stale`, `skill_reference_unavailable`,
-`skill_content_unavailable`, `skill_supplement_unavailable`, `skill_catalog_token_invalid`, `skill_catalog_conflict`,
-`skill_name_collision`, `skill_frontmatter_invalid`, `skill_content_too_large`, `skill_forbidden_content`,
-`skill_capability_reference_unavailable`, `skill_selection_incompatible`, and `skill_revision_conflict`. They reveal no
-full body, secret, private host, path, raw reference body, implementation resource, or external state.
-
-## Context sources, projections, and memory
+## Context sources and model-step context
 
 Same-Session Plan-to-Build continuation may retain the conversation as model context, but it must bind the approved plan
 revision and create a fresh Build run. Conversation history is context evidence, not proof of current mutable state or
 completion of an earlier effect. Before mutation, the Build run must revalidate mutable project and external state. An
 optional new-Session handoff materializes the full available safe conversation context, approved plan, and execution
-prompt into an immutable credential-free snapshot; it never transfers live runtime resources, credentials, grants,
-queues, or unfinished effects.
+prompt into an immutable credential-free snapshot; it never transfers live runtime resources, credentials, queues, or
+unfinished effects.
 
-Admission freezes an exact typed manifest before a dependent model step begins:
+The frozen source selection binds identities, revisions, and declared semantic order; it is immutable before the next
+affected model step and is never widened afterwards. There is no per-step context record: each model step is built from
+the selection plus durable history, and the provider request built from it is a mutable window under [architecture
+08](08-model-protocol-and-providers.md) that compresses the largest
+tool-role results in place when the request estimate crosses the configured context window. Every durable fact stays
+recorded as written.
 
-```text
-ContextSourceManifestV1
-  manifest_contract_revision
-  ordered_source_references
-  source_revision_references
-  declared_audience
-  representation_policy_revision
-  omission_references
-
-ModelContextProjectionV1
-  projection_contract_revision
-  manifest_reference
-  model_step_index
-  ordered_safe_items
-  disclosure_decisions
-  omission_or_degradation_evidence
-```
-
-The manifest binds identities, revisions, audience, safe representation policy, declared semantic order, and typed
-omission reasons. A projection binds one model step to an ordered safe representation of that exact manifest; the
-provider request built from it is a mutable window under [architecture
-08](08-model-protocol-and-providers.md), and that window compresses the largest
-tool-role results in place when the request estimate crosses the configured context window. The manifest, the
-projection, and every durable fact stay recorded as written. A source or card may be narrower than its original content
-but can never be broader or visible to a wider audience.
-
-Memory uses immutable typed records, not mutable hidden prompt state. A memory record has provenance, scope, safe card,
-audience, explicit disclosure status, and supersession/replacement/rollback references. Retrieval and disclosure may
-refuse safely or omit a record with typed reason. They cannot infer conflicts, mutate historical context, inject
-undisclosed content, or leak source material. A replacement creates a new immutable record and explicit relation;
-rollback selects an earlier record explicitly and does not erase either record.
+Memory is ordinary markdown the user and model maintain in the workspace, and the model reads it with the existing
+six-tool set ([architecture 05](05-tools-and-workspace.md)). No memory records, scopes, cards, or replacement links
+exist, and no context selection carries memory state.
 
 ## Compaction, cancellation, and recovery
 
 Compaction creates an immutable safe summary over an exact ordered set of **completed** durable history. It retains
-source ranges, compaction policy/version, safe audience, omission evidence, and exact uncompacted suffix. Original
+source ranges, compaction policy/version, omission evidence, and exact uncompacted suffix. Original
 durable facts remain authoritative and are never deleted, replaced, or reinterpreted by a summary. A compaction cannot
 cover unfinished or interrupted effects, synthesize completion, reorder history, create authority, or become
 continuation/recovery state.
@@ -323,41 +135,33 @@ sequenceDiagram
 
   U->>G: Create or revise Goal
   G->>C: Select explicit references
-  C->>R: Freeze manifest and selections
-  R->>S: Bind step projection
+  C->>R: Freeze source selection and selections
+  R->>S: Bind step context
   S->>F: Commit completed facts
   F->>C: Provide exact completed range
   C->>C: Create immutable safe summary
 ```
 
-Cancellation, terminalization, selection replacement, audience revocation, or restart blocks later disclosure and model
-steps as applicable but cannot rewrite an already committed projection or summary. Late source, card, retrieval,
-disclosure, or compaction output after cancellation, terminalization, replacement, or restart is non-authoritative and
+Cancellation, terminalization, selection replacement, or restart blocks later attachment and model
+steps as applicable but cannot rewrite an already committed model step or summary. Late source, card, retrieval,
+attachment, or compaction output after cancellation, terminalization, replacement, or restart is non-authoritative and
 cannot append facts.
 
-Context recovery may validate persisted supported references, but never rediscloses, recompacts, fetches current
-catalog/file/index content, resumes/retries work, or reconstructs projections from mutable state. Unsupported, corrupt,
+Context recovery may validate persisted supported references, but never re-attaches context, recompacts, fetches current
+catalog/file/index content, resumes/retries work, or reconstructs a selection from mutable state. Unsupported, corrupt,
 or missing selected context blocks only dependent future work before effect; unrelated readable history stays isolated.
 
-## Child, MCP, bridge, kernel, protocol, and compatibility boundaries
+## Child, MCP, bridge, kernel, and protocol boundaries
 
-A child receives only separately selected frozen safe references. It never inherits a live manifest, undisclosed memory,
-Goal applicability, Skill source, bridge grant, kernel namespace/checkpoint, provider continuation, MCP selection,
-connection, process, or unfinished effect. Child context is independent and non-authorizing.
+A child receives only separately selected frozen safe references; it never inherits a live source selection, Goal
+applicability, Skill selection, kernel namespace/checkpoint, provider continuation, MCP connection, process, or
+unfinished effect. MCP, bridge, and kernel context is safe projection only: context cannot discover or invoke MCP,
+issue a bridge ingress request, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery
+uses typed read-only current-state projections over the single typed connection ([architecture
+03](03-daemon-transport-and-adapters.md)); reconnect re-reads current state, and there is no event tail, cursor, or
+resynchronization. Partial delivery is never permitted.
 
-MCP, bridge, and kernel context is safe projection only. Context cannot discover or invoke MCP, issue a bridge
-grant/operation, create a kernel epoch, restore a checkpoint, or cause a host request. Future delivery uses typed
-requests ([architecture 03](03-daemon-transport-and-adapters.md)): correlated, read-only current-state
-projections. Reconnect re-reads current state; there is no event tail, cursor, or resynchronization. Reconnection or
-audit cannot create a Goal, disclose memory,
-recompact, execute a model step, invoke a tool, start a child, issue authority, or perform external work. Partial
-delivery is never permitted.
-
-M3/M4 and retained records gain no Goal, Skill, source-manifest, projection, memory, disclosure, summary, applicability
-link, child, MCP, activity, or policy state. Historical M4 tool calls remain denial evidence. No current mutable state
-may reconstruct missing future context meaning.
-
-## Dependencies, non-goals, and evidence
+## Dependencies and non-goals
 
 This document depends on architectures 15 and 18--20. It does not define actual Goal persistence,
 search/index/vector retrieval, instruction assembly (owned by [architecture
@@ -366,10 +170,8 @@ source-page sizes, resource values, provider evolution, architecture-23 session 
 delivery, physical Plan artifacts, direct MCP administration, Python/Jupyter process behavior, Cargo, Makefile/CI, or
 production activation.
 
-Evidence: activating specification per [architecture 12](12-quality-gates-and-makefile.md).
-
-Architecture 22 owns provider kind/profile/capability/reasoning normalization. Provider may declare compatible reasoning
-input requirements, but only this document selects sources, audiences, disclosures, and model-step context projections;
+Architecture 22 owns provider configuration and reasoning normalization. Provider may declare compatible reasoning
+input requirements, but only this document selects sources and the model-step context window;
 provider cannot scan or inject historical context. Architecture 03 owns the flat activity journal and notification list.
 Context records may be referenced only through safe selected provenance and never becomes activity authority or a hidden
-presentation disclosure channel.
+presentation channel.

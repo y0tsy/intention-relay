@@ -1,8 +1,6 @@
 #![allow(
-    clippy::expect_used,
-    clippy::panic,
     clippy::unwrap_used,
-    reason = "Integration tests use expect and unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
+    reason = "Integration tests use unwrap only for deterministic fixture setup; failures indicate a broken test fixture."
 )]
 
 //! Regression coverage for PR24-022 and PR24-023: tool text validates on

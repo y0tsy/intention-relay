@@ -16,7 +16,7 @@ use std::io::{BufRead, Write};
 use intention_client::IntentionClient;
 use intention_proto::{RunStatusDto, SessionId, run_status_is_terminal};
 use intention_transport::LocalEndpoint;
-use intention_tui::app::short_identifier;
+use intention_tui::app::{CommandAction, CommandInvocation, resolve_command, short_identifier};
 
 use crate::cli::{ExitStatus, Options};
 use crate::headless::{
@@ -105,33 +105,48 @@ async fn converse<W: Write, E: Write>(
         };
         match Line::parse(&input) {
             Line::Blank => {}
-            Line::Quit => {
-                drain_active_turn(&mut driver, out, err, &mut interrupts).await;
-                break;
+            Line::Refused(notice) => {
+                let _ = writeln!(err, "error: {notice}");
             }
-            Line::New => match driver.create().await {
-                Ok(()) => report_open_session(&driver, out),
-                Err(error) => {
-                    let _ = writeln!(err, "error: {error}");
+            Line::Command(invocation) => match invocation.spec().action() {
+                CommandAction::Quit => {
+                    drain_active_turn(&mut driver, out, err, &mut interrupts).await;
+                    break;
                 }
-            },
-            Line::Session(argument) => match SessionId::parse(&argument) {
-                Ok(session) => match driver.show(session).await {
+                CommandAction::NewSession => match driver.create().await {
                     Ok(()) => report_open_session(&driver, out),
                     Err(error) => {
                         let _ = writeln!(err, "error: {error}");
                     }
                 },
-                Err(_) => {
+                CommandAction::OpenSession => {
+                    let word = invocation.word(0).unwrap_or_default();
+                    match SessionId::parse(word) {
+                        Ok(session) => match driver.show(session).await {
+                            Ok(()) => report_open_session(&driver, out),
+                            Err(error) => {
+                                let _ = writeln!(err, "error: {error}");
+                            }
+                        },
+                        Err(_) => {
+                            let _ = writeln!(
+                                err,
+                                "error: {} requires a canonical session identifier",
+                                invocation.spec().typed_name()
+                            );
+                        }
+                    }
+                }
+                // The two surfaces share one vocabulary; a command that drives
+                // the fullscreen surface is known here and has nothing to drive.
+                CommandAction::SessionsBrowser | CommandAction::Theme => {
                     let _ = writeln!(
                         err,
-                        "error: /session requires a canonical session identifier"
+                        "error: {} needs the fullscreen front end",
+                        invocation.spec().typed_name()
                     );
                 }
             },
-            Line::Unknown(name) => {
-                let _ = writeln!(err, "error: unknown command /{name}");
-            }
             Line::Turn(turn) => {
                 // A prompt with no session open creates the session it needs
                 // and commits the prompt as that session's first turn in one
@@ -266,20 +281,21 @@ fn report_open_session(driver: &Driver, out: &mut impl Write) {
 enum Line {
     /// The input was blank.
     Blank,
-    /// The user asked to leave.
-    Quit,
-    /// The user asked for a new session.
-    New,
-    /// The user asked to open the named session.
-    Session(String),
+    /// The line names a registered command and satisfies its declaration.
+    Command(CommandInvocation),
+    /// The line does not satisfy the one registry: it names no registered
+    /// command, or its words do not fill the arguments its command declares.
+    Refused(String),
     /// The user typed one turn.
     Turn(String),
-    /// The user typed an undeclared command.
-    Unknown(String),
 }
 
 impl Line {
-    /// Parses one raw input line.
+    /// Parses one raw input line through the one command registry.
+    ///
+    /// The names, the argument rules, and the notices are the fullscreen
+    /// surface's own: a line resolves here exactly as it does in the input
+    /// band, so no command exists in one front end and not in the other.
     fn parse(raw: &str) -> Self {
         let input = raw.trim();
         if input.is_empty() {
@@ -288,46 +304,76 @@ impl Line {
         let Some(command) = input.strip_prefix('/') else {
             return Self::Turn(input.to_owned());
         };
-        let (name, argument) = command
-            .split_once(' ')
-            .map_or((command, ""), |(name, argument)| (name, argument.trim()));
-        match name {
-            "quit" => Self::Quit,
-            "new" => Self::New,
-            "session" => Self::Session(argument.to_owned()),
-            _ => Self::Unknown(name.to_owned()),
+        match resolve_command(command).into_invocation() {
+            Ok(invocation) => Self::Command(invocation),
+            Err(notice) => Self::Refused(notice),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::panic,
-        reason = "Line tests assert the parsed step of typed input directly."
-    )]
 
     use super::*;
+
+    /// Returns the invocation one raw line resolved to, or the notice it
+    /// answered with.
+    fn resolved(raw: &str) -> Result<CommandInvocation, String> {
+        match Line::parse(raw) {
+            Line::Command(invocation) => Ok(invocation),
+            Line::Refused(notice) => Err(notice),
+            line => panic!("{line:?} carries no command"),
+        }
+    }
 
     #[test]
     fn every_line_kind_parses_from_its_input() {
         assert_eq!(Line::parse("   \n"), Line::Blank);
-        assert_eq!(Line::parse("/quit\n"), Line::Quit);
-        assert_eq!(Line::parse("/new"), Line::New);
-        assert_eq!(
-            Line::parse("/session 0b1a2c3d-0000-4000-8000-000000000000\n"),
-            Line::Session("0b1a2c3d-0000-4000-8000-000000000000".to_owned())
-        );
         assert_eq!(
             Line::parse("  hello world  "),
             Line::Turn("hello world".to_owned())
         );
-        assert_eq!(Line::parse("/watch"), Line::Unknown("watch".to_owned()));
+        assert_eq!(
+            resolved("/quit\n")
+                .expect("quit is a command")
+                .spec()
+                .action(),
+            CommandAction::Quit
+        );
+        assert_eq!(
+            resolved("/new").expect("new is a command").spec().action(),
+            CommandAction::NewSession
+        );
+        assert_eq!(
+            resolved("/session 0b1a2c3d-0000-4000-8000-000000000000\n")
+                .expect("session is a command")
+                .word(0),
+            Some("0b1a2c3d-0000-4000-8000-000000000000"),
+            "the free-form identifier reaches the transition as it was typed"
+        );
     }
 
     #[test]
-    fn a_command_without_an_argument_keeps_an_empty_argument() {
-        assert_eq!(Line::parse("/session"), Line::Session(String::new()));
-        assert_eq!(Line::parse("/quit now"), Line::Quit);
+    fn the_repl_parses_the_one_vocabulary_exactly_as_the_fullscreen_surface_does() {
+        assert_eq!(
+            resolved("/theme DARK")
+                .expect("a declared value resolves")
+                .value(0),
+            Some("dark"),
+            "the value vocabulary and its case rule are the registry's"
+        );
+        assert_eq!(
+            resolved("/session").expect_err("the identifier is required"),
+            "missing argument \"session\""
+        );
+        assert_eq!(
+            resolved("/quit now").expect_err("the exit takes no argument"),
+            "unexpected argument \"now\""
+        );
+        assert_eq!(
+            resolved("/watch").expect_err("watch is registered nowhere"),
+            "unknown command /watch; known commands: /new /sessions /theme /session /quit",
+            "the REPL's notice lists the same set the hint band shows"
+        );
     }
 }

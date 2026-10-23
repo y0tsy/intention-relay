@@ -1,9 +1,3 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Transport integration fixtures use direct failure assertions for diagnostics."
-)]
-
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -59,7 +53,6 @@ fn status_frame(
             run_id,
             intention_proto::TurnId::new(),
             intention_proto::RunStatusDto::Running,
-            intention_proto::ConfigRevisionId::new(),
             None,
             intention_proto::TimestampDto::from_unix_seconds(1_726_000_000)
                 .expect("fixture timestamp is valid"),

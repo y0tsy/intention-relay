@@ -1,7 +1,7 @@
 //! Deterministic model-driver fixtures shared by integration suites.
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
 use futures_util::StreamExt;
 use intention_providers::{
@@ -65,44 +65,60 @@ impl ScriptedDriver {
     }
 
     /// Makes every execution stream stay pending without yielding an event.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture mutex is poisoned.
     pub fn stay_pending(&self) {
         *self
             .pending_stream
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = true;
+            .expect("the fixture mutex is not poisoned") = true;
     }
 
     /// Cancels the supplied signal after the selected event index of the first
     /// provider round.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture mutex is poisoned.
     pub fn cancel_during_stream(&self, index: usize, signal: ModelCancellationSignal) {
         *self
             .cancel_during_stream
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some((index, signal));
+            .expect("the fixture mutex is not poisoned") = Some((index, signal));
     }
 
     /// Returns how many provider executions started.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture mutex is poisoned.
     #[must_use]
     pub fn executions(&self) -> usize {
         *self
             .executions
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
     }
 
     /// Returns every executed request in provider order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fixture mutex is poisoned.
     #[must_use]
     pub fn requests(&self) -> Vec<ModelRequestDto> {
         self.requests
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .clone()
     }
 }
 
 impl ModelExecutionDriver for ScriptedDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -114,18 +130,18 @@ impl ModelExecutionDriver for ScriptedDriver {
             let mut executions = self
                 .executions
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner);
+                .expect("the fixture mutex is not poisoned");
             *executions += 1;
             *executions
         };
         self.requests
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .push(request);
         if *self
             .pending_stream
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
         {
             return Box::pin(futures_util::stream::pending::<
                 Result<ModelEventDto, ProviderErrorDto>,
@@ -134,14 +150,14 @@ impl ModelExecutionDriver for ScriptedDriver {
         let events = self
             .rounds
             .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+            .expect("the fixture mutex is not poisoned")
             .pop_front()
             .unwrap_or_else(|| unreachable!("a scripted provider round exists"));
         if execution == 1
             && let Some((index, signal)) = self
                 .cancel_during_stream
                 .lock()
-                .unwrap_or_else(PoisonError::into_inner)
+                .expect("the fixture mutex is not poisoned")
                 .clone()
         {
             let mut seen = 0usize;

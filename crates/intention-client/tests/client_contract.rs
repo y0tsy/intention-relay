@@ -1,7 +1,5 @@
 #![allow(
     clippy::await_holding_lock,
-    clippy::expect_used,
-    clippy::panic,
     reason = "Client contract fixtures use direct assertions and controlled fixture launchers; the standard fixture mutex serializes independent fixture servers, and every async test owns its own single-threaded runtime, so holding that guard across awaits cannot deadlock."
 )]
 
@@ -23,17 +21,13 @@ use intention_client::{
 };
 use intention_proto::TimestampDto;
 use intention_proto::{
-    ClientRequestDto, ConfigRevisionId, CreateSessionAcceptedDto, CreateSessionCommandDto,
-    CreateSessionFirstTurnDto, DaemonHealthDto, DaemonReadinessDto, IdempotencyKey,
-    ProtocolDaemonMessageDto, ProtocolResultDto, RemoveTurnAcceptedDto, RunId, RunProjectionDto,
-    RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto, SessionFrameDto, SessionId,
-    SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto, TextDeltaChannelDto,
-    TextDeltaFrameDto, ThemeDto, TuiSettingsDto, TuiThemeAcceptedDto, TurnId, decode_request_line,
-    encode_request,
+    ClientRequestDto, CreateSessionAcceptedDto, CreateSessionCommandDto, CreateSessionFirstTurnDto,
+    DaemonHealthDto, ProtocolDaemonMessageDto, ProtocolResultDto, RunCancelledAcceptedDto, RunId,
+    RunProjectionDto, RunStatusDto, SendUserTurnAcceptedDto, SendUserTurnOutcomeDto,
+    SessionFrameDto, SessionId, SessionSnapshotDto, SessionSummariesDto, SessionSummaryDto,
+    TextDeltaChannelDto, TextDeltaFrameDto, TurnId, decode_request_line, encode_request,
 };
-use intention_proto::{
-    DtoResult, ErrorCategoryDto, ErrorDto, ErrorRetryDto, ProjectId, WorkspaceId,
-};
+use intention_proto::{DtoResult, ErrorCategoryDto, ErrorDto, ProjectId, WorkspaceId};
 use intention_proto::{
     MessageId, MessageKindDto, MessageProjectionDto, RunModeDto, SessionProjectionDto,
 };
@@ -63,8 +57,6 @@ fn fixture_projection(session_id: SessionId) -> SessionProjectionDto {
         fixture_workspace_root(),
         RunModeDto::Build,
         None,
-        None,
-        Vec::new(),
     )
     .expect("fixture projection is valid")
 }
@@ -81,9 +73,7 @@ fn fixture_projection_with_run(
         WorkspaceId::new(),
         fixture_workspace_root(),
         RunModeDto::Build,
-        None,
         Some(fixture_run(session_id, run_id, status)),
-        Vec::new(),
     )
     .expect("fixture projection with a run is valid")
 }
@@ -283,7 +273,6 @@ fn fixture_run(session_id: SessionId, run_id: RunId, status: RunStatusDto) -> Ru
         run_id,
         TurnId::new(),
         status,
-        ConfigRevisionId::new(),
         None,
         started_at,
         finished_at,
@@ -302,7 +291,6 @@ fn fixture_summary(session_id: SessionId, updated_at: i64) -> SessionSummaryDto 
         timestamp(updated_at),
         fixture_workspace_root(),
         0,
-        None,
     )
 }
 
@@ -421,7 +409,7 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
     .connect_or_bootstrap()
     .await
     .expect("already-ready daemon must be used without launch");
-    assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
+    assert_eq!(health, DaemonHealthDto::ready());
     assert_eq!(launches.load(Ordering::SeqCst), 0);
     server.await.expect("ready fixture server completes");
 
@@ -434,7 +422,7 @@ async fn first_ready_connection_skips_launch_and_bootstrap_launches_after_unavai
     .connect_or_bootstrap()
     .await
     .expect("unavailable initial endpoint must bootstrap through launcher");
-    assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
+    assert_eq!(health, DaemonHealthDto::ready());
     assert_eq!(bootstrap_launches.load(Ordering::SeqCst), 1);
 
     let error = IntentionClient::new(endpoint(), Box::new(RejectingLauncher))
@@ -453,10 +441,9 @@ async fn connection_rejection_and_invalid_response_are_typed() {
             "fixture_rejected",
         ),
         (
-            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                SessionId::new(),
-                TurnId::new(),
-            ))),
+            FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+                RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
+            )),
             "invalid_local_protocol_response",
         ),
     ];
@@ -576,17 +563,13 @@ async fn command_rejection_is_typed() {
 async fn a_create_command_carries_its_first_turn() {
     let _guard = fixture_guard();
     let session_id = SessionId::new();
-    let idempotency_key = IdempotencyKey::new();
     let command = CreateSessionCommandDto::new(
         ProjectId::new(),
         session_id,
         WorkspaceId::new(),
         fixture_workspace_root(),
         Some(RunModeDto::Build),
-        Some(
-            CreateSessionFirstTurnDto::new(idempotency_key, "first prompt")
-                .expect("fixture first turn is valid"),
-        ),
+        Some(CreateSessionFirstTurnDto::new("first prompt").expect("fixture first turn is valid")),
     );
 
     let first_turn_endpoint = endpoint();
@@ -629,7 +612,7 @@ async fn await_ready_returns_ready_health_and_reports_an_unavailable_daemon() {
     .await_ready()
     .await
     .expect("ready daemon health is returned by the readiness wait");
-    assert_eq!(health.readiness(), DaemonReadinessDto::Ready);
+    assert_eq!(health, DaemonHealthDto::ready());
     server.await.expect("ready fixture server completes");
 
     // An endpoint nobody serves ends the bounded wait with the typed
@@ -646,11 +629,12 @@ async fn await_ready_returns_ready_health_and_reports_an_unavailable_daemon() {
 }
 
 #[tokio::test]
-async fn correlated_replies_are_scope_checked() {
+async fn a_correlated_reply_is_answered_without_re_checking_its_entity_identity() {
     let _guard = fixture_guard();
     let session_id = SessionId::new();
 
-    // A snapshot for another session is not this request's answer.
+    // The reply identity the daemon echoes is what proves this answer belongs
+    // to this request; the entity the answer names is not re-validated here.
     let other_session = SessionId::new();
     let foreign_snapshot = SessionSnapshotDto::with_projection(
         other_session,
@@ -663,44 +647,15 @@ async fn correlated_replies_are_scope_checked() {
         snapshot_endpoint.clone(),
         FixtureResponse::Result(ProtocolResultDto::SessionSnapshot(foreign_snapshot.clone())),
     );
-    assert_eq!(
-        client(
-            snapshot_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::SessionSnapshot(foreign_snapshot)),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .session_snapshot(session_id)
-        .await
-        .expect_err("a snapshot for another session is not this request's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server.await.expect("scope fixture server completes");
-
-    // A removal for another turn is not this request's answer.
-    let removed_endpoint = endpoint();
-    let server = start_fixture_server(
-        removed_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-            session_id,
-            TurnId::new(),
-        ))),
-    );
-    assert_eq!(
-        client(
-            removed_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                session_id,
-                TurnId::new(),
-            ))),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .remove_turn(session_id, TurnId::new())
-        .await
-        .expect_err("a removal of another turn is not this request's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
+    let received = client(
+        snapshot_endpoint,
+        FixtureResponse::Result(ProtocolResultDto::SessionSnapshot(foreign_snapshot.clone())),
+        Arc::new(AtomicUsize::new(0)),
+    )
+    .session_snapshot(session_id)
+    .await
+    .expect("the correlated reply is the answer to this request");
+    assert_eq!(received, foreign_snapshot);
     server.await.expect("scope fixture server completes");
 }
 
@@ -709,8 +664,8 @@ async fn invalid_response_does_not_launch_a_daemon() {
     let _guard = fixture_guard();
     let endpoint = endpoint();
     let launches = Arc::new(AtomicUsize::new(0));
-    let response = FixtureResponse::Result(ProtocolResultDto::TurnRemoved(
-        RemoveTurnAcceptedDto::new(SessionId::new(), TurnId::new()),
+    let response = FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+        RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
     ));
     let server = start_fixture_server(endpoint.clone(), response.clone());
     let error = client(endpoint, response, Arc::clone(&launches))
@@ -730,7 +685,7 @@ async fn invalid_response_does_not_launch_a_daemon() {
 }
 
 #[tokio::test]
-async fn foreign_peer_on_the_current_endpoint_is_stale() {
+async fn foreign_peer_on_the_current_endpoint_fails_closed() {
     let _guard = fixture_guard();
     let endpoint = endpoint();
     let server = start_fixture_server(endpoint.clone(), FixtureResponse::Foreign);
@@ -742,8 +697,8 @@ async fn foreign_peer_on_the_current_endpoint_is_stale() {
     .session_snapshot(SessionId::new())
     .await
     .expect_err("a foreign peer on the current endpoint fails closed");
-    assert_eq!(error.code(), "stale_daemon_protocol");
-    assert_eq!(error.category(), ErrorCategoryDto::Unavailable);
+    assert_eq!(error.code(), "invalid_local_protocol_response");
+    assert_eq!(error.category(), ErrorCategoryDto::Validation);
     server.await.expect("foreign fixture server completes");
 }
 
@@ -751,7 +706,6 @@ async fn foreign_peer_on_the_current_endpoint_is_stale() {
 async fn list_sessions_round_trips_and_validates_the_reply() {
     let _guard = fixture_guard();
     let newest = SessionId::new();
-    let run_id = RunId::new();
     let summaries = SessionSummariesDto::new(
         vec![
             SessionSummaryDto::new(
@@ -763,7 +717,6 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
                 timestamp(2_000),
                 fixture_workspace_root(),
                 3,
-                Some(fixture_run(newest, run_id, RunStatusDto::Running)),
             ),
             fixture_summary(SessionId::new(), 1_000),
         ],
@@ -787,13 +740,9 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
     assert_eq!(received.sessions().len(), 2);
     assert_eq!(received.sessions()[0].session_id(), newest);
     assert_eq!(
-        received.sessions()[0].active_run().map(|run| run.run_id()),
-        Some(run_id)
-    );
-    assert_eq!(
-        received.sessions()[1].active_run(),
-        None,
-        "a session without an active run round-trips as inactive"
+        received.sessions()[0].message_count(),
+        3,
+        "a summary round-trips its committed row count"
     );
     assert_eq!(received.omitted(), 4);
     server.await.expect("session list fixture server completes");
@@ -802,18 +751,16 @@ async fn list_sessions_round_trips_and_validates_the_reply() {
     let invalid_endpoint = endpoint();
     let server = start_fixture_server(
         invalid_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-            SessionId::new(),
-            TurnId::new(),
-        ))),
+        FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+            RunCancelledAcceptedDto::new(SessionId::new(), RunId::new()),
+        )),
     );
     assert_eq!(
         client(
             invalid_endpoint,
-            FixtureResponse::Result(ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(
-                SessionId::new(),
-                TurnId::new(),
-            ))),
+            FixtureResponse::Result(ProtocolResultDto::RunCancelled(
+                RunCancelledAcceptedDto::new(SessionId::new(), RunId::new())
+            )),
             Arc::new(AtomicUsize::new(0)),
         )
         .list_sessions()
@@ -877,96 +824,8 @@ async fn continue_session_reports_no_sessions_to_continue() {
     .expect_err("an empty session list has no continue target");
     assert_eq!(error.code(), "no_sessions_to_continue");
     assert_eq!(error.category(), ErrorCategoryDto::NotFound);
-    assert_eq!(error.retry(), ErrorRetryDto::Never);
+    assert!(!error.retryable());
     server.await.expect("empty list fixture server completes");
-}
-
-#[tokio::test]
-async fn tui_settings_and_theme_selection_round_trip_and_validate_the_reply() {
-    let _guard = fixture_guard();
-    let settings = TuiSettingsDto::new(ThemeDto::Dark);
-    let settings_endpoint = endpoint();
-    let server = start_fixture_server(
-        settings_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TuiSettings(settings)),
-    );
-    let received = client(
-        settings_endpoint,
-        FixtureResponse::Result(ProtocolResultDto::TuiSettings(settings)),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .tui_settings()
-    .await
-    .expect("typed terminal settings are returned");
-    assert_eq!(received, settings);
-    assert_eq!(received.theme(), ThemeDto::Dark);
-    server.await.expect("settings fixture server completes");
-
-    // Another result kind is not the settings answer.
-    let invalid_endpoint = endpoint();
-    let invalid =
-        ProtocolResultDto::TurnRemoved(RemoveTurnAcceptedDto::new(SessionId::new(), TurnId::new()));
-    let server = start_fixture_server(
-        invalid_endpoint.clone(),
-        FixtureResponse::Result(invalid.clone()),
-    );
-    assert_eq!(
-        client(
-            invalid_endpoint,
-            FixtureResponse::Result(invalid),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .tui_settings()
-        .await
-        .expect_err("a non-settings result is not this request's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server
-        .await
-        .expect("invalid settings fixture server completes");
-
-    // A theme selection round-trips its accepted theme.
-    let accepted = TuiThemeAcceptedDto::new(ThemeDto::Dark);
-    let accepted_endpoint = endpoint();
-    let server = start_fixture_server(
-        accepted_endpoint.clone(),
-        FixtureResponse::Result(ProtocolResultDto::TuiThemeSet(accepted)),
-    );
-    let received = client(
-        accepted_endpoint,
-        FixtureResponse::Result(ProtocolResultDto::TuiThemeSet(accepted)),
-        Arc::new(AtomicUsize::new(0)),
-    )
-    .set_tui_theme(ThemeDto::Dark)
-    .await
-    .expect("typed theme acceptance is returned");
-    assert_eq!(received, accepted);
-    assert_eq!(received.theme(), ThemeDto::Dark);
-    server.await.expect("theme fixture server completes");
-
-    // An acceptance that names another theme is not this command's answer.
-    let mismatch_endpoint = endpoint();
-    let mismatch = ProtocolResultDto::TuiThemeSet(TuiThemeAcceptedDto::new(ThemeDto::Light));
-    let server = start_fixture_server(
-        mismatch_endpoint.clone(),
-        FixtureResponse::Result(mismatch.clone()),
-    );
-    assert_eq!(
-        client(
-            mismatch_endpoint,
-            FixtureResponse::Result(mismatch),
-            Arc::new(AtomicUsize::new(0)),
-        )
-        .set_tui_theme(ThemeDto::Dark)
-        .await
-        .expect_err("an acceptance of another theme is not this command's answer")
-        .code(),
-        "invalid_local_protocol_response"
-    );
-    server
-        .await
-        .expect("mismatched theme fixture server completes");
 }
 
 #[test]

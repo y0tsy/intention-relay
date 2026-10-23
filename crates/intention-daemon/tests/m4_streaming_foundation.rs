@@ -7,12 +7,6 @@
 //! closed instead of resynchronized: a re-subscribing client re-reads current
 //! state.
 
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    reason = "Focused daemon-foundation fixtures use assertion conveniences for precise diagnostics."
-)]
-
 mod common;
 
 #[cfg(feature = "test-support")]
@@ -33,15 +27,13 @@ use intention_engine::{INTERRUPT_NOTICE, INTERRUPTED_MARKER};
 use intention_proto::RunModeDto;
 use intention_proto::SendUserTurnOutcomeDto;
 #[cfg(feature = "test-support")]
-use intention_proto::TurnId;
-#[cfg(feature = "test-support")]
 use intention_proto::{
     ClientRequestDto, ProtocolDaemonMessageDto, ProtocolResultDto, SessionFrameDto,
     SessionSnapshotDto, SubscribeSessionCommandDto, TextDeltaChannelDto, decode_response,
     encode_request, run_status_is_terminal,
 };
-use intention_proto::{IdempotencyKey, RunId, SessionId};
 use intention_proto::{MessageKindDto, RunStatusDto, SendUserTurnCommandDto};
+use intention_proto::{RunId, SessionId};
 use intention_providers::{
     FinishReasonDto, ModelCancellationSignal, ModelCapabilitiesDto, ModelEventDto,
     ModelEventStream, ModelExecutionDriver, ModelRequestDto, ModelRoleDto,
@@ -96,7 +88,7 @@ impl BlockingDriver {
 #[cfg(feature = "test-support")]
 impl ModelExecutionDriver for BlockingDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -152,7 +144,7 @@ impl PartialAnswerDriver {
 #[cfg(feature = "test-support")]
 impl ModelExecutionDriver for PartialAnswerDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -218,7 +210,7 @@ struct GatedChannelDriver {
 #[cfg(feature = "test-support")]
 impl ModelExecutionDriver for GatedChannelDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -262,7 +254,7 @@ struct GatedChunksDriver {
 #[cfg(feature = "test-support")]
 impl ModelExecutionDriver for GatedChunksDriver {
     fn capabilities(&self) -> ModelCapabilitiesDto {
-        ModelCapabilitiesDto::new(true, true, true, false, false, true)
+        ModelCapabilitiesDto::new(true)
     }
 
     fn execute(
@@ -341,8 +333,7 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
         endpoint,
         1,
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "host turn")
-                .expect("turn is valid"),
+            SendUserTurnCommandDto::new(session_id, "host turn").expect("turn is valid"),
         ),
     )
     .await;
@@ -356,12 +347,12 @@ async fn send_user_turn_through_host(endpoint: &LocalEndpoint, session_id: Sessi
 }
 
 #[cfg(feature = "test-support")]
-async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) -> TurnId {
+async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: SessionId) {
     let response = send_request_through_host(
         endpoint,
         1,
         ClientRequestDto::SendUserTurn(
-            SendUserTurnCommandDto::new(session_id, IdempotencyKey::new(), "pending host turn")
+            SendUserTurnCommandDto::new(session_id, "pending host turn")
                 .expect("pending turn is valid"),
         ),
     )
@@ -373,7 +364,6 @@ async fn send_pending_turn_through_host(endpoint: &LocalEndpoint, session_id: Se
         matches!(turn.outcome(), SendUserTurnOutcomeDto::Pending),
         "the host answers the pending turn with its durable identity"
     );
-    turn.turn_id()
 }
 
 #[cfg(feature = "test-support")]
@@ -450,22 +440,11 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     tokio::time::timeout(Duration::from_secs(1), driver.entered.notified())
         .await
         .expect("first execution is blocked");
-    let pending_turn_id = send_pending_turn_through_host(&endpoint, session_id).await;
+    send_pending_turn_through_host(&endpoint, session_id).await;
     assert_eq!(
         host.task_count(),
         1,
         "a pending message never admits a second execution"
-    );
-    let pending = facade
-        .session_snapshot(session_id)
-        .expect("session projection reads");
-    assert!(
-        pending
-            .projection()
-            .pending_turns()
-            .iter()
-            .any(|turn| turn.turn_id() == pending_turn_id),
-        "the pending message is durable input before it joins"
     );
     driver.release.notify_one();
     tokio::time::timeout(Duration::from_secs(2), driver.entered.notified())
@@ -488,10 +467,6 @@ async fn a_pending_turn_joins_the_running_execution_without_a_second_run() {
     let joined = facade
         .session_snapshot(session_id)
         .expect("joined session projection reads");
-    assert!(
-        joined.projection().pending_turns().is_empty(),
-        "the joined message is no longer pending"
-    );
     assert_eq!(
         joined.projection().active_run().map(|run| run.run_id()),
         Some(run_id),
@@ -564,7 +539,7 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     tokio::time::timeout(Duration::from_secs(1), first_driver.entered.notified())
         .await
         .expect("first host reaches an in-flight provider stream");
-    let pending_turn_id = send_pending_turn_through_host(&first_endpoint, session_id).await;
+    send_pending_turn_through_host(&first_endpoint, session_id).await;
     first_server.await.expect("first host accepted its peers");
     first_host.shutdown().await;
     drop(first_facade);
@@ -587,14 +562,6 @@ async fn restart_interrupts_in_flight_runs_without_resuming_or_exposing_fake_cre
     assert!(
         recovered.projection().active_run().is_none(),
         "the interrupted run is terminal after recovery"
-    );
-    assert!(
-        recovered
-            .projection()
-            .pending_turns()
-            .iter()
-            .any(|turn| turn.turn_id() == pending_turn_id),
-        "the pending message survives restart as durable input"
     );
     assert_eq!(restart_driver.executions(), 0);
 
@@ -1050,10 +1017,6 @@ async fn listing_sessions_answers_with_the_ordered_window_and_its_omitted_count(
     );
     for summary in summaries.sessions() {
         assert_eq!(summary.mode(), RunModeDto::Build);
-        assert!(
-            summary.active_run().is_none(),
-            "a session without a run reports no active run"
-        );
     }
     // The window is newest-first with the durable identity breaking an update
     // time tie, and it is a coherent window of distinct durable sessions.
