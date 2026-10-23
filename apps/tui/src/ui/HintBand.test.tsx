@@ -31,7 +31,7 @@ test("a bare slash ranks the whole registry, which the band windows", async () =
   assert.equal(menu?.kind, "command");
   assert.deepEqual(
     menu?.rows.map((row) => row.label),
-    ["/new", "/session", "/sessions", "/theme", "/quit"],
+    ["/new", "/sessions", "/theme", "/quit"],
   );
   const painted_ = await lines("/");
   assert.ok(painted_.some((line) => /> \/new/.test(line)));
@@ -40,7 +40,10 @@ test("a bare slash ranks the whole registry, which the band windows", async () =
     false,
     "the whole list is not painted",
   );
-  assert.ok(painted_.some((line) => /… and 2 more commands/.test(line)));
+  assert.ok(
+    painted_.some((line) => /… and 1 more commands/.test(line)),
+    "the noun is the band's own word, never a count-agreeing one",
+  );
 });
 
 test("a prefix narrows the registry to the rows it ranks", async () => {
@@ -53,19 +56,19 @@ test("a prefix narrows the registry to the rows it ranks", async () => {
 });
 
 test("the window follows the row the reader is on", async () => {
-  const last = await lines("/", 60, 4);
+  const last = await lines("/", 60, 3);
   assert.ok(
     last.some((line) => /^│\s+> \/quit/.test(line)),
     "the cursor's own row is painted",
   );
-  assert.ok(last.some((line) => /… and 2 more commands/.test(line)));
+  assert.ok(last.some((line) => /… and 1 more commands/.test(line)));
 });
 
 test("a prompt is not a command: the caret's word opens no band", async () => {
   assert.equal(commandMenu(draft("explain this")), null);
   assert.equal(commandMenu(draft("a / b")), null, "a slash past the first character is text");
   assert.equal(commandMenu(draft("/new ")), null, "the command declares no argument");
-  assert.equal(commandMenu(draft("/session ")), null, "a session id has nothing to rank");
+  assert.equal(commandMenu(draft("/sessions ")), null, "the command declares no argument");
 });
 
 test("the theme's word ranks its declared values", async () => {
@@ -90,11 +93,10 @@ test("the band spends two frame rows around the rows it shows", async () => {
 });
 
 test("the band paints the rows with the first one cursored", async () => {
-  const painted_ = await lines("/s");
+  const painted_ = await lines("/s", 72);
   const text = painted_.join("\n");
   assert.match(text, /commands/);
-  assert.match(text, /> \/session/);
-  assert.match(text, /\/sessions/);
-  assert.match(text, /open the session with this id/);
-  assert.match(text, /Session/);
+  assert.match(text, /> \/sessions/);
+  assert.match(text, /browse the sessions on this machine/);
+  assert.match(text, /Navigation/);
 });

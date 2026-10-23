@@ -75,8 +75,6 @@ export type Action =
   | { readonly kind: "draft_edited"; readonly edit: DraftEdit }
   /** The user asked for a line break in the input line. */
   | { readonly kind: "draft_newline" }
-  /** The user abandoned the input line into the recallable history. */
-  | { readonly kind: "draft_cleared" }
   /** The user pressed Esc, whose meaning the state it finds decides. */
   | { readonly kind: "escape_pressed" }
   /** The user pressed Ctrl+C, whose meaning the state it finds decides. */
@@ -87,8 +85,6 @@ export type Action =
   | { readonly kind: "notice_shown"; readonly text: string }
   /** The user submitted the input line. */
   | { readonly kind: "input_submitted" }
-  /** The user asked to leave the front end. */
-  | { readonly kind: "quit_requested" }
   /** The user asked for a new session. */
   | { readonly kind: "new_session_requested" }
   /** The user named one session to open. */

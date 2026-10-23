@@ -18,15 +18,10 @@ export type Arm =
   /** The next Ctrl+C press stops the run the notice named. */
   | "stop"
   /** The next Ctrl+C press leaves the front end. */
-  | "exit"
-  /** The next Esc press abandons the typed line into the recallable history. */
-  | "clear";
+  | "exit";
 
 /** The notice an exit arm shows until its consecutive press arrives. */
 export const EXIT_ARM_NOTICE = "press Ctrl+C again to exit";
-
-/** The notice a clear arm shows until its consecutive press arrives. */
-export const CLEAR_ARM_NOTICE = "press Esc again to clear the input";
 
 /** The characters of a run's identity a notice spells. */
 export const SHORT_IDENTIFIER_CHARS = 8;

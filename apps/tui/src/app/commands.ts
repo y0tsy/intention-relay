@@ -19,8 +19,6 @@ export interface ArgumentSpec {
 export type CommandAction =
   /** Create a session in the workspace and open it. */
   | "new_session"
-  /** Open the session the command's one argument names. */
-  | "open_session"
   /** Browse the sessions the daemon holds. */
   | "list_sessions"
   /** Choose the palette, either through the picker or by one declared value. */
@@ -50,13 +48,6 @@ export const COMMANDS: readonly CommandSpec[] = [
     arguments: [],
     summary: "start a fresh session",
     action: "new_session",
-  },
-  {
-    name: "session",
-    category: "Session",
-    arguments: [{ name: "session", required: true }],
-    summary: "open the session with this id",
-    action: "open_session",
   },
   {
     name: "sessions",

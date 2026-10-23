@@ -14,7 +14,7 @@
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useEffect, useState } from "react";
 import type { ThemePreference } from "../app/action";
-import { selectCommandMenu, selectLive, selectSurface, selectTheme } from "../app/select";
+import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
 import { type Palette, paletteFor } from "../theme/palette";
 import { ChatPanel } from "./ChatPanel";
@@ -49,18 +49,14 @@ function usePalette(preference: ThemePreference): Palette {
 export function App({ store }: { store: AppStore }) {
   const surface = useStore(store, selectSurface);
   const theme = useStore(store, selectTheme);
-  const live = useStore(store, selectLive);
   const menu = useStore(store, selectCommandMenu);
   const palette = usePalette(theme);
   const { width, height } = useTerminalDimensions();
 
   useKeyboard((event) => {
-    const intent = keyIntent(event, { surface, live, menu: menu !== null, height });
+    const intent = keyIntent(event, { surface, menu: menu !== null, height });
     switch (intent.kind) {
       case "ignore":
-        return;
-      case "quit":
-        store.dispatch({ kind: "quit_requested" });
         return;
       case "interrupt":
         store.dispatch({ kind: "ctrl_c_pressed" });

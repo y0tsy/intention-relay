@@ -22,7 +22,7 @@ import type {
 } from "../bindings";
 import { runStatusIsTerminal, SessionStreamState } from "../client/stream";
 import { type Action, isClientReport, THEME_PREFERENCES, type ThemePreference } from "./action";
-import { type Arm, CLEAR_ARM_NOTICE, EXIT_ARM_NOTICE, stopArmNotice } from "./arm";
+import { type Arm, EXIT_ARM_NOTICE, stopArmNotice } from "./arm";
 import { BROWSER_TABS, type BrowserTab, browserRows } from "./browser";
 import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
 import {
@@ -163,8 +163,6 @@ export class AppState {
   #armed: Arm | null = null;
   /** The word the band's cursor belongs to, which a new word resets. */
   #menuWord: string | null = null;
-  /** Whether the band's current word was dismissed, which an edit reopens. */
-  #menuDismissed = false;
 
   /**
    * Creates the state a front end starts from.
@@ -240,8 +238,6 @@ export class AppState {
         this.draft = insertNewline(this.draft);
         this.#refreshMenu();
         return [];
-      case "draft_cleared":
-        return this.#clearIntoHistory();
       case "escape_pressed":
         return this.#applyEscape();
       case "ctrl_c_pressed":
@@ -253,8 +249,6 @@ export class AppState {
         return [];
       case "input_submitted":
         return this.#applyInputSubmitted();
-      case "quit_requested":
-        return [{ kind: "quit" }];
       case "new_session_requested":
         return [{ kind: "create_session", firstTurn: null }];
       case "session_open_requested":
@@ -338,7 +332,6 @@ export class AppState {
    * moves inside a word does not move the highlight.
    */
   #refreshMenu(): void {
-    this.#menuDismissed = false;
     const menu = this.menu;
     const word = menu === null ? null : menuKey(menu);
     if (word !== this.#menuWord) {
@@ -398,15 +391,9 @@ export class AppState {
     return this.#rows;
   }
 
-  /**
-   * Returns the rows the band shows for the word the caret sits in, if any.
-   *
-   * The band is derived from the line, except for one state the line cannot
-   * carry: a word the user dismissed with Esc stays closed until the next edit,
-   * which is what makes the dismissing press mean nothing else.
-   */
+  /** Returns the rows the band shows for the word the caret sits in, if any. */
   get menu(): CommandMenu | null {
-    return this.#menuDismissed ? null : commandMenu(this.draft);
+    return commandMenu(this.draft);
   }
 
   /** Returns the last known run projection. */
@@ -719,35 +706,13 @@ export class AppState {
   /**
    * Applies one Esc press on the chat surface.
    *
-   * Four meanings meet on the key, and the state it finds decides which one the
-   * press carries: the band is the innermost layer, so one press closes it and
-   * touches nothing else; a live run stops on a single press, the way a shell
-   * cancels a running command; a typed line arms the clear, which its next
-   * consecutive press fires; and an empty line leaves the front end.
+   * The key has one job: stopping the run this front end observes, on a single
+   * press, the way a shell cancels a running command. A state with no live run
+   * has nothing for it to do - the key never clears the line, closes the band,
+   * or leaves the front end.
    */
   #applyEscape(): readonly Effect[] {
-    if (this.menu !== null) {
-      // Closing the band is not editing the line: the word stays exactly where
-      // it is and the caret does not move, and the next edit opens the band
-      // again, because an edit is what recomputes the word.
-      this.#menuDismissed = true;
-      this.#menuWord = null;
-      this.menuSelection = 0;
-      return [];
-    }
-    if (this.liveRun !== null) {
-      return this.#requestCancel();
-    }
-    if (this.draft.text.trim() !== "") {
-      if (this.#armed === "clear") {
-        this.#armed = null;
-        return this.#clearIntoHistory();
-      }
-      this.#arm("clear", CLEAR_ARM_NOTICE);
-      return [];
-    }
-    this.#armed = null;
-    return [{ kind: "quit" }];
+    return this.liveRun === null ? [] : this.#requestCancel();
   }
 
   /**
@@ -787,12 +752,7 @@ export class AppState {
 
   /** Returns whether the arm standing belongs to the key one action pressed. */
   #armedIsPressedBy(action: Action): boolean {
-    if (this.#armed === null) {
-      return false;
-    }
-    return this.#armed === "clear"
-      ? action.kind === "escape_pressed"
-      : action.kind === "ctrl_c_pressed";
+    return this.#armed !== null && action.kind === "ctrl_c_pressed";
   }
 
   /**
@@ -839,10 +799,6 @@ export class AppState {
         return [{ kind: "quit" }];
       case "new_session":
         return [{ kind: "create_session", firstTurn: null }];
-      case "open_session": {
-        const sessionId = words[0];
-        return sessionId === undefined ? [] : this.#applySessionOpenRequested(sessionId);
-      }
       case "list_sessions":
         return this.#applySessionsRequested();
       case "choose_theme": {

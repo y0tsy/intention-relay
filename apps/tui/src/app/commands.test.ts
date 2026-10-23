@@ -16,19 +16,16 @@ function invocation(line: string) {
 
 test("every command resolves from its typed name", () => {
   assert.equal(invocation("new").spec.action, "new_session");
+  assert.equal(invocation("sessions").spec.action, "list_sessions");
+  assert.equal(invocation("theme").spec.action, "choose_theme");
   assert.equal(invocation("quit").spec.action, "quit");
-  assert.equal(invocation("session 0b1a2c3d").spec.action, "open_session");
 });
 
-test("the identifier reaches the transition as it was typed", () => {
-  assert.deepEqual(invocation("session 0b1a2c3d-0000-4000-8000-000000000001").words, [
-    "0b1a2c3d-0000-4000-8000-000000000001",
-  ]);
-});
-
-test("a required argument the line omits is named in the notice", () => {
-  const resolution = resolveCommand("session");
-  assert.equal(notice(resolution), 'missing argument "session"');
+test("a session is opened by the browser, never by a typed line", () => {
+  assert.equal(
+    notice(resolveCommand("session 0b1a2c3d")),
+    "unknown command /session; known commands: /new /sessions /theme /quit",
+  );
 });
 
 test("a word past the last declared argument is unexpected", () => {
@@ -39,7 +36,7 @@ test("a word past the last declared argument is unexpected", () => {
 test("an unknown name answers with the registry it resolved against", () => {
   assert.equal(
     notice(resolveCommand("watch")),
-    "unknown command /watch; known commands: /new /session /sessions /theme /quit",
+    "unknown command /watch; known commands: /new /sessions /theme /quit",
   );
 });
 
@@ -49,7 +46,7 @@ test("a resolved line carries no notice", () => {
 
 test("the registry names each command once", () => {
   const names = COMMANDS.map(typedName);
-  assert.deepEqual(names, ["/new", "/session", "/sessions", "/theme", "/quit"]);
+  assert.deepEqual(names, ["/new", "/sessions", "/theme", "/quit"]);
   assert.equal(new Set(names).size, names.length);
 });
 
@@ -70,5 +67,5 @@ test("the sessions command takes no argument", () => {
 });
 
 test("whitespace around and between words does not reach the transition", () => {
-  assert.deepEqual(invocation("  session   0b1a2c3d  ").words, ["0b1a2c3d"]);
+  assert.deepEqual(invocation("  theme   dark  ").words, ["dark"]);
 });

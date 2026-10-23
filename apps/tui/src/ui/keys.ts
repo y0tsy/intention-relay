@@ -1,9 +1,9 @@
 //! The keyboard: one event in, one intent out.
 //!
 //! The mapping lives here rather than inside the component, so "a modified
-//! return is a line break", "escape stops a live run before it clears the draft",
-//! and "a surface owns the arrow keys while it is open" are decisions a test can
-//! read instead of a chain of `if`s a reader has to simulate.
+//! return is a line break", "escape is the stop and nothing else", and "a surface
+//! owns the arrow keys while it is open" are decisions a test can read instead of
+//! a chain of `if`s a reader has to simulate.
 
 import { decodePasteBytes } from "@opentui/core";
 import type { Surface } from "../app/state";
@@ -23,8 +23,6 @@ export interface KeyEvent {
 export type KeyIntent =
   /** The event is not a gesture this surface knows. */
   | { readonly kind: "ignore" }
-  /** Leave the front end. */
-  | { readonly kind: "quit" }
   /** The layered interrupt: stop the live run, clear the line, or exit. */
   | { readonly kind: "interrupt" }
   /** The layered escape, whose meaning the state it finds decides. */
@@ -67,8 +65,6 @@ export type KeyIntent =
 export interface KeyContext {
   /** The surface that owns the keyboard. */
   readonly surface: Surface;
-  /** Whether a run is live, which decides what escape means. */
-  readonly live: boolean;
   /** Whether the command band is open, which decides what the arrows walk. */
   readonly menu: boolean;
   /** The panel's height, which decides how far one page scrolls. */
@@ -114,11 +110,8 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
   if (event.eventType === "release") {
     return { kind: "ignore" };
   }
-  // Ctrl+Q is the immediate exit; Ctrl+C is the layered key every surface
-  // shares, so it reaches the stop, clear, and exit arms of the state.
-  if (event.ctrl && event.name === "q") {
-    return { kind: "quit" };
-  }
+  // Ctrl+C is the layered key every surface shares, so it reaches the stop,
+  // clear, and exit arms of the state.
   if (event.ctrl && event.name === "c") {
     return { kind: "interrupt" };
   }
