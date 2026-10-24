@@ -7,9 +7,10 @@
 import { useMemo } from "react";
 import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
 import type { AppStore } from "../app/store";
+import { transcriptBlocks } from "../app/transcript";
 import { Printer as KernelPrinter } from "../kit";
 import type { Palette } from "../theme/palette";
-import { blocks, CommittedBlock } from "./Transcript";
+import { CommittedBlock } from "./Transcript";
 import { useStore } from "./use-store";
 
 /** Prints the committed blocks the terminal does not have yet. */
@@ -26,7 +27,7 @@ export function Printer({
   const session = useStore(store, selectSessionId);
   const messages = useStore(store, selectTranscript);
   const expansions = useStore(store, selectExpansions);
-  const transcript = useMemo(() => blocks(messages), [messages]);
+  const transcript = useMemo(() => transcriptBlocks(messages), [messages]);
   return (
     <KernelPrinter
       session={session}

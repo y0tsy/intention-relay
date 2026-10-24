@@ -5,8 +5,8 @@
 //! owns the arrow keys while it is open" are decisions a test can read instead of
 //! a chain of `if`s a reader has to simulate.
 
-import { decodePasteBytes } from "@opentui/core";
-import type { Surface } from "../app/state";
+import type { Action } from "./action";
+import type { Surface } from "./state";
 
 /** One key event, as the renderer reports it. */
 export interface KeyEvent {
@@ -80,17 +80,6 @@ export function typed(event: {
     return " ";
   }
   return [...event.name].length === 1 ? event.name : null;
-}
-
-/**
- * Returns the text one paste carries.
- *
- * A paste is data, never a gesture: its newlines are the prompt's own, so a
- * pasted block lands in the draft whole instead of submitting at the first line
- * break the way a typed return would.
- */
-export function pastedText(bytes: Uint8Array): string {
-  return decodePasteBytes(bytes);
 }
 
 /**
@@ -183,5 +172,45 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
       const text = typed(event);
       return text === null ? { kind: "ignore" } : { kind: "insert", text };
     }
+  }
+}
+
+/** Returns the store action one intent asks for, or `null` for an ignored key. */
+export function intentAction(intent: KeyIntent): Action | null {
+  switch (intent.kind) {
+    case "ignore":
+      return null;
+    case "interrupt":
+      return { kind: "ctrl_c_pressed" };
+    case "escape":
+      return { kind: "escape_pressed" };
+    case "submit":
+      return { kind: "input_submitted" };
+    case "newline":
+      return { kind: "draft_newline" };
+    case "accept_menu":
+      return { kind: "menu_accepted" };
+    case "edit":
+      return { kind: "draft_edited", edit: intent.edit };
+    case "recall":
+      return { kind: "history_recalled", delta: intent.delta };
+    case "insert":
+      return { kind: "draft_typed", text: intent.text };
+    case "move_selection":
+      return { kind: "selection_moved", delta: intent.delta };
+    case "commit_selection":
+      return { kind: "selection_committed" };
+    case "close_surface":
+      return { kind: "surface_closed" };
+    case "expand_reasoning":
+      return { kind: "reasoning_expanded", id: null };
+    case "filter_typed":
+      return { kind: "browser_filter_typed", text: intent.text };
+    case "filter_backspace":
+      return { kind: "browser_filter_backspace" };
+    case "switch_tab":
+      return { kind: "browser_tab_moved", delta: intent.delta };
+    case "move_menu":
+      return { kind: "menu_moved", delta: intent.delta };
   }
 }

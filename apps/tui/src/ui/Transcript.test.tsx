@@ -11,7 +11,8 @@ import { frameLines, painted } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { DARK } from "../theme/palette";
 import { ContentColumns, Stack } from "../kit";
-import { blocks, CommittedBlock, Live } from "./Transcript";
+import { transcriptBlocks } from "../app/transcript";
+import { CommittedBlock, Live } from "./Transcript";
 
 /** Renders one transcript at one width and returns its lines. */
 async function lines(
@@ -47,7 +48,7 @@ async function lines(
     <Stack spaced>
       <ContentColumns columns={width}>
         <Stack spaced>
-          {blocks(messages).map((block) => (
+          {transcriptBlocks(messages).map((block) => (
             <CommittedBlock
               key={block.key}
               block={block}

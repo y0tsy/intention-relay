@@ -2,7 +2,15 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type KeyContext, type KeyEvent, keyIntent, typed } from "./keys";
+import type { Action } from "./action";
+import {
+  type KeyContext,
+  type KeyEvent,
+  type KeyIntent,
+  intentAction,
+  keyIntent,
+  typed,
+} from "./keys";
 
 /** A plain key event with nothing modified. */
 function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {
@@ -150,4 +158,50 @@ test("a paste is data, so it types whatever it carries", () => {
   assert.equal(typed({ name: "a", ctrl: false, meta: false }), "a");
   assert.equal(typed({ name: "space", ctrl: false, meta: false }), " ");
   assert.equal(typed({ name: "return", ctrl: false, meta: false }), null);
+});
+
+test("each intent becomes the one action the store expects", () => {
+  const cases: readonly [KeyIntent, Action | null][] = [
+    [{ kind: "ignore" }, null],
+    [{ kind: "interrupt" }, { kind: "ctrl_c_pressed" }],
+    [{ kind: "escape" }, { kind: "escape_pressed" }],
+    [{ kind: "submit" }, { kind: "input_submitted" }],
+    [{ kind: "newline" }, { kind: "draft_newline" }],
+    [{ kind: "accept_menu" }, { kind: "menu_accepted" }],
+    [
+      { kind: "edit", edit: "left" },
+      { kind: "draft_edited", edit: "left" },
+    ],
+    [
+      { kind: "recall", delta: -1 },
+      { kind: "history_recalled", delta: -1 },
+    ],
+    [
+      { kind: "insert", text: "x" },
+      { kind: "draft_typed", text: "x" },
+    ],
+    [
+      { kind: "move_selection", delta: 1 },
+      { kind: "selection_moved", delta: 1 },
+    ],
+    [{ kind: "commit_selection" }, { kind: "selection_committed" }],
+    [{ kind: "close_surface" }, { kind: "surface_closed" }],
+    [{ kind: "expand_reasoning" }, { kind: "reasoning_expanded", id: null }],
+    [
+      { kind: "filter_typed", text: "a" },
+      { kind: "browser_filter_typed", text: "a" },
+    ],
+    [{ kind: "filter_backspace" }, { kind: "browser_filter_backspace" }],
+    [
+      { kind: "switch_tab", delta: 1 },
+      { kind: "browser_tab_moved", delta: 1 },
+    ],
+    [
+      { kind: "move_menu", delta: -1 },
+      { kind: "menu_moved", delta: -1 },
+    ],
+  ];
+  for (const [intent, action] of cases) {
+    assert.deepEqual(intentAction(intent), action, intent.kind);
+  }
 });

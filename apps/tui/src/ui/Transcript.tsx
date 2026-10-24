@@ -15,6 +15,7 @@
 
 import { selectExpansions, selectProvisionalReasoning, selectProvisionalText } from "../app/select";
 import type { AppStore } from "../app/store";
+import type { TranscriptBlock } from "../app/transcript";
 import type { MessageProjectionDto } from "../bindings";
 import { Stack } from "../kit";
 import type { Palette } from "../theme/palette";
@@ -28,57 +29,13 @@ import { useStore } from "./use-store";
 /** The identity a live segment's expansion is kept under. */
 export const LIVE_REASONING = "live";
 
-/** One block of the transcript: the rows it draws and what decides their state. */
-export interface Block {
-  readonly key: string;
-  readonly message: MessageProjectionDto | null;
-  readonly call: MessageProjectionDto | null;
-  readonly result: MessageProjectionDto | null;
-}
-
-/** Returns the call identity one tool row carries. */
-function callId(message: MessageProjectionDto): string | null {
-  const tool = message.tool;
-  return tool === null ? null : tool.value.call_id;
-}
-
-/**
- * Pairs every tool call with the result that answers it.
- *
- * A result whose call is committed is drawn by that call and returns `null`
- * here, so an exchange is shown exactly once; a result without its call stays
- * a block of its own and says so.
- */
-export function blocks(messages: readonly MessageProjectionDto[]): Block[] {
-  const results = new Map<string, MessageProjectionDto>();
-  for (const message of messages) {
-    if (message.kind === "tool_result") {
-      const id = callId(message);
-      if (id !== null) {
-        results.set(id, message);
-      }
-    }
-  }
-  const drawn = new Set(results.values());
-  return messages
-    .filter((message) => !drawn.has(message))
-    .map((message) => {
-      const id = message.kind === "tool_call" ? callId(message) : null;
-      const result = id === null ? null : (results.get(id) ?? null);
-      const key = String(message.id);
-      return id === null
-        ? { key, message, call: null, result: null }
-        : { key, message, call: message, result };
-    });
-}
-
 /** Renders one committed block. */
 export function CommittedBlock({
   block,
   palette,
   expansion,
 }: {
-  block: Block;
+  block: TranscriptBlock;
   palette: Palette;
   expansion: number;
 }) {

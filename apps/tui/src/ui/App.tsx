@@ -17,7 +17,8 @@ import type { AppStore } from "../app/store";
 import { Screen, useTerminalTheme } from "../kit";
 import { paletteFor } from "../theme/palette";
 import { Footer } from "./Footer";
-import { keyIntent, pastedText } from "./keys";
+import { intentAction, keyIntent } from "../app/keys";
+import { pastedText } from "./paste";
 import { Printer } from "./Printer";
 import { useStore } from "./use-store";
 
@@ -32,58 +33,9 @@ export function App({ store }: { store: AppStore }) {
   const palette = paletteFor(theme === "auto" ? (terminalTheme ?? "dark") : theme);
 
   useKeyboard((event) => {
-    const intent = keyIntent(event, { surface, menu: menu !== null });
-    switch (intent.kind) {
-      case "ignore":
-        return;
-      case "interrupt":
-        store.dispatch({ kind: "ctrl_c_pressed" });
-        return;
-      case "escape":
-        store.dispatch({ kind: "escape_pressed" });
-        return;
-      case "submit":
-        store.dispatch({ kind: "input_submitted" });
-        return;
-      case "newline":
-        store.dispatch({ kind: "draft_newline" });
-        return;
-      case "accept_menu":
-        store.dispatch({ kind: "menu_accepted" });
-        return;
-      case "edit":
-        store.dispatch({ kind: "draft_edited", edit: intent.edit });
-        return;
-      case "recall":
-        store.dispatch({ kind: "history_recalled", delta: intent.delta });
-        return;
-      case "insert":
-        store.dispatch({ kind: "draft_typed", text: intent.text });
-        return;
-      case "move_selection":
-        store.dispatch({ kind: "selection_moved", delta: intent.delta });
-        return;
-      case "commit_selection":
-        store.dispatch({ kind: "selection_committed" });
-        return;
-      case "close_surface":
-        store.dispatch({ kind: "surface_closed" });
-        return;
-      case "expand_reasoning":
-        store.dispatch({ kind: "reasoning_expanded", id: null });
-        return;
-      case "filter_typed":
-        store.dispatch({ kind: "browser_filter_typed", text: intent.text });
-        return;
-      case "filter_backspace":
-        store.dispatch({ kind: "browser_filter_backspace" });
-        return;
-      case "switch_tab":
-        store.dispatch({ kind: "browser_tab_moved", delta: intent.delta });
-        return;
-      case "move_menu":
-        store.dispatch({ kind: "menu_moved", delta: intent.delta });
-        return;
+    const action = intentAction(keyIntent(event, { surface, menu: menu !== null }));
+    if (action !== null) {
+      store.dispatch(action);
     }
   });
 
