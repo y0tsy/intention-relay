@@ -70,10 +70,20 @@ export function ToolBlock({
   // process did and never repeats a byte of it.
   const printed = result?.text ?? "";
   const previewable = result !== null && identity !== EXECUTE && printed.trim().length > 0;
+  // The header carries the exchange's state: a finished call reads green, a
+  // partial one amber, a failed one red, and a call still waiting the tool ink.
+  const titleInk =
+    status === "completed"
+      ? palette.success
+      : status === "partial"
+        ? palette.warning
+        : status === "failed"
+          ? palette.error
+          : palette.toolLabel;
   return (
     <Pane
       title={markerText(TOOL_GLYPH, status === null ? identity : `${identity}   ${status}`)}
-      titleColor={palette.toolLabel}
+      titleColor={titleInk}
       borderColor={palette.toolBorder}
       background={palette.toolSurface}
     >

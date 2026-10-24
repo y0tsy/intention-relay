@@ -23,7 +23,7 @@ export interface MarkdownPalette {
   readonly inkMuted: string;
   readonly inkFaint: string;
   readonly border: string;
-  readonly panel: string;
+  readonly codeSurface: string;
   readonly markdownHeading: string;
   readonly markdownCode: string;
   readonly markdownLink: string;
@@ -160,7 +160,7 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
           borderStyle="rounded"
           border
           borderColor={palette.border}
-          backgroundColor={palette.panel}
+          backgroundColor={palette.codeSurface}
         >
           <text wrapMode="word" fg={palette.markdownCode}>
             {code.text}

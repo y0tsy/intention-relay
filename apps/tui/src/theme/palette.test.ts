@@ -8,6 +8,7 @@ import { DARK, LIGHT, type Palette, paletteFor } from "./palette";
 const ROLES: ReadonlyArray<keyof Omit<Palette, "error" | "scarlet">> = [
   "canvas",
   "panel",
+  "codeSurface",
   "headerBg",
   "tabActiveBg",
   "rowSelectedBg",
@@ -86,17 +87,28 @@ test("a frame is wholly one theme: every role differs between the two", () => {
   }
 });
 
-test("the dark ramp is monochrome outside its accent pair", () => {
-  for (const role of ROLES) {
-    if (role === "accent" || role === "accentDeep") {
-      continue;
-    }
-    const value = DARK[role];
-    const red = Number.parseInt(value.slice(1, 3), 16);
-    const green = Number.parseInt(value.slice(3, 5), 16);
-    const blue = Number.parseInt(value.slice(5, 7), 16);
+test("the dark page stays neutral while its state inks keep their hue", () => {
+  const channels = (value: string): number[] =>
+    [1, 3, 5].map((offset) => Number.parseInt(value.slice(offset, offset + 2), 16));
+  const [successRed, successGreen, successBlue] = channels(DARK.success);
+  assert.ok(
+    (successGreen ?? 0) > (successRed ?? 0) && (successGreen ?? 0) > (successBlue ?? 0),
+    "success reads green",
+  );
+  const [warningRed, warningGreen, warningBlue] = channels(DARK.warning);
+  assert.ok(
+    (warningRed ?? 0) > (warningBlue ?? 0) && (warningGreen ?? 0) > (warningBlue ?? 0),
+    "warning reads amber",
+  );
+  const [errorRed, errorGreen, errorBlue] = channels(DARK.error);
+  assert.ok(
+    (errorRed ?? 0) > (errorGreen ?? 0) && (errorRed ?? 0) > (errorBlue ?? 0),
+    "failure reads red",
+  );
+  for (const role of ["canvas", "panel", "codeSurface", "border", "ink", "inkMuted"] as const) {
+    const [red, green, blue] = channels(DARK[role]);
     assert.equal(red, green, `dark ${role} has no hue`);
-    assert.equal(blue - red, 2, `dark ${role} keeps the cool bias`);
+    assert.equal((blue ?? 0) - (red ?? 0), 2, `dark ${role} keeps the cool bias`);
   }
 });
 
@@ -119,6 +131,7 @@ test("a label reads on the wash it sits on", () => {
     ["toolLabel", "toolSurface"],
     ["toolPreview", "toolSurface"],
     ["noticeInk", "noticeSurface"],
+    ["markdownCode", "codeSurface"],
   ] as const;
   for (const [name, palette] of [
     ["light", LIGHT],

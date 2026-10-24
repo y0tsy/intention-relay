@@ -3,30 +3,32 @@
 //! A view names what a piece of text or a wash is, and the palette decides how it
 //! reads on the background the terminal reports. Both variants live here as full
 //! role tables: the light theme is the warm off-white canvas, the dark theme a
-//! neutral graphite ramp whose only hue is its accent pair.
+//! neutral graphite page whose hues are its accent pair and its state inks.
 //!
 //! The rules hold per theme, and one holds across them: every role is fully
 //! opaque, because a terminal shows no transparency; within one theme no two roles
 //! share a value, the one documented alias being `error`, which spells `scarlet`
 //! exactly; within one theme every role carries its own value, so a surface is
 //! never mistaken for its neighbour; and every role differs between the two
-//! themes, so a frame is wholly one theme and never a half-switched surface. Dark
-//! is monochrome: every role but `accent` and `accent_deep` is a neutral grey, so
-//! a state there reaches the reader through its word and glyph, never through a
-//! colour of its own. Colours degrade, words do not: a terminal without truecolor
-//! maps each role to its nearest ANSI colour, so no role carries a state alone.
+//! themes, so a frame is wholly one theme and never a half-switched surface. The
+//! dark page stays neutral - its surfaces and its body inks are greys - and only
+//! the accent pair and the three state inks carry a hue: success reads green,
+//! warning amber, failure red, and a reader who has lost the hue still has the
+//! word and the glyph beside it.
 
 function hex(red: number, green: number, blue: number): string {
   const pair = (value: number): string => value.toString(16).padStart(2, "0").toUpperCase();
   return `#${pair(red)}${pair(green)}${pair(blue)}`;
 }
 
-/** One resolved palette. Dark is monochrome except for its accent pair. */
+/** One resolved palette. The dark page is neutral; its accents and states carry hue. */
 export interface Palette {
   /** The window behind every panel. */
   readonly canvas: string;
   /** Card and panel fills. */
   readonly panel: string;
+  /** The wash behind a code block in an assistant answer. */
+  readonly codeSurface: string;
   /** The tab row and the table header band. */
   readonly headerBg: string;
   /** The wash behind the active tab. */
@@ -109,6 +111,7 @@ export interface Palette {
 export const LIGHT: Palette = {
   canvas: hex(0xf7, 0xf2, 0xe9),
   panel: hex(0xff, 0xfc, 0xf5),
+  codeSurface: hex(0xf6, 0xea, 0xdb),
   headerBg: hex(0xf3, 0xe7, 0xd5),
   tabActiveBg: hex(0xfc, 0xe2, 0xc4),
   rowSelectedBg: hex(0xfa, 0xdf, 0xc0),
@@ -153,6 +156,7 @@ export const LIGHT: Palette = {
 export const DARK: Palette = {
   canvas: hex(0x0a, 0x0a, 0x0c),
   panel: hex(0x10, 0x10, 0x12),
+  codeSurface: hex(0x1a, 0x1a, 0x1c),
   headerBg: hex(0x16, 0x16, 0x18),
   tabActiveBg: hex(0x2f, 0x2f, 0x31),
   rowSelectedBg: hex(0x33, 0x33, 0x35),
@@ -177,7 +181,7 @@ export const DARK: Palette = {
   border: hex(0x41, 0x41, 0x43),
   accent: hex(0xfb, 0x92, 0x3c),
   accentDeep: hex(0xfd, 0xba, 0x74),
-  scarlet: hex(0xd6, 0xd6, 0xd8),
+  scarlet: hex(0xf0, 0x8a, 0x8a),
   markdownHeading: hex(0xfa, 0xfa, 0xfc),
   markdownCode: hex(0xb2, 0xb2, 0xb4),
   markdownLink: hex(0xaa, 0xaa, 0xac),
@@ -188,9 +192,9 @@ export const DARK: Palette = {
   ink: hex(0xda, 0xda, 0xdc),
   inkMuted: hex(0xa6, 0xa6, 0xa8),
   inkFaint: hex(0x62, 0x62, 0x64),
-  success: hex(0x8c, 0x8c, 0x8e),
-  warning: hex(0xa0, 0xa0, 0xa2),
-  error: hex(0xd6, 0xd6, 0xd8),
+  success: hex(0x8f, 0xbf, 0x9f),
+  warning: hex(0xd6, 0xb3, 0x7a),
+  error: hex(0xf0, 0x8a, 0x8a),
 };
 
 /** Returns the palette one preference resolves to. */
