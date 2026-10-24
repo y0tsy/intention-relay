@@ -79,6 +79,33 @@ the scrollbox take the rows its content asks for and push the panels below it
 out of the frame. `flexBasis={0}` with `flexGrow={1}` gives it the free space and
 nothing else.
 
+## The kernel boundary
+
+The front end is one composition of bricks, not a set of components that each
+count rows. `src/kit` owns what needs measurement: display-cell text, table
+columns, pane chrome, the footer plan, the split-footer surface, and printing.
+`src/ui` names content and reads the columns and rows its parent hands down
+through React context. `src/kit/boundaries.test.ts` enforces both directions -
+no renderer field, display width, `Math`, or deep kernel import in a surface; no
+surface import in the kernel - and proves the guard catches a forbidden line.
+
+**A brick provides, it never paints a number.** `Pane` subtracts its border and
+padding and provides the content columns; `Hanging` subtracts a marker; the
+footer plan provides each slot's rows. A child reads a handle, so a wrapped line
+or a hidden column is decided once, where the chrome is known.
+
+**Renderer internals live behind one module.** The split surface needs the
+renderer's private offset, its pending native mode, and its external output
+queue. Those casts are in `src/kit/screen/surface.ts`; the printer asks
+`windowSettled`, `pinSurface`, and `replayWindow`, and no surface sees a private
+field. `Screen` keeps the printed-row count, and `FooterFrame` reports the
+footer height, so the application has no geometry and no renderer handshake.
+
+**The printer takes blocks, not selectors.** It receives a session key, the
+blocks to print, a palette, and a render prop. The app adapter (`src/ui/Printer.tsx`)
+maps store blocks to that shape, which is what lets the fold, the chunking, and
+the scrollback portal live in the kernel without importing app state.
+
 ## Test run time
 
 `node --test` runs one process per file, so the suite is bounded by its slowest

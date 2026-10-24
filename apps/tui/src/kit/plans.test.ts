@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  bandColumnWidths,
+  browserDataRows,
   CONTENT_INDENT,
   DETAIL_ROWS,
   footerPlan,
@@ -190,6 +192,18 @@ test("a print chunk fits the rows above the footer", () => {
 test("the input block grows one row per line break", () => {
   assert.equal(inputSlotRows(""), MIN_BLOCK_ROWS);
   assert.equal(inputSlotRows("a\nb\nc\nd"), MIN_BLOCK_ROWS + 3);
+});
+
+test("the band gives its label and trailing cell their registry width", () => {
+  const roomy = bandColumnWidths(50, ["/new", "/sessions"], ["Session", "Appearance"]);
+  assert.deepEqual(roomy, { label: 9, trailing: 10, description: 27 });
+  const narrow = bandColumnWidths(10, ["/new", "/sessions"], ["Session", "Appearance"]);
+  assert.deepEqual(narrow, { label: 8, trailing: 0, description: 0 });
+});
+
+test("the docked browser shows the rows its panel has above its chrome", () => {
+  assert.equal(browserDataRows(12), 2);
+  assert.equal(browserDataRows(6), 1, "a panel at its floor still shows one row");
 });
 
 test("the welcome keeps the overview before the lockup", () => {

@@ -24,6 +24,7 @@ the picker writes.
 | `src/main.tsx`  | the composition root: one renderer, one store, one application                                                             |
 | `src/app/`      | the state machine: `state.ts`, `store.ts`, `action.ts`, `effect.ts`, `select.ts`, `commands.ts`, `history.ts`, `editor.ts` |
 | `src/client/`   | the daemon client: transport, protocol, endpoint, and `stream.ts`, the committed state of one subscription                 |
+| `src/kit/`      | the TUI kernel: text measurement, layout bricks, the footer plan, the screen, and printing                                 |
 | `src/ui/`       | the surfaces, the keymap, and the two subscription hooks                                                                   |
 | `src/theme/`    | the palette and the config file it is read from                                                                            |
 | `src/bindings/` | generated DTOs; `make bindings` rewrites them                                                                              |
@@ -46,9 +47,20 @@ the value it paints:
   so a keystroke or a clock tick repaints the row it belongs to.
 - Every gesture is routed through `src/ui/keys.ts`: a surface decides what a
   key means in it, and no component reads the keyboard on its own.
+- No surface measures. `src/kit` owns display-cell text, table columns, pane
+  chrome, the footer plan, and the print surface; `src/ui` composes bricks and
+  reads its content and slot rows from context. A surface that reaches for the
+  renderer, a display width, `Math`, or a deep kernel module fails
+  `src/kit/boundaries.test.ts`.
+- The footer reports its own height through `FooterFrame`, and `Screen` keeps
+  the printed-row count, so the application composes a screen and never reserves
+  rows itself.
 
 `src/ui/reactivity.test.tsx` measures these rules: a parse spy records which
 source each frame parsed, and the painted frame records what was laid out.
+`src/kit/boundaries.test.ts` measures the kernel boundary in both directions: it
+fails on a forbidden token in a surface and fails if the kernel imports a
+surface.
 
 ## Checks
 
