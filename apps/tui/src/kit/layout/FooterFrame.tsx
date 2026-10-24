@@ -66,24 +66,25 @@ export function FooterFrame({
     return <box />;
   }
   if (welcome) {
-    const headerRows = 1;
+    // The bar and the hairline that closes it: a page's top edge, not a row of
+    // its content.
+    const headerRows = 2;
     const contentRows = Math.max(0, rows - layout.dockedRows - headerRows - FOOTER_MARGIN);
     return (
       <box flexDirection="column" height={rows} backgroundColor={palette.canvas}>
         <box position="absolute" top={0} left={0} width={layout.windowColumns} height={rows}>
           <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
         </box>
-        <box height={headerRows} backgroundColor={palette.headerBg}>
-          <box
-            position="absolute"
-            top={0}
-            left={0}
-            width={layout.windowColumns}
-            height={headerRows}
-          >
-            <Surface rows={headerRows} columns={layout.windowColumns} color={palette.headerBg} />
+        <box
+          height={headerRows}
+          backgroundColor={palette.headerBg}
+          border={["bottom"]}
+          borderColor={palette.border}
+        >
+          <box position="absolute" top={0} left={0} width={layout.windowColumns} height={1}>
+            <Surface rows={1} columns={layout.windowColumns} color={palette.headerBg} />
           </box>
-          <box flexDirection="row" height={headerRows}>
+          <box flexDirection="row" height={1}>
             <box width={CONTENT_INDENT} />
             <box flexGrow={1}>
               <ContentColumns columns={layout.contentColumns}>{header}</ContentColumns>

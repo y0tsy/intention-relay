@@ -17,6 +17,21 @@ export const DEFAULT_HINT = "enter sends · /new · /sessions";
 /** The detail line a wide window shows: every command the welcome offers. */
 export const WIDE_HINT = "enter send · /new session · /sessions browse · /theme palette";
 
+/** The keys the detail line reads, and the word each one carries. */
+const HINT_PIECES: ReadonlyArray<readonly [string, string]> = [
+  ["enter", "send"],
+  ["/new", "session"],
+  ["/sessions", "browse"],
+  ["/theme", "palette"],
+];
+
+/** The narrow detail line, which keeps its keys and drops the words. */
+const NARROW_PIECES: ReadonlyArray<readonly [string, string]> = [
+  ["enter", "sends"],
+  ["/new", ""],
+  ["/sessions", ""],
+];
+
 /** The word for a daemon this front end has not reached yet. */
 const CONNECTING = "Connecting…";
 
@@ -223,5 +238,23 @@ export function detailRuns(
   if (facts.notice !== null) {
     return [{ text: facts.notice, ink: "inkMuted" }];
   }
-  return [{ text: columns >= 64 ? WIDE_HINT : DEFAULT_HINT, ink: "inkMuted" }];
+  return columns >= 64 ? hintRuns(HINT_PIECES) : hintRuns(NARROW_PIECES);
+}
+
+/**
+ * Returns the styled runs a piece list paints: the key in the accent, the
+ * word it reads in the secondary ink, and the muted separator between pieces.
+ */
+function hintRuns(pieces: ReadonlyArray<readonly [string, string]>): StatusRun[] {
+  const runs: StatusRun[] = [];
+  for (const [key, word] of pieces) {
+    if (runs.length > 0) {
+      runs.push({ text: SEPARATOR, ink: "inkMuted" });
+    }
+    runs.push({ text: key, ink: "accentDeep" });
+    if (word.length > 0) {
+      runs.push({ text: ` ${word}`, ink: "inkMuted" });
+    }
+  }
+  return runs;
 }

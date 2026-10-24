@@ -146,8 +146,8 @@ export function printRoom(terminalHeight: number, footerHeight: number): number 
   return Math.max(1, Math.trunc(terminalHeight) - Math.trunc(footerHeight));
 }
 
-/** The rows the welcome's open page spends: its header and the margin below. */
-export const WELCOME_CHROME_ROWS = 2;
+/** The rows the welcome's open page spends: its bar, its hairline, and the margin below. */
+export const WELCOME_CHROME_ROWS = 3;
 
 /** The rows a session's frame spends: its bottom edge and the margin below it. */
 export const SESSION_CHROME_ROWS = 2;

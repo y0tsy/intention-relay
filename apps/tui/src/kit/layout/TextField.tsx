@@ -121,7 +121,7 @@ function BufferRow({
       </text>
       <text fg={palette.ink} wrapMode="none">
         {body.before}
-        {cursor === null ? null : INPUT_CURSOR}
+        {cursor === null ? null : <span fg={palette.accent}>{INPUT_CURSOR}</span>}
         {body.after}
         {showing ? <span fg={placeholderInk ?? palette.ink}>{placeholder}</span> : null}
       </text>
