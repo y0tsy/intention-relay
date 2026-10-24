@@ -1,0 +1,60 @@
+//! The screen's own pieces: the startup bytes and a print's plan.
+
+import assert from "node:assert/strict";
+import test from "node:test";
+import { chunkRows, leadRow, pushScreen, windowRows } from "./index";
+
+test("the window clears what is on screen and keeps the history", () => {
+  const bytes = pushScreen(30);
+  assert.equal(bytes, `${"\n".repeat(30)}\x1B[30A\x1B[J`);
+  assert.ok(!bytes.includes("\x1B[3J"), "the saved lines are the session's history");
+  assert.ok(!bytes.includes("\x1B[2J"), "erasing the whole screen is not what the window needs");
+  assert.ok(bytes.endsWith("\x1B[J"), "the erase runs from the cursor down, and no further");
+});
+
+test("a terminal that does not report its rows gets a window of its own", () => {
+  assert.equal(windowRows(undefined), 24);
+  assert.equal(windowRows(0), 24);
+  assert.equal(windowRows(30), 30);
+  assert.equal(windowRows(1), 1, "a one-row window is still a window");
+});
+
+test("the rows the window pushes are the rows it returns to", () => {
+  // The cursor has to come back exactly as far as it went down: a short move
+  // leaves the application painting the shell's rows and a long one homes it.
+  for (const rows of [1, 24, 30, 60]) {
+    const bytes = pushScreen(rows);
+    const pushed = (bytes.match(/\n/g) ?? []).length;
+    assert.equal(pushed, rows);
+    assert.ok(bytes.includes(`\x1B[${pushed}A`));
+  }
+});
+
+test("the first print of a session opens the frame", () => {
+  const lead = leadRow(0, false);
+  assert.equal(lead.top, true, "the first print carries the frame's top edge");
+  assert.equal(lead.separator, false, "nothing is above it to be separated from");
+  assert.equal(lead.closing, false, "no session is open above it");
+});
+
+test("a later print of the same session is separated from the block above it", () => {
+  const lead = leadRow(12, false);
+  assert.equal(lead.separator, true, "two blocks are one blank row apart");
+  assert.equal(lead.top, false, "the frame's top edge was printed once already");
+  assert.equal(lead.closing, false);
+});
+
+test("the first print after a session switch closes the frame above it", () => {
+  const lead = leadRow(12, true);
+  assert.equal(lead.closing, true, "the previous session's frame gets its bottom edge");
+  assert.equal(lead.top, true, "and the new session's frame gets its top edge");
+  assert.equal(lead.separator, false, "the closing edge separates them");
+});
+
+test("a chunk never runs past the print", () => {
+  assert.equal(chunkRows(0, 9, 16), 9);
+  assert.equal(chunkRows(8, 9, 16), 1, "the last row is a chunk of its own");
+  assert.equal(chunkRows(9, 9, 16), 0, "a print that is done takes no row");
+  assert.equal(chunkRows(8, 9, 0), 1, "a room of no rows still prints one row at a time");
+  assert.equal(chunkRows(0, 9, 4), 4);
+});

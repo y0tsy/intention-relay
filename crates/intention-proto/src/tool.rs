@@ -30,6 +30,7 @@ use crate::{DtoResult, ErrorCategoryDto, ErrorDto, ToolCallId, WorkspaceRelative
 
 /// The fixed set of tools exposed by the product boundary.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ToolId {
     /// Reads bounded text from a workspace file.
@@ -104,7 +105,13 @@ impl Display for ToolId {
 /// `Declared` is exactly [`ToolId::parse`] succeeding; `Undeclared` keeps a
 /// non-blank wire name that no declared tool owns, because a model can request
 /// a tool the product does not expose and that request stays durable evidence.
+///
+/// The wire form is one string, not a tagged enum: the custom [`Serialize`]
+/// impl below writes [`Self::wire_name`], so the generated declaration has to
+/// say `string` instead of describing the Rust variants.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
+#[cfg_attr(feature = "ts", ts(as = "String"))]
 pub enum ToolIdentityDto {
     /// A wire name inside the declared tool set.
     Declared(ToolId),
@@ -176,6 +183,7 @@ impl<'de> Deserialize<'de> for ToolIdentityDto {
 /// dispatch, and a call whose arguments never decode still leaves its durable
 /// identity without inventing typed arguments.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolCallRowDto {
     call_id: ToolCallId,
     tool_id: ToolIdentityDto,
@@ -255,6 +263,7 @@ impl ToolCallRowDto {
 /// `result` is the typed payload the call produced, `None` for a failed result
 /// and for a stopped dispatch that captured no output.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolResultRowDto {
     call_id: ToolCallId,
     tool_id: ToolIdentityDto,
@@ -376,6 +385,7 @@ impl ToolResultRowDto {
 
 /// The typed tool evidence of one committed tool row.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "row", content = "value", rename_all = "snake_case")]
 pub enum ToolRowDto {
     /// The evidence of one committed tool-call row.
@@ -443,6 +453,7 @@ impl ToolRowDto {
 
 /// The closed terminal status of one committed tool result.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ToolResultStatusDto {
     /// The tool completed and produced a normalized safe result.
@@ -489,6 +500,7 @@ impl ToolResultStatusDto {
 
 /// One credential-free structured metadata entry of a tool result.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ToolResultMetadataEntryDto {
     key: String,
     value: String,
@@ -550,6 +562,7 @@ impl ToolResultMetadataEntryDto {
 /// The derived JSON Schema is the string type: the bound is a runtime
 /// validation the model describes in prose rather than a schema keyword.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct BoundedText(String);
 
@@ -589,6 +602,7 @@ impl<'de> Deserialize<'de> for BoundedText {
 
 /// Typed tool input family.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "tool", content = "input", rename_all = "snake_case")]
 pub enum ToolInput {
     /// The `read` tool's typed parameters.
@@ -610,6 +624,7 @@ pub enum ToolInput {
 /// This type is the single definition of the `read` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `read` tool's typed parameters.")]
 pub struct ReadInput {
     /// Workspace-relative path of the file to read.
@@ -621,6 +636,7 @@ pub struct ReadInput {
 /// This type is the single definition of the `glob` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `glob` tool's typed parameters.")]
 pub struct GlobInput {
     /// Glob pattern matched against workspace-relative paths.
@@ -632,6 +648,7 @@ pub struct GlobInput {
 /// This type is the single definition of the `grep` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `grep` tool's typed parameters.")]
 pub struct GrepInput {
     /// Text pattern to search for inside workspace files.
@@ -652,6 +669,7 @@ pub struct GrepInput {
 /// `workspace`) through the serde tag vocabulary; the `path` entry carries a
 /// description naming the kinds that require it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `grep` tool's typed search scope.")]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GrepScope {
@@ -674,6 +692,7 @@ pub enum GrepScope {
 /// This type is the single definition of the `write` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `write` tool's typed parameters.")]
 pub struct WriteInput {
     /// Workspace-relative path of the file to write.
@@ -691,6 +710,7 @@ pub struct WriteInput {
 /// This type is the single definition of the `edit` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `edit` tool's typed parameters.")]
 pub struct EditInput {
     /// Workspace-relative path of the file to edit.
@@ -711,6 +731,7 @@ pub struct EditInput {
 /// interprets it and the executable path behind it are code-owned tool
 /// semantics and never cross a public DTO boundary.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct ShellCommandTextDto(String);
 
@@ -749,6 +770,7 @@ impl<'de> Deserialize<'de> for ShellCommandTextDto {
 
 /// A validated environment variable name for the `execute` tool.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct EnvVarNameDto(String);
 
@@ -792,6 +814,7 @@ impl<'de> Deserialize<'de> for EnvVarNameDto {
 
 /// One environment variable a call overlays on the inherited environment.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "One environment variable a call overlays on the inherited environment.")]
 pub struct EnvVarDto {
     /// Environment variable name.
@@ -802,6 +825,7 @@ pub struct EnvVarDto {
 
 /// A non-zero per-call timeout for the `execute` tool.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(transparent)]
 pub struct ToolTimeoutSecondsDto(u64);
 
@@ -842,6 +866,7 @@ impl<'de> Deserialize<'de> for ToolTimeoutSecondsDto {
 /// This type is the single definition of the `execute` tool's model arguments:
 /// the model-facing JSON Schema document is derived from it.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[schemars(description = "The `execute` tool's typed parameters.")]
 pub struct ExecuteInput {
     /// Shell command text with shell semantics: pipelines, redirects, and compound commands.
@@ -977,6 +1002,7 @@ fn unknown_tool() -> ErrorDto {
 
 /// Typed tool result family.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ToolResult {
     /// One `read` call's bounded text.
@@ -1010,6 +1036,7 @@ impl ToolResult {
 
 /// One bounded text result and its typed truncation flag.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TextResult {
     /// The bounded text.
     pub text: BoundedText,
@@ -1019,6 +1046,7 @@ pub struct TextResult {
 
 /// One `grep` result's located matches and its typed truncation flag.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GrepResult {
     /// The located matches.
     pub matches: Vec<GrepMatch>,
@@ -1032,6 +1060,7 @@ pub struct GrepResult {
 /// One workspace-relative match; its serialized size is charged against the
 /// shared search-result window.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GrepMatch {
     /// Workspace-relative path of the matching file.
     pub path: WorkspaceRelativePathDto,
@@ -1045,6 +1074,7 @@ pub struct GrepMatch {
 
 /// Workspace-relative path list produced by a glob search.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PathsResult {
     /// Paths retained inside the shared search-result window.
     pub paths: Vec<WorkspaceRelativePathDto>,
@@ -1055,6 +1085,7 @@ pub struct PathsResult {
 
 /// Written byte count produced by a write or edit.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WriteResult {
     /// The number of bytes written.
     pub bytes: u64,
@@ -1069,6 +1100,7 @@ pub struct WriteResult {
 /// with it. An interrupted collection that never observed a finished program
 /// carries no terminal classification.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ExecuteResult {
     /// The bounded stdout/stderr text with its truncation flag.
     pub text: TextResult,
@@ -1086,6 +1118,7 @@ pub struct ExecuteResult {
 /// timeout) classifies as an interrupted dispatch whose captured output, when
 /// any, stays partial.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ToolProcessStatus {
     /// The program exited successfully.

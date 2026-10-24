@@ -16,7 +16,7 @@ endef
 # production logic, not a central registry every crate must be entered into.
 COVERAGE_FLOORS = intention-transport=75 intention-storage=75 intention-engine=75 \
                   intention-tools=60 intention-config=60 intention-daemon=60 intention-providers=60 \
-                  intention-tui=20 intention-client=20
+                  intention-cli=60 intention-client=20
 
 # The components and tools each gate runs, so a gate validates exactly the
 # pinned set it uses. Every gate also validates the pinned toolchain, and a gate
@@ -36,11 +36,12 @@ ALL_PINS = $(LINT_PINS) $(COVERAGE_PINS) $(DEPS_PINS)
 # native absolute paths. `intention-daemon`'s `client_e2e` binary is the
 # cross-process proof that a real daemon serves over that transport.
 #
-# `intention-storage`'s SQLite contracts, `intention-providers`,
-# `intention-engine`, `intention-tui`, and the daemon's other suites assert
-# logic no platform boundary reaches, so the Linux coverage job verifies them
-# once; `lint-windows` still compiles every Windows code path.
-PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + (package(intention-daemon) and binary(client_e2e))
+# `intention-storage`'s SQLite contracts and `intention-providers` and
+# `intention-engine` assert logic no platform boundary reaches, so the Linux
+# coverage job verifies them once; `lint-windows` still compiles every Windows
+# code path. `intention-cli` is the command-line front end, so its suites spawn
+# a real daemon and reach the endpoint each platform resolves.
+PLATFORM_TESTS = package(intention-transport) + package(intention-tools) + package(intention-test-support) + package(intention-client) + package(intention-config) + package(intention-proto) + package(intention-cli) + (package(intention-daemon) and binary(client_e2e))
 
 .PHONY: help bootstrap-tools tools-check fmt fmt-check lint lint-windows test doctest doc coverage coverage-default coverage-artifacts-clean deps e2e-real-api quick check verify ci ci-lint-arch ci-test ci-coverage-default ci-deps
 
@@ -143,11 +144,27 @@ quick: fmt-check lint ## Fast local quality loop.
 	$(PYTHON) quality/check_tools.py $(TEST_PINS)
 	$(TIMED) $(CARGO) nextest run --workspace --all-targets --locked --all-features
 
-check: tools-check fmt-check lint test doc ## Complete non-mutating source-quality gate.
+check: tools-check fmt-check lint test doc bindings-check ## Complete non-mutating source-quality gate.
 	@true
 
 verify: check coverage deps ## Full reproducible merge and release gate.
 	@true
+
+# The TypeScript declarations of the wire types. `bindings` rewrites the
+# committed directory; `bindings-check` regenerates into a scratch directory
+# and fails when the two differ, so a DTO change cannot reach the terminal app
+# as a silently mismatched decoder.
+BINDINGS_DIR = apps/tui/src/bindings
+BINDINGS_TEST = --test ts_bindings -- --ignored
+
+bindings: ## MUTATING: regenerate the TypeScript declarations of the wire types.
+	$(CARGO) test --package intention-proto --features ts $(BINDINGS_TEST)
+
+bindings-check: ## Verify the committed TypeScript declarations match the Rust wire types.
+	@scratch="$$(mktemp -d)"
+	trap 'rm -rf "$$scratch"' EXIT
+	TS_RS_EXPORT_DIR="$$scratch" $(CARGO) test --package intention-proto --features ts $(BINDINGS_TEST)
+	diff --recursive --unified "$(BINDINGS_DIR)" "$$scratch"
 
 ci: verify ## CI alias for one local full gate. GitHub Actions invokes the per-job aliases below in parallel matrix jobs.
 	@true

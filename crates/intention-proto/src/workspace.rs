@@ -8,6 +8,7 @@ use crate::{DtoResult, ErrorDto};
 
 /// A typed workspace path declared by the session boundary.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WorkspaceRootDto(String);
 
 impl<'de> Deserialize<'de> for WorkspaceRootDto {
