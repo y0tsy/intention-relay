@@ -10,7 +10,7 @@ function key(name: string, overrides: Partial<KeyEvent> = {}): KeyEvent {
 }
 
 /** The chat surface with the band closed. */
-const CHAT: KeyContext = { menu: false, surface: "chat", height: 24 };
+const CHAT: KeyContext = { menu: false, surface: "chat" };
 
 /** Returns the intent one key has on the chat surface. */
 function chat(event: KeyEvent, context: Partial<KeyContext> = {}) {
@@ -77,10 +77,11 @@ test("the arrow keys walk the history", () => {
   assert.deepEqual(chat(key("down")), { kind: "recall", delta: 1 });
 });
 
-test("a page scrolls half the panel", () => {
-  assert.deepEqual(chat(key("pageup"), { height: 24 }), { kind: "scroll", delta: -12 });
-  assert.deepEqual(chat(key("pagedown"), { height: 24 }), { kind: "scroll", delta: 12 });
-  assert.deepEqual(chat(key("pageup"), { height: 1 }), { kind: "scroll", delta: -1 });
+test("a page key is the terminal's, not the prompt's", () => {
+  // The transcript is the terminal's scrollback, so the application leaves the
+  // keys the terminal owns to the terminal.
+  assert.deepEqual(chat(key("pageup")), { kind: "ignore" });
+  assert.deepEqual(chat(key("pagedown")), { kind: "ignore" });
 });
 
 test("a printable key types and a named key does not", () => {

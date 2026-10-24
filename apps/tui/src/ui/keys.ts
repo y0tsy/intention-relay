@@ -40,8 +40,6 @@ export type KeyIntent =
     }
   /** Walk the prompt history one entry. */
   | { readonly kind: "recall"; readonly delta: number }
-  /** Scroll the transcript half a panel. */
-  | { readonly kind: "scroll"; readonly delta: number }
   /** Put text into the draft. */
   | { readonly kind: "insert"; readonly text: string }
   /** Move the selection of the open surface. */
@@ -67,8 +65,6 @@ export interface KeyContext {
   readonly surface: Surface;
   /** Whether the command band is open, which decides what the arrows walk. */
   readonly menu: boolean;
-  /** The panel's height, which decides how far one page scrolls. */
-  readonly height: number;
 }
 
 /** Returns the text a printable key types, or `null` for anything else. */
@@ -183,10 +179,6 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
       return context.menu ? { kind: "move_menu", delta: -1 } : { kind: "recall", delta: -1 };
     case "down":
       return context.menu ? { kind: "move_menu", delta: 1 } : { kind: "recall", delta: 1 };
-    case "pageup":
-      return { kind: "scroll", delta: -Math.max(1, Math.floor(context.height / 2)) };
-    case "pagedown":
-      return { kind: "scroll", delta: Math.max(1, Math.floor(context.height / 2)) };
     default: {
       const text = typed(event);
       return text === null ? { kind: "ignore" } : { kind: "insert", text };

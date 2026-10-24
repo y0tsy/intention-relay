@@ -1,4 +1,4 @@
-//! The transcript: every committed row of the open session, then the step in
+//! The transcript: every committed row of the open session, and the step in
 //! flight.
 //!
 //! A committed row becomes one block, and exactly one blank row separates two
@@ -10,7 +10,8 @@
 //! The live tail is the step's two blocks before they commit - its reasoning,
 //! then the answer it precedes - laid out by the very components the committed
 //! row will use, so no live row looks provisional and none changes when the
-//! commit arrives.
+//! commit arrives: the rows a step shows in the footer are the rows the printed
+//! block paints.
 
 import {
   selectExpansions,
@@ -34,7 +35,7 @@ import { useStore } from "./use-store";
 export const LIVE_REASONING = "live";
 
 /** One block of the transcript: the rows it draws and what decides their state. */
-interface Block {
+export interface Block {
   readonly key: string;
   readonly message: MessageProjectionDto | null;
   readonly call: MessageProjectionDto | null;
@@ -78,7 +79,7 @@ export function blocks(messages: readonly MessageProjectionDto[]): Block[] {
 }
 
 /** Renders one committed block. */
-function CommittedBlock({
+export function CommittedBlock({
   block,
   palette,
   width,
@@ -138,8 +139,8 @@ function CommittedBlock({
   }
 }
 
-/** Renders the committed rows and the step in flight. */
-export function Transcript({
+/** Renders the committed rows, one block per message, a blank row between. */
+export function Committed({
   store,
   palette,
   width,
@@ -150,12 +151,9 @@ export function Transcript({
 }) {
   const messages = useStore(store, selectTranscript);
   const expansions = useStore(store, selectExpansions);
-  const liveReasoning = useStore(store, selectProvisionalReasoning);
-  const liveText = useStore(store, selectProvisionalText);
-  const committed = blocks(messages);
   return (
     <box flexDirection="column" gap={1}>
-      {committed.map((block) => (
+      {blocks(messages).map((block) => (
         <CommittedBlock
           key={block.key}
           block={block}
@@ -164,16 +162,35 @@ export function Transcript({
           expansion={expansions.get(block.key) ?? 0}
         />
       ))}
-      {liveReasoning.length === 0 ? null : (
+    </box>
+  );
+}
+
+/** Renders the step in flight: its reasoning, then the answer it precedes. */
+export function Live({
+  store,
+  palette,
+  width,
+}: {
+  store: AppStore;
+  palette: Palette;
+  width: number;
+}) {
+  const expansions = useStore(store, selectExpansions);
+  const reasoning = useStore(store, selectProvisionalReasoning);
+  const text = useStore(store, selectProvisionalText);
+  return (
+    <box flexDirection="column" gap={1}>
+      {reasoning.length === 0 ? null : (
         <Reasoning
-          text={liveReasoning}
+          text={reasoning}
           palette={palette}
           width={width}
           columns={width}
           expansion={expansions.get(LIVE_REASONING) ?? 0}
         />
       )}
-      {liveText.length === 0 ? null : <Answer text={liveText} palette={palette} />}
+      {text.length === 0 ? null : <Answer text={text} palette={palette} />}
     </box>
   );
 }

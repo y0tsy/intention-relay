@@ -1,14 +1,15 @@
-//! The application surface: one frame, one keyboard, one live panel.
+//! The application surface: one frame, one keyboard, one live footer.
 //!
-//! The tests drive a real store over a stand-in daemon and read the frame the
-//! app paints, so the surface that owns the keyboard is the surface on screen.
+//! The tests drive a real store over a stand-in daemon and read what the window
+//! painted and what it printed into the terminal, so the surface that owns the
+//! keyboard is the surface on screen and the transcript is the terminal's.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { AppStore } from "../app/store";
 import { withDaemon } from "../testing/daemon-stand-in";
 import { row, run, SESSION_ID, snapshot } from "../testing/fixtures";
-import { frameLines, painted } from "../testing/render";
+import { frameLines, mountApp, printedRows } from "../testing/render";
 import { offlineStore, storeFor } from "../testing/store";
 import { App } from "./App";
 
@@ -22,27 +23,65 @@ async function until(predicate: () => boolean): Promise<void> {
   }
 }
 
-/** Renders the app at one terminal size and returns its lines. */
+/** Renders the app at one terminal size and returns the footer's lines. */
 async function lines(store: AppStore, width: number, height: number): Promise<string[]> {
-  const frame = await painted(<App store={store} />, width, height);
-  return frameLines(frame);
+  const setup = await mountApp(<App store={store} />, width, height);
+  const frame = setup.captureCharFrame();
+  await setup.dispose();
+  return visible(frameLines(frame));
 }
 
-test("the panel is the one frame the window holds, inside a one-cell margin", async () => {
+/** Renders the app and returns the footer's lines and the rows it printed. */
+async function screen(
+  store: AppStore,
+  width: number,
+  height: number,
+): Promise<{ footer: string[]; printed: string[] }> {
+  const setup = await mountApp(<App store={store} />, width, height);
+  const frame = setup.captureCharFrame();
+  const printed = printedRows(setup);
+  await setup.dispose();
+  return { footer: frameLines(frame), printed };
+}
+
+/** Turns the painted page's invisible spaces into ordinary ones. */
+function visible(lines: readonly string[]): string[] {
+  return lines.map((line) => line.replace(/ /g, " "));
+}
+
+test("the window ends on the footer's own last row, with the input block framed in it", async () => {
   const store = offlineStore();
-  const frame = await painted(<App store={store} />, 60, 16);
-  const raw = frame.replace(/\n$/, "").split("\n");
-  assert.equal(raw.length, 16, "the frame fills the terminal");
-  assert.equal(raw[0]?.trim(), "", "the window's own margin stays visible above the panel");
-  assert.equal(raw.at(-1)?.trim(), "", "and below it");
-  assert.match(raw[1]?.trim() ?? "", /^╭─+╮$/, "the panel opens one row down");
-  assert.match(raw[14]?.trim() ?? "", /^╰─+╯$/, "and closes one row above the window's last");
-  for (const line of raw.slice(1, 15)) {
-    const edge = line.trim();
-    assert.ok(edge.startsWith("│") || edge.startsWith("╭") || edge.startsWith("╰"), edge);
-    assert.ok(edge.endsWith("│") || edge.endsWith("╮") || edge.endsWith("╯"), edge);
-  }
+  const setup = await mountApp(<App store={store} />, 60, 16);
+  const frame = setup.captureCharFrame();
+  await setup.dispose();
   store.dispose();
+  const raw = visible(frame.replace(/\n$/, "").split("\n"));
+  assert.equal(raw.length, 16, "the footer fills the terminal");
+  assert.match(
+    raw.at(-1)?.trimEnd() ?? "",
+    /enter sends/,
+    "the notice line is the window's last row, so nothing is left open below it",
+  );
+  const framed = raw.filter((line) => line.trimStart().startsWith("╭"));
+  assert.equal(framed.length, 2, "the overview and the input block are the only frames");
+  for (const line of raw) {
+    assert.ok(line.trimEnd().length <= 60, `"${line}" fits the window`);
+  }
+});
+
+test("every row the footer owns carries the page, blank rows included", async () => {
+  const store = offlineStore();
+  const setup = await mountApp(<App store={store} />, 40, 12);
+  const raw = setup.captureCharFrame().replace(/\n$/, "").split("\n");
+  await setup.dispose();
+  store.dispose();
+  assert.equal(raw.length, 12, "the footer fills the terminal");
+  for (const [row, line] of raw.entries()) {
+    // A terminal paints only the cells an application draws, so a row left empty
+    // is a hole through the page: each row holds a glyph in every cell.
+    assert.equal(line.length, 40, `row ${row + 1} paints its full width`);
+    assert.match(line.replace(/\u00a0/g, "·"), /·/, `row ${row + 1} holds the page`);
+  }
 });
 
 test("an app with nothing open paints the welcome, the input block, and the status row", async () => {
@@ -100,7 +139,7 @@ test("the browser takes the panel and lists what the daemon sent", async () => {
     await until(() => store.state.sessions !== null);
     const painted_ = await lines(store, 90, 34);
     const text = painted_.join("\n");
-    assert.match(text, /Sessions/, "the browser is docked under the chat");
+    assert.match(text, /Sessions/, "the browser is docked under the footer");
     assert.match(text, /⦿ All/);
     assert.match(text, /Enter select {2}Tab switch tab {2}Esc close/);
     assert.match(text, /\/home\/user/, "the workspace the session is bound to");
@@ -108,7 +147,7 @@ test("the browser takes the panel and lists what the daemon sent", async () => {
   });
 });
 
-test("the transcript paints the rows the daemon sent", async () => {
+test("the transcript prints the rows the daemon sent, once, above the footer", async () => {
   await withDaemon(async (daemon, client) => {
     daemon.handler = (request, socket) => {
       const payload = request.request as { kind: string };
@@ -129,15 +168,20 @@ test("the transcript paints the rows the daemon sent", async () => {
     const store = storeFor(client, { initialSession: SESSION_ID });
     store.dispatch({ kind: "connect_requested" });
     await until(() => store.state.stream === "live");
-    const painted_ = await lines(store, 60, 16);
-    const text = painted_.join("\n");
+    const shown = await screen(store, 60, 16);
+    const text = shown.printed.join("\n");
     assert.match(text, /❯ you/);
     assert.match(text, /explain this repository/);
     assert.match(text, /It relays intentions\./);
     assert.equal(
-      text.includes("intention relay\n"),
+      shown.footer.join("\n").includes("INTENTION"),
       false,
-      "the welcome is gone once a row exists",
+      "the welcome is gone once a row is printed",
+    );
+    assert.equal(
+      shown.printed.filter((line) => line.includes("explain this repository")).length,
+      1,
+      "a committed row is printed exactly once",
     );
     store.dispose();
   });

@@ -1,27 +1,22 @@
 //! Input: keys, paste, wheel, selection, and resize against a real frame.
 //!
 //! The tests drive the same events a terminal sends and read the frame the app
-//! painted, so "a pasted block does not submit" and "a resized panel repaints
+//! painted, so "a pasted block does not submit" and "a resized footer repaints
 //! inside its own edges" are assertions about cells, not about intentions.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { pasteBytes } from "@opentui/core/testing";
-import { testRender } from "@opentui/react/test-utils";
 import type { AppStore } from "../app/store";
 import { withDaemon } from "../testing/daemon-stand-in";
 import { row, run, SESSION_ID, snapshot } from "../testing/fixtures";
+import { mountApp } from "../testing/render";
 import { offlineStore, storeFor } from "../testing/store";
 import { App } from "./App";
 
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width: number, height: number) {
-  const setup = await testRender(<App store={store} />, {
-    width,
-    height,
-  });
-  await setup.renderOnce();
-  return setup;
+  return mountApp(<App store={store} />, width, height);
 }
 
 /** Returns the painted frame's lines, trimmed of padding and of trailing blanks. */
@@ -131,19 +126,20 @@ test("a paste never decodes into a gesture", () => {
   assert.equal(new TextDecoder().decode(pasteBytes("a\r\nb")), "a\r\nb");
 });
 
-test("the wheel scrolls the transcript without taking the keyboard", async () => {
+test("a wheel notch is the terminal's, and changes no row the window paints", async () => {
   const store = offlineStore();
   const setup = await mount(store, 60, 16);
+  const before = frameLines(setup);
   await setup.mockMouse.scroll(10, 8, "down");
   await setup.mockMouse.scroll(10, 8, "up");
   await setup.renderOnce();
+  assert.deepEqual(frameLines(setup), before, "the footer is the cell it was");
   assert.match(composerLine(setup), /> █/, "the input block still owns the keys");
-  assert.match(frameLines(setup).join("\n"), /no session/, "the frame is still painted");
   store.dispose();
   await setup.dispose();
 });
 
-test("a resized panel repaints inside its own edges", async () => {
+test("a resized footer repaints inside its own edges", async () => {
   const store = offlineStore();
   const setup = await mount(store, 100, 30);
   await setup.renderOnce();
@@ -159,7 +155,10 @@ test("a resized panel repaints inside its own edges", async () => {
   for (const line of raw) {
     assert.ok(line.trimEnd().length <= 40, `"${line}" fits the new width`);
   }
-  assert.match(raw[1]?.trim() ?? "", /^╭/, "the panel still frames the surface");
+  assert.ok(
+    raw.some((line) => line.trimStart().startsWith("╭")),
+    "the footer still frames the input block",
+  );
   store.dispose();
   await setup.dispose();
 });

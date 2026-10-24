@@ -1,25 +1,26 @@
-//! The application: one window, one keyboard, one panel.
+//! The application: one window, one keyboard, one live footer.
 //!
-//! The frame is the canvas the terminal paints plus the chat panel on it, with a
-//! one-cell margin so the window's own background stays visible around the panel.
-//! The panel owns the transcript (or the welcome surface), the hint region, the
-//! input block, and the notice line; a docked surface - the session browser -
-//! takes rows from the bottom of the window and the panel shrinks above it, so no
-//! surface ever paints over another.
+//! The frame is the canvas the terminal paints plus the footer on it, with a
+//! one-cell margin so the window's own background stays visible above the frame.
+//! Everything the footer does not repaint belongs to the terminal: the printed
+//! transcript scrolls with the terminal's own history, so the wheel, the
+//! scrollbar, and a drag over the text are the terminal's, never the
+//! application's.
 //!
 //! The app subscribes to what decides the frame's composition and to nothing that
-//! moves with the stream: the panel, the input block, the status row, and the
-//! transcript each subscribe to their own values.
+//! moves with the stream: the footer, the input block, the status row, and the
+//! step in flight each subscribe to their own values.
 
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ThemePreference } from "../app/action";
 import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
 import { type Palette, paletteFor } from "../theme/palette";
-import { ChatPanel } from "./ChatPanel";
-import { type CopyText, useCopyOnSelect } from "./copy";
+import { Footer } from "./Footer";
 import { keyIntent, pastedText } from "./keys";
+import { CONTENT_INDENT } from "./panel";
+import { Printer } from "./scrollback";
 import { useStore } from "./use-store";
 
 /** Resolves the palette the app paints with. */
@@ -46,22 +47,23 @@ function usePalette(preference: ThemePreference): Palette {
   return paletteFor(mode);
 }
 
-/**
- * The fullscreen application.
- *
- * `copy` names where a finished text selection goes; the running app leaves it
- * out and writes to the clipboard the terminal and the host offer.
- */
-export function App({ store, copy }: { store: AppStore; copy?: CopyText }) {
+/** The application: the printed transcript, then the footer that owns the keys. */
+export function App({ store }: { store: AppStore }) {
   const surface = useStore(store, selectSurface);
   const theme = useStore(store, selectTheme);
   const menu = useStore(store, selectCommandMenu);
   const palette = usePalette(theme);
-  const { width, height } = useTerminalDimensions();
-  useCopyOnSelect(copy);
+  const renderer = useRenderer();
+  const { width } = useTerminalDimensions();
+  // The render region is the footer, so the window's own height comes from the
+  // terminal itself; a resize repaints through the dimensions hook above.
+  const terminalHeight = renderer.terminalHeight;
+  // The footer writes its height here in its own effect, before the printer
+  // reads it in the same commit, so padded rows always match the window.
+  const footerRows = useRef(0);
 
   useKeyboard((event) => {
-    const intent = keyIntent(event, { surface, menu: menu !== null, height });
+    const intent = keyIntent(event, { surface, menu: menu !== null });
     switch (intent.kind) {
       case "ignore":
         return;
@@ -85,10 +87,6 @@ export function App({ store, copy }: { store: AppStore; copy?: CopyText }) {
         return;
       case "recall":
         store.dispatch({ kind: "history_recalled", delta: intent.delta });
-        return;
-      case "scroll":
-        // The transcript owns its own scroll offset, so a wheel notch moves the
-        // one it holds and the panel keeps its rows.
         return;
       case "insert":
         store.dispatch({ kind: "draft_typed", text: intent.text });
@@ -131,7 +129,23 @@ export function App({ store, copy }: { store: AppStore; copy?: CopyText }) {
 
   return (
     <box width="100%" height="100%" backgroundColor={palette.canvas}>
-      <ChatPanel store={store} palette={palette} width={width} height={height} />
+      {/* The footer comes first: it reserves its rows before the printer writes
+          the rows that belong above them, so a block is never committed against
+          a window that has not shrunk for it yet. */}
+      <Footer
+        store={store}
+        palette={palette}
+        width={width}
+        terminalHeight={terminalHeight}
+        footerRows={footerRows}
+      />
+      <Printer
+        store={store}
+        palette={palette}
+        width={width - CONTENT_INDENT * 2}
+        terminalHeight={terminalHeight}
+        footerRows={footerRows}
+      />
     </box>
   );
 }

@@ -1,4 +1,8 @@
 //! The transcript: one committed block per row, the step in flight after them.
+//!
+//! A committed block is printed into the terminal's scrollback and the step in
+//! flight stays in the footer; both are built from the same components, so the
+//! test paints them in the column the screen shows.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -6,7 +10,7 @@ import { row } from "../testing/fixtures";
 import { frameLines, painted } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { DARK } from "../theme/palette";
-import { Transcript } from "./Transcript";
+import { Committed, Live } from "./Transcript";
 
 /** Renders one transcript at one width and returns its lines. */
 async function lines(
@@ -34,8 +38,14 @@ async function lines(
       }
     }
   }
+  // The window prints the committed rows and keeps the step in flight in the
+  // footer, so the two views sit in one column the way the screen reads.
+  const width = options.width ?? 58;
   const frame = await painted(
-    <Transcript store={store} palette={DARK} width={options.width ?? 58} />,
+    <box flexDirection="column" gap={1}>
+      <Committed store={store} palette={DARK} width={width} />
+      <Live store={store} palette={DARK} width={width} />
+    </box>,
     options.width ?? 60,
     options.height ?? 30,
   );

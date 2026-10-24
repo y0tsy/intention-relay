@@ -4,54 +4,40 @@
 //! Every test measures the work a view actually did. The instrument is
 //! `marked.lexer`: a markdown row that is re-rendered parses its text again, so
 //! the sources the parser was handed are exactly the blocks a repaint touched.
+//!
+//! A committed row is printed into the terminal's scrollback once and never
+//! repainted; the step in flight is the one region the window repaints while it
+//! streams.
 
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
-import { testRender } from "@opentui/react/test-utils";
 import { marked } from "marked";
 import type { AppStore } from "../app/store";
 import { delta, row, run } from "../testing/fixtures";
+import { frameLines, mountApp, printedRows } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { App } from "./App";
+import { CONTENT_INDENT } from "./panel";
 
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width = 60, height = 16) {
-  const setup = await testRender(<App store={store} />, { width, height });
-  await setup.renderOnce();
-  return setup;
+  return mountApp(<App store={store} />, width, height);
 }
 
-/** Returns the painted frame's lines, trimmed of padding and of trailing blanks. */
-function frameLines(setup: { captureCharFrame: () => string }): string[] {
-  const lines = setup
-    .captureCharFrame()
-    .split("\n")
-    .map((line) => line.trim());
-  while (lines.length > 0 && lines.at(-1) === "") {
-    lines.pop();
-  }
-  return lines;
-}
-
-/**
- * Returns the frame without the composer line, which is where typing lands.
- *
- * A committed user row opens with the same prompt mark and sits above the
- * composer, so the line to drop is the last one that opens that way.
- */
+/** Returns the frame without the composer line, which is where typing lands. */
 function withoutComposer(lines: readonly string[]): string[] {
   const composer = lines.findLastIndex((line) => line.includes("> "));
   return lines.filter((_, index) => index !== composer);
 }
 
-/** The columns one live answer's marker takes before its text. */
+/** The columns one answer's marker takes before its text. */
 const ANSWER_MARK = /^∷ /;
 
 /**
  * Returns the text of a transcript's answers, their markers aside.
  *
  * An answer's marker rides its first display row and the body hangs beside it,
- * so naming the marker is what makes two frames of the same answer comparable.
+ * so naming the marker is what makes two rows of the same answer comparable.
  */
 function answerRows(lines: readonly string[]): string[] {
   return lines.map((line) => line.replace(ANSWER_MARK, "").replace(/^ {2}(?=\S)/, ""));
@@ -60,38 +46,27 @@ function answerRows(lines: readonly string[]): string[] {
 /**
  * Returns the transcript the frame painted, without the chrome around it.
  *
- * The transcript is the region between the panel's own top border and the input
- * block's: the input block is the last frame above the line the draft is typed
- * on, so its top border is where the transcript stops.
+ * In the footer that region is the step in flight: the rows between the footer's
+ * own top border and the input block's, which is the last frame above the line
+ * the draft is typed on.
  */
+/** Turns the painted page's invisible spaces into ordinary ones. */
+function visible(line: string): string {
+  return line.replace(/ /g, " ");
+}
+
 function transcriptLines(lines: readonly string[]): string[] {
-  const start = lines.findIndex((line) => line.startsWith("╭"));
   const composer = lines.findLastIndex((line) => line.includes("> "));
   let inputTop = lines.length;
-  for (let index = composer - 1; index > start; index -= 1) {
-    const line = lines[index];
-    if (line?.includes("╭") === true) {
+  for (let index = composer; index >= 0; index -= 1) {
+    if (lines[index]?.includes("╭") === true) {
       inputTop = index;
       break;
     }
   }
-  // A nested frame - the user card or the input block inside the panel -
-  // contributes its own border columns, which peel away until the text shows.
-  const body = lines.slice(start + 1, inputTop).map((line) => {
-    let row = line;
-    for (;;) {
-      const before = row;
-      row = row
-        .replace(/^│ ?/, "")
-        .replace(/^ +/, "")
-        .replace(/ +│ *$/, "")
-        .replace(/│ *$/, "")
-        .trimEnd();
-      if (row === before) {
-        return row;
-      }
-    }
-  });
+  // The band above the input block is the step in flight; its rows are painted
+  // on the canvas, so the only chrome to peel is the block's leading spaces.
+  const body = lines.slice(0, inputTop).map((line) => visible(line).replace(/^ +/, "").trimEnd());
   while (body.length > 0 && (body[0] ?? "").trim().length === 0) {
     body.shift();
   }
@@ -99,6 +74,23 @@ function transcriptLines(lines: readonly string[]): string[] {
     body.pop();
   }
   return body;
+}
+
+/**
+ * Returns the printed rows without the indent the transcript keeps.
+ *
+ * The window pads a short transcript with canvas rows so the footer stays on the
+ * window's last row; those rows are the terminal's, not the block's.
+ */
+function printedLines(rows: readonly string[]): string[] {
+  const lines = rows.map((line) => visible(line.slice(CONTENT_INDENT)).trimEnd());
+  while (lines.length > 0 && (lines[0] ?? "").length === 0) {
+    lines.shift();
+  }
+  while (lines.length > 0 && (lines.at(-1) ?? "").length === 0) {
+    lines.pop();
+  }
+  return lines;
 }
 
 /**
@@ -117,7 +109,7 @@ function watchParses(): string[] {
   return seen;
 }
 
-test("a keystroke never reaches the committed rows", async (t) => {
+test("a keystroke never reaches the printed rows", async (t) => {
   const store = offlineStore();
   openSession(store, {
     messages: [
@@ -127,15 +119,20 @@ test("a keystroke never reaches the committed rows", async (t) => {
     run: run("completed"),
   });
   const setup = await mount(store);
+  // The mount printed the committed transcript; from here the rows are the
+  // terminal's and nothing may print again.
+  const committed = printedRows(setup);
+  assert.ok(printedLines(committed).some((line) => line === "∷ It relays intentions."));
   const seen = watchParses();
   t.after(() => mock.restoreAll());
 
-  const before = frameLines(setup);
+  const before = frameLines(setup.captureCharFrame());
   await setup.mockInput.pressKeys(["a", "b", "c"]);
   await setup.renderOnce();
-  const after = frameLines(setup);
+  const after = frameLines(setup.captureCharFrame());
 
   assert.deepEqual(seen, [], "typing parses no markdown");
+  assert.deepEqual(printedRows(setup), [], "typing prints no row");
   assert.deepEqual(
     withoutComposer(after),
     withoutComposer(before),
@@ -147,13 +144,15 @@ test("a keystroke never reaches the committed rows", async (t) => {
   await setup.dispose();
 });
 
-test("an appended row lays out only the tail", async (t) => {
+test("an appended row prints once and repaints nothing else", async (t) => {
   const store = offlineStore();
   const state = openSession(store, {
     messages: [row(1, "user", "first"), row(2, "assistant", "an earlier answer")],
     run: run("completed"),
   });
   const setup = await mount(store, 60, 24);
+  const before = frameLines(setup.captureCharFrame());
+  printedRows(setup);
   const seen = watchParses();
   t.after(() => mock.restoreAll());
 
@@ -162,18 +161,12 @@ test("an appended row lays out only the tail", async (t) => {
   await setup.renderOnce();
 
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
-  // A committed row is separated from the next one by one blank row: the user
-  // card, the gap, the earlier answer, the gap, the later answer.
-  const shown = transcriptLines(frameLines(setup));
-  assert.ok(
-    shown.some((line) => line.startsWith("╭─") && line.includes("❯ you")),
-    "the prompt is a card",
-  );
-  assert.ok(shown.includes("first"), "the card names the prompt");
+  const printed = printedLines(printedRows(setup));
+  assert.deepEqual(printed, ["∷ a later answer"], "the row is printed once, between blank rows");
   assert.deepEqual(
-    shown.filter((line) => line.startsWith("∷")),
-    ["∷ an earlier answer", "∷ a later answer"],
-    "each answer opens with its own marker",
+    frameLines(setup.captureCharFrame()),
+    before,
+    "a committed row never repaints the footer",
   );
 
   store.dispose();
@@ -201,11 +194,7 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
     ["one ", "one two ", "one two three"],
     "every frame parses the block still being written",
   );
-  const stream = transcriptLines(frameLines(setup));
-  assert.ok(
-    stream.some((line) => line.startsWith("╭─") && line.includes("❯ you")),
-    "the prompt is a card",
-  );
+  const stream = transcriptLines(frameLines(setup.captureCharFrame()));
   assert.deepEqual(
     answerRows(stream.filter((line) => line.startsWith("∷"))),
     ["one two three"],
@@ -216,7 +205,7 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
   await setup.dispose();
 });
 
-test("the streaming tail lays out as the committed row it becomes", async () => {
+test("the streaming tail paints the rows the printed block will have", async () => {
   const store = offlineStore();
   const state = openSession(store, { run: run("running") });
   const setup = await mount(store);
@@ -224,13 +213,19 @@ test("the streaming tail lays out as the committed row it becomes", async () => 
   const source = "- one\n- two\n\nafter the list";
   state.applyFrame({ kind: "text_delta", data: delta(1, "answer", source) });
   store.dispatch({ kind: "frame_received", state });
+  // The first delta opens the band, so the footer takes its rows on this frame
+  // and paints them on the next.
   await setup.renderOnce();
-  const tail = transcriptLines(frameLines(setup));
+  await setup.flush();
+  await setup.renderOnce();
+  const tail = transcriptLines(frameLines(setup.captureCharFrame()));
 
   state.applyFrame({ kind: "content", data: row(1, "assistant", source) });
   store.dispatch({ kind: "frame_received", state });
   await setup.renderOnce();
-  const committed = transcriptLines(frameLines(setup));
+  await setup.flush();
+  await setup.renderOnce();
+  const committed = printedLines(printedRows(setup));
 
   assert.deepEqual(answerRows(tail), ["- one", "- two", "", "after the list"]);
   assert.deepEqual(
@@ -255,11 +250,5 @@ test("a streamed delta leaves the committed rows the value they were", () => {
   store.dispatch({ kind: "frame_received", state });
 
   assert.equal(store.state.transcript, rows, "a view is handed the rows it already painted");
-  store.dispose();
-});
-
-test("a session with no rows hands over one empty list", () => {
-  const store = offlineStore();
-  assert.equal(store.state.transcript, store.state.transcript);
   store.dispose();
 });

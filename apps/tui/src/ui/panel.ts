@@ -1,37 +1,41 @@
-//! The chat panel's geometry: one pure function from a window to the rows and
-//! columns of each region inside the panel.
+//! The footer's geometry: one pure function from a window to the rows and
+//! columns of each region of the live band under the transcript.
 //!
-//! The panel sits on the canvas with a one-cell margin, so the window's own
-//! background stays visible around it. Inside its frame the body is spent
-//! exactly on four regions - the transcript (or the welcome), the hint band or
-//! the theme picker's panel, the input block, and the notice line - so no child
-//! ever overflows the panel and nothing is painted over anything.
+//! The transcript itself is printed into the terminal's own scrollback, so what
+//! the window keeps for the application is a footer: the hint band or the theme
+//! picker's panel, the step in flight, the input block, and the notice line,
+//! inside the same rounded frame the chat panel had. The frame sits on the
+//! canvas with a one-cell margin above it, and the footer's last row is the
+//! window's last row.
 //!
 //! The input block takes the rows its buffer needs, one per line beside its own
 //! chrome, up to a share of the body; a buffer taller than its share windows its
-//! lines instead of growing, so the transcript keeps the rows the block does not
-//! need. The hint region takes its rows exactly or not at all: a body that cannot
-//! hold the whole band beside the rows the input block would have had without it
+//! lines instead of growing, so the step in flight keeps the rows the block does
+//! not need. The hint region takes its rows exactly or not at all: a body that
+//! cannot hold the whole band beside the input block would have had without it
 //! shows none of it, because the region yields to the input the user is typing
 //! into.
 //!
 //! The numbers are the ones the revue application computed by hand, kept as they
-//! were: Yoga lays the panel out, but the row budget is decided here so a frame
+//! were: Yoga lays the footer out, but the row budget is decided here so a frame
 //! is the same at every width and height.
 
-/** The columns and rows the window keeps around the chat panel. */
+/** The columns and rows the window keeps around the footer. */
 export const PANEL_MARGIN = 1;
 
-/** The rows and columns the panel's frame takes. */
+/** The columns the footer needs to say anything at all. */
+export const MIN_COLUMNS = 8;
+
+/** The rows and columns the footer's frame takes. */
 export const PANEL_FRAME = 2;
 
-/** The columns the panel pads its content with. */
+/** The columns the footer pads its content with. */
 export const PANEL_PADDING = 1;
 
 /** The rows the notice or error line occupies under the input block. */
 export const DETAIL_ROWS = 1;
 
-/** The share of the panel's body the input block may show buffer lines for. */
+/** The share of the footer's body the input block may show buffer lines for. */
 export const INPUT_LINE_SHARE = 3;
 
 /** The buffer lines the input block shows even in a body too short for its share. */
@@ -43,38 +47,39 @@ export const INPUT_CHROME_ROWS = 4;
 /** The rows the input block occupies for a one-line buffer. */
 export const MIN_BLOCK_ROWS = INPUT_CHROME_ROWS + 1;
 
-/** The rows above the transcript's first content row: margin, frame, padding, frame. */
-export const TRANSCRIPT_TOP_ROWS = PANEL_MARGIN + 1 + PANEL_PADDING + 1;
+/** The rows the band above the input block keeps for the step in flight. */
+export const LIVE_BAND_ROWS = 6;
 
-/** The blank rows the welcome pane keeps above its lockup. */
-const LOGO_LEAD_ROWS = 1;
+/** The columns one vertical frame edge takes. */
+const FRAME_EDGE = 1;
 
-/** The rows the lockup itself occupies. */
-const LOGO_ROWS = 1;
+/** The columns the printed transcript and the footer's content start at. */
+export const CONTENT_INDENT = PANEL_MARGIN + FRAME_EDGE + PANEL_PADDING;
 
-/** The rows the lockup area occupies when the region has room for it. */
-const LOCKUP_ROWS = LOGO_LEAD_ROWS + LOGO_ROWS;
+/** What the footer's live region holds this frame. */
+export type FooterMode =
+  /** No session is open: the welcome pane fills the region. */
+  | "welcome"
+  /** A session is open: the region keeps its band for the step in flight. */
+  | "session";
 
-/** The rows the framed overview occupies: its top edge, its row, its bottom edge. */
-const OVERVIEW_ROWS = 3;
-
-/** The geometry of the chat panel in one window. */
-export interface PanelLayout {
-  /** The columns the panel occupies. */
+/** The geometry of the footer in one window. */
+export interface FooterLayout {
+  /** The columns the footer's frame occupies. */
   readonly columns: number;
-  /** The rows the panel occupies. */
+  /** The rows the footer occupies, which is what the window is asked to reserve. */
   readonly rows: number;
-  /** The rows inside the panel's frame. */
+  /** The rows inside the footer's frame. */
   readonly body: number;
-  /** The rows the transcript pane occupies. */
-  readonly transcriptRows: number;
+  /** The rows of the step in flight, or of the welcome pane. */
+  readonly liveRows: number;
   /** The rows above the input block: the band, or the picker's panel. */
   readonly hintRows: number;
   /** The rows the input block occupies. */
   readonly inputRows: number;
   /** The rows the notice or error line occupies. */
   readonly detailRows: number;
-  /** The columns the panel's content has. */
+  /** The columns the footer's content has. */
   readonly contentColumns: number;
 }
 
@@ -90,38 +95,46 @@ export interface WelcomeLayout {
   readonly overview: number;
 }
 
-/** Returns the geometry of the chat panel in one window. */
-export function panelLayout(
+/**
+ * Returns how the footer spends a window `terminalHeight` rows tall.
+ *
+ * `docked` is the rows a surface below the footer takes - the session browser and
+ * the gap above it - so the footer leaves those rows to the surface.
+ */
+export function footerLayout(
   width: number,
-  height: number,
+  terminalHeight: number,
   wantedInputRows: number,
   wantedHintRows: number,
-): PanelLayout {
-  const columns = Math.max(0, width - PANEL_MARGIN * 2);
-  const rows = Math.max(0, height - PANEL_MARGIN * 2);
-  const body = Math.max(0, rows - PANEL_FRAME);
-  const detailRows = body > 0 ? DETAIL_ROWS : 0;
-  const available = Math.max(0, body - detailRows);
+  mode: FooterMode,
+  docked = 0,
+): FooterLayout {
+  const available = Math.max(0, terminalHeight - docked);
+  const detailRows = available > 0 ? DETAIL_ROWS : 0;
+  const room = Math.max(0, available - detailRows);
   // The cap bounds the buffer lines the block shows, never its own chrome: a
   // block taller than its share windows the lines instead of growing further.
-  const share = Math.floor(available / INPUT_LINE_SHARE);
-  const lines = Math.max(share, INPUT_MIN_LINES);
-  const cap = Math.min(lines + INPUT_CHROME_ROWS, available);
+  const share = Math.floor(room / INPUT_LINE_SHARE);
+  const cap = Math.min(Math.max(share, INPUT_MIN_LINES) + INPUT_CHROME_ROWS, room);
   const inputRows = Math.min(wantedInputRows, cap);
   // The band takes its rows exactly or not at all: a body too short for it beside
   // the input block keeps the input and shows no band.
-  const hintRows =
-    wantedHintRows > 0 && wantedHintRows + inputRows <= available ? wantedHintRows : 0;
-  const transcriptRows = Math.max(0, available - hintRows - inputRows);
+  const hintRows = wantedHintRows > 0 && wantedHintRows + inputRows <= room ? wantedHintRows : 0;
+  const band = Math.max(0, room - hintRows - inputRows);
+  // The band belongs to the window, not to the step: it keeps its rows so the
+  // footer never moves while a run streams and commits. Only the welcome pane
+  // takes the whole window, because nothing has been printed above it yet.
+  const liveRows = mode === "welcome" ? band : Math.min(band, LIVE_BAND_ROWS);
+  const body = detailRows + hintRows + liveRows + inputRows;
   return {
-    columns,
-    rows,
+    columns: Math.max(0, width - PANEL_MARGIN * 2),
+    rows: Math.min(terminalHeight, Math.min(available, body) + docked),
     body,
-    transcriptRows,
+    liveRows,
     hintRows,
     inputRows,
     detailRows,
-    contentColumns: Math.max(0, columns - (PANEL_FRAME + PANEL_PADDING * 2)),
+    contentColumns: Math.max(0, width - CONTENT_INDENT * 2),
   };
 }
 
@@ -134,23 +147,30 @@ export function welcomeLayout(rows: number): WelcomeLayout {
   return { lead, logo: lockup - lead, filler: above - lockup, overview };
 }
 
+/** The rows above the welcome's lockup: margin, frame, padding. */
+const LOGO_LEAD_ROWS = 1;
+
+/** The rows the lockup itself occupies. */
+const LOGO_ROWS = 1;
+
+/** The rows the lockup area occupies when the region has room for it. */
+const LOCKUP_ROWS = LOGO_LEAD_ROWS + LOGO_ROWS;
+
+/** The rows the framed overview occupies: its top edge, its row, its bottom edge. */
+const OVERVIEW_ROWS = 3;
+
 /** Returns the rows the input block needs for a buffer with `lineBreaks` breaks. */
 export function inputBlockRows(lineBreaks: number): number {
   return MIN_BLOCK_ROWS + Math.max(0, lineBreaks);
 }
 
-/** Reports whether a window is wide enough to draw a panel at all. */
-export function panelFits(width: number, height: number): boolean {
-  return width > PANEL_MARGIN * 2 + PANEL_FRAME && height > PANEL_MARGIN * 2 + PANEL_FRAME;
-}
-
 /** The fewest rows the docked browser panel occupies, however small the result. */
 export const MIN_PANEL_ROWS = 6;
 
-/** The fewest rows the chat panel keeps above the docked browser and its gap. */
+/** The fewest rows the footer keeps above the docked browser and its gap. */
 export const MIN_CHAT_ROWS = 11;
 
-/** The blank canvas row the chat panel keeps above the docked browser. */
+/** The blank canvas row the footer keeps above the docked browser. */
 export const PANEL_GAP_ROWS = 1;
 
 /** The browser body rows that are not session rows. */
@@ -176,8 +196,8 @@ export interface BrowserLayout {
  * Returns the geometry the docked browser takes, or `null` while it does not fit.
  *
  * The panel is a layout row at the bottom of the window: it grows with the result
- * up to half the window, so the chat above it keeps the majority, and it never
- * opens at all when the chat would fall below its own floor.
+ * up to half the window, so the footer above it keeps the majority, and it never
+ * opens at all when the footer would fall below its own floor.
  */
 export function browserLayout(
   width: number,

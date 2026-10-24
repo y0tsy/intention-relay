@@ -1,6 +1,7 @@
 //! The process entry point: one renderer, one store, one application.
 
 import { fileURLToPath } from "node:url";
+
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { AppStore } from "./app/store";
@@ -26,7 +27,16 @@ function daemonProgram(): string {
   return fileURLToPath(new URL(`../../../target/debug/intention-daemon${suffix}`, import.meta.url));
 }
 
-const renderer = await createCliRenderer({ exitOnCtrlC: false });
+// The window is a footer: the transcript is printed into the terminal's own
+// scrollback, so the wheel, the scrollbar, and a drag belong to the terminal and
+// the application never asks for the mouse.
+const renderer = await createCliRenderer({
+  exitOnCtrlC: false,
+  useMouse: false,
+  screenMode: "split-footer",
+  footerHeight: 12,
+});
+renderer.footerHeight = renderer.terminalHeight;
 const root = createRoot(renderer);
 
 const theme = await readThemePreference(configPath());
