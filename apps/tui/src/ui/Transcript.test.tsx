@@ -87,15 +87,15 @@ test("a committed turn reads as its label, its reasoning, and its answer", async
   assert.ok(painted_.some((line) => line === "It relays intentions."));
 });
 
-test("a long reasoning collapses after fifteen rows and reveals more on a gesture", async () => {
+test("a long reasoning opens collapsed and reveals its rows on a gesture", async () => {
   const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
   const bounded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }]);
-  assert.ok(bounded.some((line) => /… 5 more · click or Ctrl\+E/.test(line)));
+  assert.ok(bounded.some((line) => /… 20 more · click or Ctrl\+E/.test(line)));
   const expanded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }], {
-    reasoningExpansion: { "2": 5 },
+    reasoningExpansion: { "2": 20 },
     height: 60,
   });
-  assert.ok(expanded.some((line) => line.trim() === "thought 16"));
+  assert.ok(expanded.some((line) => line.trim() === "thought 20"));
   assert.ok(!expanded.some((line) => /more · click or Ctrl\+E/.test(line)));
 });
 
@@ -113,7 +113,7 @@ test("the step in flight borrows the expansion of the row it becomes", async () 
     answer: "hold on",
     reasoningExpansion: { live: 2 },
   });
-  assert.ok(painted_.some((line) => line.trim() === "thought 16"));
+  assert.ok(painted_.some((line) => line.trim() === "thought 2"));
 });
 
 test("a call and its result are one block drawn at the call", async () => {

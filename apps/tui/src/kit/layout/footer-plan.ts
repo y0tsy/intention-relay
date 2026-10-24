@@ -74,6 +74,8 @@ export interface FooterLayout {
   readonly contentColumns: number;
   /** The rows a surface below the footer takes, docked browser and gap included. */
   readonly dockedRows: number;
+  /** The rows above the frame that belong to the page, not to the footer. */
+  readonly slackRows: number;
 }
 
 /**
@@ -115,24 +117,25 @@ export function footerPlan(
   const liveRows = mode === "welcome" ? band : Math.min(band, LIVE_BAND_ROWS);
   const body = chromeRows + detailRows + hintRows + liveRows + inputRows;
   const natural = Math.min(terminalHeight, Math.min(available, body) + docked);
-  // The rows the print has not reached are the footer's: the band takes them, so
-  // the empty part of the window sits between the transcript and the input, and
-  // a short session never pads its own history with blank rows.
+  // The region reaches the window's last row, and the frame inside it keeps only
+  // the rows it needs: the rows a short print left above are the terminal's page,
+  // so a session shows the same tray whatever the print reached.
   const reached = Math.min(printedRows, terminalHeight);
-  const slack = Math.max(0, terminalHeight - reached - natural);
+  const slackRows = Math.max(0, terminalHeight - reached - natural);
   const margin = mode === "welcome" ? FOOTER_MARGIN : SESSION_MARGIN;
   const indent =
     mode === "welcome" ? CONTENT_INDENT : CONTENT_INDENT + (SESSION_MARGIN - FOOTER_MARGIN);
   return {
     windowColumns: width,
     columns: Math.max(0, width - margin * 2),
-    rows: natural + slack,
-    body: body + slack,
+    rows: natural + slackRows,
+    body,
     chromeRows,
-    liveRows: liveRows + slack,
+    liveRows,
     hintRows,
     inputRows,
     detailRows,
+    slackRows,
     contentColumns: Math.max(0, width - indent * 2),
     dockedRows: docked,
   };

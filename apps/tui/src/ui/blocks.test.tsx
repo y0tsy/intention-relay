@@ -26,11 +26,11 @@ test("a user row wraps its message in a narrow column", async () => {
   assert.ok(!painted_.some((line) => line.includes("╭")), "no frame is drawn around it");
 });
 
-test("a reasoning block shows fifteen rows and the rows it counted", async () => {
+test("a reasoning block opens on its header and counts the rows it hid", async () => {
   const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
   const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
   assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1);
-  assert.ok(painted_.some((line) => /… 5 more · click or Ctrl\+E/.test(line)));
+  assert.ok(painted_.some((line) => /… 20 more · click or Ctrl\+E/.test(line)));
 });
 
 test("a finished run closes with its status, its seconds, and its tokens", () => {

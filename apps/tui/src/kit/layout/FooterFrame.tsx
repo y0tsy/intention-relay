@@ -100,7 +100,10 @@ export function FooterFrame({
       </box>
     );
   }
-  const frameRows = Math.max(0, rows - layout.dockedRows - layout.chromeRows + 1);
+  const frameRows = Math.max(
+    0,
+    rows - layout.dockedRows - layout.chromeRows + 1 - layout.slackRows,
+  );
   const innerRows = Math.max(0, frameRows - 1);
   return (
     <box flexDirection="column" height={rows} backgroundColor={palette.canvas}>
@@ -109,6 +112,7 @@ export function FooterFrame({
       <box position="absolute" top={0} left={0} width={layout.windowColumns} height={rows}>
         <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
       </box>
+      <box height={layout.slackRows} />
       <box flexDirection="row" height={frameRows}>
         <box width={SESSION_MARGIN} />
         <box

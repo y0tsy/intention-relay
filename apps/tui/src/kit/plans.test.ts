@@ -49,30 +49,24 @@ test("an open session keeps a band for the step in flight above the input", () =
   );
 });
 
-test("the footer takes the same rows however much has been printed", () => {
-  // Streaming never moves the region's own rows: on a full window the band is
-  // its working rows, and what a short print leaves is the band's too.
+test("the footer takes the rows it needs, whatever has been printed", () => {
+  // Streaming never moves the region's own rows: the band keeps its working
+  // rows, and the page above the tray is the terminal's.
   const footer = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 30);
   assert.equal(footer.liveRows, LIVE_BAND_ROWS, "the step's band is never the print's");
-  assert.equal(footer.rows, footer.body, "the footer is the body it spends");
+  assert.equal(footer.rows, footer.body, "a full window leaves the footer its body");
+  assert.equal(footer.slackRows, 0);
 });
 
-test("a row the print has not reached is the band's", () => {
+test("a short print leaves the window above the footer to the page", () => {
   const empty = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 0);
-  assert.equal(empty.rows, 30, "nothing printed: the frame is the window");
-  assert.equal(
-    empty.liveRows,
-    30 - SESSION_CHROME_ROWS - empty.inputRows - empty.detailRows,
-    "the empty window above the input belongs to the band, not to the print",
-  );
+  assert.equal(empty.rows, 30, "the region still reaches the window's last row");
+  assert.equal(empty.liveRows, LIVE_BAND_ROWS, "the band is the step's, never the slack's");
+  assert.equal(empty.slackRows, 30 - empty.body, "the frame keeps only the rows it spends");
 
   const half = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 12);
-  assert.equal(half.rows, 18, "the footer ends where the print begins");
-  assert.equal(half.liveRows, 18 - SESSION_CHROME_ROWS - half.inputRows - half.detailRows);
-
-  const full = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 30);
-  assert.equal(full.liveRows, LIVE_BAND_ROWS);
-  assert.equal(full.rows, full.body);
+  assert.equal(half.rows, 18, "the region ends where the print begins");
+  assert.equal(half.slackRows, 18 - half.body);
 });
 
 test("a step in flight keeps the band it was given", () => {
@@ -85,13 +79,13 @@ test("a step in flight keeps the band it was given", () => {
     "the footer reserves exactly what it paints",
   );
 
-  const small = footerPlan(80, 12, MIN_BLOCK_ROWS, 0, "session", 0, 0);
+  const small = footerPlan(80, 12, MIN_BLOCK_ROWS, 0, "session", 0, 12);
   assert.ok(small.liveRows > 0 && small.liveRows <= LIVE_BAND_ROWS + 12);
   assert.ok(small.rows <= 12);
 });
 
 test("the welcome pane fills the window above the input block", () => {
-  const welcome = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "welcome", 0, 0);
+  const welcome = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "welcome", 0);
   assert.equal(welcome.rows, 30, "a launch paints the whole window");
   assert.equal(
     welcome.chromeRows,
@@ -118,7 +112,7 @@ test("the band is the live region's loss, never the input's", () => {
 });
 
 test("a body too short for the band keeps the input and shows no band", () => {
-  const cramped = footerPlan(80, 10, MIN_BLOCK_ROWS + 1, 4, "session", 0, 0);
+  const cramped = footerPlan(80, 10, MIN_BLOCK_ROWS + 1, 4, "session", 0);
   assert.equal(cramped.hintRows, 0, "the band yields to the input block");
   assert.equal(cramped.inputRows, MIN_BLOCK_ROWS + 1, "the input keeps every row it asked for");
   assert.equal(
@@ -130,7 +124,7 @@ test("a body too short for the band keeps the input and shows no band", () => {
       cramped.liveRows,
   );
 
-  const taller = footerPlan(80, 10, MIN_BLOCK_ROWS, PICKER_ROWS, "session", 0, 0);
+  const taller = footerPlan(80, 10, MIN_BLOCK_ROWS, PICKER_ROWS, "session", 0);
   assert.equal(taller.hintRows, 0, "the picker yields too");
   assert.equal(taller.inputRows, MIN_BLOCK_ROWS);
 });
@@ -140,6 +134,8 @@ test("every window spends its body exactly and never overflows", () => {
     for (const wanted of [0, 1, MIN_BLOCK_ROWS, MIN_BLOCK_ROWS + 2, 100]) {
       for (const band of [0, 1, 5, 8]) {
         for (const mode of ["session", "welcome"] as const) {
+          // The print stays the page's: the region and the frame inside it do not
+          // answer how much the terminal has shown.
           for (const docked of [0, 1, 2, 12]) {
             for (const printed of [0, 1, 7, height, 1000]) {
               const layout = footerPlan(80, height, wanted, band, mode, docked, printed);
@@ -155,11 +151,10 @@ test("every window spends its body exactly and never overflows", () => {
               assert.ok(layout.rows <= height, "the footer never asks for more than the window");
               assert.ok(layout.liveRows >= 0);
               assert.ok(layout.inputRows >= 0);
-              // No row belongs to nobody: when the window holds both the print
-              // and the footer's own rows, they spend it exactly between them.
-              const natural = footerPlan(80, height, wanted, band, mode, docked, 1000).rows;
+              // The region ends where the print begins, and the frame inside it
+              // keeps only the rows it spends.
               const reached = Math.min(printed, height);
-              if (reached + natural <= height) {
+              if (reached + layout.rows <= height) {
                 assert.equal(
                   reached + layout.rows,
                   height,
@@ -177,7 +172,7 @@ test("every window spends its body exactly and never overflows", () => {
 test("the printed transcript starts at the footer's content column", () => {
   assert.equal(CONTENT_INDENT, 3, "the welcome page keeps its own margin");
   assert.equal(TRANSCRIPT_INDENT, 5);
-  const session = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0);
+  const session = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session");
   assert.equal(
     session.contentColumns,
     80 - TRANSCRIPT_INDENT * 2,
@@ -188,7 +183,7 @@ test("the printed transcript starts at the footer's content column", () => {
     80 - SESSION_MARGIN * 2,
     "the tray's rail is the transcript's rule",
   );
-  const welcome = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "welcome", 0);
+  const welcome = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "welcome");
   assert.equal(welcome.contentColumns, 80 - CONTENT_INDENT * 2);
 });
 

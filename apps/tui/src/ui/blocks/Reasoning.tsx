@@ -13,7 +13,7 @@ import type { Palette } from "../../theme/palette";
 import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
 
 /** The display rows a reasoning block shows before it collapses. */
-export const REASONING_VISIBLE_ROWS = 15;
+export const REASONING_VISIBLE_ROWS = 0;
 
 /** Renders one reasoning block at the columns its parent gives it. */
 export function Reasoning({
@@ -37,7 +37,6 @@ export function Reasoning({
         rows={REASONING_VISIBLE_ROWS + expansion}
         ink={palette.reasoningBody}
         indent={2}
-        background={palette.panel}
         overflow={(hidden) => (
           <text wrapMode="none" fg={palette.reasoningMarker}>
             {markerText(REASONING_EXPAND, `… ${hidden} more · click or Ctrl+E`)}
