@@ -5,6 +5,7 @@
 //! does. A code fence, a list, or a bold run renders inside the turn exactly as
 //! it would in the answer it asked for.
 
+import { TextAttributes } from "@opentui/core";
 import { MarkdownBlocks, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { USER_LABEL } from "../glyphs";
@@ -13,7 +14,9 @@ import { USER_LABEL } from "../glyphs";
 export function UserCard({ text, palette }: { text: string; palette: Palette }) {
   return (
     <Stack>
-      <text fg={palette.accentDeep}>{USER_LABEL}</text>
+      <text fg={palette.accentDeep} attributes={TextAttributes.BOLD}>
+        {USER_LABEL}
+      </text>
       <MarkdownBlocks source={text} palette={palette} ink={palette.ink} />
     </Stack>
   );

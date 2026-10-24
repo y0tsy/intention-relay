@@ -7,6 +7,7 @@
 //! `Ctrl+E` reveals one chunk at a time. The rows the affordance counts are the
 //! rows this block measured, so the number it prints is the number it hid.
 
+import { TextAttributes } from "@opentui/core";
 import { Lines, markerText, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
@@ -27,7 +28,10 @@ export function Reasoning({
 }) {
   return (
     <Stack>
-      <text fg={palette.reasoningHeader}>{markerText(REASONING_GLYPH, REASONING_LABEL)}</text>
+      <text attributes={TextAttributes.BOLD}>
+        <span fg={palette.accent}>{REASONING_GLYPH}</span>
+        <span fg={palette.reasoningHeader}>{` ${REASONING_LABEL}`}</span>
+      </text>
       <Lines
         text={text}
         rows={REASONING_VISIBLE_ROWS + expansion}
