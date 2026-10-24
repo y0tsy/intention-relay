@@ -7,7 +7,7 @@
 //! `Ctrl+E` reveals one chunk at a time. The rows the affordance counts are the
 //! rows this block measured, so the number it prints is the number it hid.
 
-import { Indent, Lines, markerText, Rule } from "../../kit";
+import { Lines, markerText, Rule } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
 
@@ -28,21 +28,21 @@ export function Reasoning({
   return (
     <box flexDirection="column">
       <text fg={palette.reasoningHeader}>{markerText(REASONING_GLYPH, REASONING_LABEL)}</text>
-      <Indent columns={2} background={palette.panel}>
-        <Lines
-          text={text}
-          rows={REASONING_VISIBLE_ROWS + expansion}
-          ink={palette.reasoningBody}
-          overflow={(hidden) => (
-            <text wrapMode="none" fg={palette.reasoningMarker}>
-              {markerText(
-                REASONING_EXPAND,
-                `… ${hidden} more reasoning lines hidden — click or Ctrl+E to reveal more`,
-              )}
-            </text>
-          )}
-        />
-      </Indent>
+      <Lines
+        text={text}
+        rows={REASONING_VISIBLE_ROWS + expansion}
+        ink={palette.reasoningBody}
+        indent={2}
+        background={palette.panel}
+        overflow={(hidden) => (
+          <text wrapMode="none" fg={palette.reasoningMarker}>
+            {markerText(
+              REASONING_EXPAND,
+              `… ${hidden} more reasoning lines hidden — click or Ctrl+E to reveal more`,
+            )}
+          </text>
+        )}
+      />
       <Rule color={palette.accent} />
     </box>
   );

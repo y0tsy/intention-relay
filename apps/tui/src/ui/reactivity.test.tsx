@@ -18,7 +18,7 @@ import { delta, row, run } from "../testing/fixtures";
 import { frameLines, mountApp, printedRows } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { App } from "./App";
-import { CONTENT_INDENT } from "./panel";
+import { CONTENT_INDENT } from "../kit";
 
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width = 60, height = 16) {

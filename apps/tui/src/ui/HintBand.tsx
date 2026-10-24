@@ -12,8 +12,16 @@
 //! and the first column keeps the accent ink the input line's own prompt uses.
 
 import type { CommandMenu, MenuRow } from "../app/menu";
-import { MAX_COMMAND_ROWS } from "../app/menu";
-import { Pane, scrollWindow, Table, type TableCellStyle } from "../kit";
+import { MAX_COMMAND_ROWS, menuLabels, menuTrailing } from "../app/menu";
+import {
+  bandColumnWidths,
+  Pane,
+  paneContentColumns,
+  scrollWindow,
+  Table,
+  type TableCellStyle,
+  useContentColumns,
+} from "../kit";
 import type { Palette } from "../theme/palette";
 import { CURSOR_MARKER, ROW_MARKER } from "./glyphs";
 
@@ -37,6 +45,18 @@ export function HintBand({
   const hidden = menu.rows.length - shown.length;
   const title = menu.kind === "command" ? "commands" : "arguments";
   const noun = menu.kind === "command" ? "commands" : "values";
+  const widths = bandColumnWidths(
+    paneContentColumns(useContentColumns(), 2),
+    menuLabels(menu),
+    menuTrailing(menu),
+  );
+  const columns = [
+    { key: "label", width: widths.label, truncate: false },
+    ...(widths.description > 0
+      ? [{ key: "description", width: widths.description, truncate: false }]
+      : []),
+    ...(widths.trailing > 0 ? [{ key: "trailing", width: widths.trailing }] : []),
+  ];
   return (
     <Pane
       title={title}
@@ -47,11 +67,7 @@ export function HintBand({
       paddingRight={1}
     >
       <Table
-        columns={[
-          { key: "label", grow: true },
-          { key: "description", grow: true, hideOrder: 1 },
-          { key: "trailing", hideOrder: 2 },
-        ]}
+        columns={columns}
         marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
         markerGap={0}
         rows={shown.map((row, index) => bandRow(row, window.start + index === highlight, palette))}

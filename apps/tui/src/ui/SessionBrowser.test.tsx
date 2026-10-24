@@ -3,10 +3,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summary } from "../testing/fixtures";
-import { browserColumnWidths } from "../kit";
+import { browserColumnWidths, browserLayout, SlotRows } from "../kit";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { browserLayout } from "./panel";
 import { SessionBrowser } from "./SessionBrowser";
 
 /** Renders the browser at one panel size and returns its lines. */
@@ -22,18 +21,17 @@ async function lines(
     <box flexDirection="row">
       <box width={1} />
       <box width={width - 1}>
-        <SessionBrowser
-          rows={rows}
-          error={options.error ?? null}
-          selection={options.selection ?? 0}
-          filter={options.filter ?? ""}
-          tab="all"
-          palette={DARK}
-          rows_={layout.rows}
-          dataRows={layout.dataRows}
-          contentColumns={layout.contentColumns}
-          now={options.now ?? 1_700_000_060}
-        />
+        <SlotRows rows={layout.rows}>
+          <SessionBrowser
+            rows={rows}
+            error={options.error ?? null}
+            selection={options.selection ?? 0}
+            filter={options.filter ?? ""}
+            tab="all"
+            palette={DARK}
+            now={options.now ?? 1_700_000_060}
+          />
+        </SlotRows>
       </box>
     </box>,
     width,

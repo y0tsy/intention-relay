@@ -7,7 +7,7 @@
 //! fragment. A caller styles the ink; it never measures it.
 
 import { TextAttributes } from "@opentui/core";
-import { cellText, cellTextRight, displayWidth } from "../text";
+import { cellText, cellTextRight, displayWidth, pad } from "../text";
 import { useContentColumns } from "./context";
 
 /** One column of the table. */
@@ -20,6 +20,8 @@ export interface TableColumn {
   readonly grow?: boolean;
   /** Lower values hide first when the table is narrow; `0` never hides. */
   readonly hideOrder?: number;
+  /** Cuts an overflowing cell with an ellipsis; `false` only pads it. */
+  readonly truncate?: boolean;
   readonly align?: "left" | "right";
 }
 
@@ -104,9 +106,11 @@ export function Table({
               const text = row.cells[column.key] ?? "";
               const style = renderCell(column, { text, width: cellWidth }, row);
               const content =
-                column.align === "right"
-                  ? cellTextRight(text, cellWidth)
-                  : cellText(text, cellWidth);
+                column.truncate === false
+                  ? pad(text, cellWidth)
+                  : column.align === "right"
+                    ? cellTextRight(text, cellWidth)
+                    : cellText(text, cellWidth);
               return (
                 <span
                   key={column.key}

@@ -20,6 +20,9 @@ export const INPUT_PROMPT = "> ";
 /** The indent every continuation row of the buffer carries before its text. */
 export const INPUT_CONTINUATION = "  ";
 
+/** The rows the input block occupies for a one-line buffer. */
+export const MIN_BLOCK_ROWS = INPUT_CHROME_ROWS + 1;
+
 /** Returns the rows the input keeps for one buffer: its chrome and its lines. */
 export function inputSlotRows(text: string): number {
   return INPUT_CHROME_ROWS + Math.max(1, text.split("\n").length);

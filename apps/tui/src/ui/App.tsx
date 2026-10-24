@@ -12,7 +12,7 @@
 //! step in flight each subscribe to their own values.
 
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ThemePreference } from "../app/action";
 import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
@@ -57,9 +57,6 @@ export function App({ store }: { store: AppStore }) {
   // The render region is the footer, so the window's own height comes from the
   // terminal itself; a resize repaints through the dimensions hook above.
   const terminalHeight = renderer.terminalHeight;
-  // The footer writes its height here in its own effect, before the printer
-  // reads it in the same commit, so padded rows always match the window.
-  const footerRows = useRef(0);
   // The rows the transcript has printed above the footer: the band takes the
   // window rows the print does not reach, so the empty part of the window sits
   // between the transcript and the input and no blank row lands in the history.
@@ -144,7 +141,6 @@ export function App({ store }: { store: AppStore }) {
         width={width}
         terminalHeight={terminalHeight}
         printedRows={printedRows}
-        footerRows={footerRows}
       />
       <Printer store={store} palette={palette} onPrinted={addPrinted} />
     </box>

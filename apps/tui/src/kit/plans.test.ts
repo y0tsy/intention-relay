@@ -7,15 +7,15 @@ import {
   DETAIL_ROWS,
   footerLayout,
   INPUT_CHROME_ROWS,
-  inputBlockRows,
+  inputSlotRows,
   LIVE_BAND_ROWS,
   MIN_BLOCK_ROWS,
-  PANEL_MARGIN,
+  FOOTER_MARGIN,
   printRoom,
   SESSION_CHROME_ROWS,
   WELCOME_CHROME_ROWS,
-  welcomeLayout,
-} from "./panel";
+  heroLayout,
+} from "./index";
 
 /** The rows the theme picker's panel asks for. */
 const PICKER_ROWS = 5;
@@ -174,7 +174,7 @@ test("the printed transcript starts at the footer's content column", () => {
   assert.equal(CONTENT_INDENT, 3);
   const layout = footerLayout(80, 24, MIN_BLOCK_ROWS, 0, "session", 0);
   assert.equal(layout.contentColumns, 80 - CONTENT_INDENT * 2);
-  assert.equal(layout.columns, 80 - PANEL_MARGIN * 2);
+  assert.equal(layout.columns, 80 - FOOTER_MARGIN * 2);
 });
 
 test("a print chunk fits the rows above the footer", () => {
@@ -188,17 +188,17 @@ test("a print chunk fits the rows above the footer", () => {
 });
 
 test("the input block grows one row per line break", () => {
-  assert.equal(inputBlockRows(0), MIN_BLOCK_ROWS);
-  assert.equal(inputBlockRows(3), MIN_BLOCK_ROWS + 3);
+  assert.equal(inputSlotRows(""), MIN_BLOCK_ROWS);
+  assert.equal(inputSlotRows("a\nb\nc\nd"), MIN_BLOCK_ROWS + 3);
 });
 
 test("the welcome keeps the overview before the lockup", () => {
-  const roomy = welcomeLayout(10);
-  assert.deepEqual(roomy, { lead: 1, logo: 1, filler: 5, overview: 3 });
-  const tight = welcomeLayout(4);
-  assert.deepEqual(tight, { lead: 0, logo: 1, filler: 0, overview: 3 });
-  const tiny = welcomeLayout(2);
-  assert.deepEqual(tiny, { lead: 0, logo: 0, filler: 0, overview: 2 });
-  const none = welcomeLayout(0);
-  assert.deepEqual(none, { lead: 0, logo: 0, filler: 0, overview: 0 });
+  const roomy = heroLayout(10);
+  assert.deepEqual(roomy, { lead: 1, hero: 1, filler: 5, overview: 3 });
+  const tight = heroLayout(4);
+  assert.deepEqual(tight, { lead: 0, hero: 1, filler: 0, overview: 3 });
+  const tiny = heroLayout(2);
+  assert.deepEqual(tiny, { lead: 0, hero: 0, filler: 0, overview: 2 });
+  const none = heroLayout(0);
+  assert.deepEqual(none, { lead: 0, hero: 0, filler: 0, overview: 0 });
 });

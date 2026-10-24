@@ -4,15 +4,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
+import { SlotRows } from "../kit";
 import { Welcome } from "./Welcome";
 
 /** Renders the welcome pane at one region size and returns its lines. */
 async function lines(columns: number, rows: number): Promise<string[]> {
-  return frameLines(await painted(<Welcome rows={rows} palette={DARK} />, columns, rows));
+  return frameLines(
+    await painted(
+      <SlotRows rows={rows}>
+        <Welcome palette={DARK} />
+      </SlotRows>,
+      columns,
+      rows,
+    ),
+  );
 }
 
 test("the lockup centres in the region it was given", async () => {
-  const frame = await painted(<Welcome rows={12} palette={DARK} />, 40, 12);
+  const frame = await painted(
+    <SlotRows rows={12}>
+      <Welcome palette={DARK} />
+    </SlotRows>,
+    40,
+    12,
+  );
   const painted_ = frame.split("\n");
   assert.equal(painted_[1]?.trim(), "INTENTION  R E L A Y", "the pair is whole");
   assert.equal(painted_[1]?.indexOf("I"), 10, "and centred in the region");

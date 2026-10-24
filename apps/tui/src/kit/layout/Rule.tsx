@@ -24,5 +24,13 @@ export function Rule({
       </text>
     );
   }
-  return <box height={1} borderStyle="single" border={["top"]} borderColor={color} />;
+  return (
+    <box
+      height={1}
+      borderStyle="single"
+      border={["top"]}
+      borderColor={color}
+      backgroundColor={background}
+    />
+  );
 }

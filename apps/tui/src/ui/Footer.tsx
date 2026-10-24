@@ -7,15 +7,12 @@
 //! the frame with the welcome pane, so a launch is the panel the alt-screen
 //! surface drew, cell for cell.
 //!
-//! The geometry comes from [`footerLayout`], and the footer tells the renderer
-//! how many rows it took: above them the terminal owns the rows the transcript
-//! printed, below them nothing exists. The footer draws the frame's bottom edge
-//! and the window's margin, so the panel the transcript printed closes on the
-//! window's last row. The session browser is a layout row docked under the
-//! footer, and the footer reflows into the rows the browser leaves.
+//! The kernel plans the footer's rows and paints its frame; this module only
+//! names what goes in each region. The footer tells the renderer how many rows
+//! it took, and above them the terminal owns the rows the transcript printed.
+//! The session browser is a layout row docked under the footer, and the footer
+//! reflows into the rows the browser leaves.
 
-import { useRenderer } from "@opentui/react";
-import { type RefObject, useLayoutEffect } from "react";
 import type { ThemePreference } from "../app/action";
 import { type CommandMenu, MAX_COMMAND_ROWS } from "../app/menu";
 import {
@@ -33,21 +30,23 @@ import {
 } from "../app/select";
 import type { Surface } from "../app/state";
 import type { AppStore } from "../app/store";
-import { bandSlotRows, ContentColumns, Surface as Canvas } from "../kit";
+import {
+  bandSlotRows,
+  type BrowserLayout,
+  browserLayout,
+  browserPanelColumns,
+  DOCK_GAP_ROWS,
+  FOOTER_MARGIN,
+  FooterFrame,
+  type FooterMode,
+  footerLayout,
+  inputSlotRows,
+  SlotRows,
+  useSlotRows,
+} from "../kit";
 import type { Palette } from "../theme/palette";
 import { HintBand } from "./HintBand";
 import { InputBlock } from "./InputBlock";
-import {
-  type BrowserLayout,
-  browserLayout,
-  type FooterLayout,
-  type FooterMode,
-  footerLayout,
-  inputBlockRows,
-  MIN_COLUMNS,
-  PANEL_GAP_ROWS,
-  PANEL_MARGIN,
-} from "./panel";
 import { SessionBrowser } from "./SessionBrowser";
 import { Detail } from "./StatusRow";
 import { PICKER_ROWS, ThemePicker } from "./ThemePicker";
@@ -78,7 +77,6 @@ function Hints({
   selection,
   theme,
   palette,
-  rows,
 }: {
   menu: CommandMenu | null;
   menuHighlight: number;
@@ -86,8 +84,8 @@ function Hints({
   selection: number;
   theme: ThemePreference;
   palette: Palette;
-  rows: number;
 }) {
+  const rows = useSlotRows();
   return (
     <box height={rows}>
       {surface === "theme" ? (
@@ -104,12 +102,12 @@ function Docked({
   store,
   palette,
   browser,
-  columns,
+  width,
 }: {
   store: AppStore;
   palette: Palette;
   browser: BrowserLayout;
-  columns: number;
+  width: number;
 }) {
   const selection = useStore(store, selectSelection);
   const rows = useStore(store, selectBrowserRows);
@@ -121,22 +119,21 @@ function Docked({
   const now = useNow(true);
   return (
     <>
-      <box height={PANEL_GAP_ROWS} />
+      <box height={DOCK_GAP_ROWS} />
       <box flexDirection="row" height={browser.rows}>
-        <box width={PANEL_MARGIN} />
-        <box width={columns}>
-          <SessionBrowser
-            rows={rows}
-            error={error}
-            selection={selection}
-            filter={filter}
-            tab={tab}
-            palette={palette}
-            rows_={browser.rows}
-            dataRows={browser.dataRows}
-            contentColumns={browser.contentColumns}
-            now={now}
-          />
+        <box width={FOOTER_MARGIN} />
+        <box width={browserPanelColumns(width)}>
+          <SlotRows rows={browser.rows}>
+            <SessionBrowser
+              rows={rows}
+              error={error}
+              selection={selection}
+              filter={filter}
+              tab={tab}
+              palette={palette}
+              now={now}
+            />
+          </SlotRows>
         </box>
       </box>
     </>
@@ -150,7 +147,6 @@ export function Footer({
   width,
   terminalHeight,
   printedRows,
-  footerRows,
 }: {
   store: AppStore;
   palette: Palette;
@@ -158,10 +154,7 @@ export function Footer({
   terminalHeight: number;
   /** The rows the transcript has already printed above the footer. */
   printedRows: number;
-  /** The printer reads this during its own effect, which runs after this one. */
-  footerRows: RefObject<number>;
 }) {
-  const renderer = useRenderer();
   const draft = useStore(store, selectDraft);
   const menu = useStore(store, selectCommandMenu);
   const menuHighlight = useStore(store, selectMenuHighlight);
@@ -172,99 +165,60 @@ export function Footer({
   const theme = useStore(store, selectTheme);
   const browser = surface === "sessions" ? browserLayout(width, terminalHeight, rows.length) : null;
   const mode: FooterMode = empty ? "welcome" : "session";
-  const layout: FooterLayout = footerLayout(
+  const layout = footerLayout(
     width,
     terminalHeight,
-    inputBlockRows(draft.text.split("\n").length - 1),
+    inputSlotRows(draft.text),
     hintRows(menu, surface),
     mode,
-    browser === null ? 0 : PANEL_GAP_ROWS + browser.rows,
+    browser === null ? 0 : DOCK_GAP_ROWS + browser.rows,
     printedRows,
   );
-  const height = layout.rows;
-  // The rows above the footer are the terminal's; the renderer is told how many
-  // the application took before it paints the frame that needs them.
-  useLayoutEffect(() => {
-    footerRows.current = height;
-    renderer.footerHeight = height;
-    // A print changes the rows the transcript leaves, so the region is a new one
-    // on this commit and needs the frame that applies it.
-    renderer.requestRender();
-  }, [renderer, height, footerRows]);
-  if (layout.columns < MIN_COLUMNS || layout.body < 1) {
-    // A window too narrow to read anything in draws nothing rather than a
-    // broken box: the footer's own arithmetic has already spent its body.
-    return <box />;
-  }
   const welcome = mode === "welcome";
-  // The frame closes here in a session: its top edge is the row the transcript
-  // printed, so the footer draws the sides and the bottom only, and the blank
-  // window margin under it.
-  const dockedRows = browser === null ? 0 : PANEL_GAP_ROWS + browser.rows;
-  // A body that a browser and a frame spend past the window's rows shows an
-  // empty frame rather than one drawn at a negative height.
-  const frameRows = Math.max(0, height - dockedRows - layout.chromeRows + (welcome ? 2 : 1));
-  const innerRows = Math.max(0, frameRows - (welcome ? 2 : 1));
   return (
-    <box flexDirection="column" height={height} backgroundColor={palette.canvas}>
-      {/* The page is painted under every row of the region first: a row that
-          shows no text is still a row of the page, not a hole through it. */}
-      <box position="absolute" top={0} left={0} width={width} height={height}>
-        <Canvas rows={height} columns={width} color={palette.canvas} />
-      </box>
-      {welcome ? <box height={PANEL_MARGIN} /> : null}
-      <box flexDirection="row" height={frameRows}>
-        <box width={PANEL_MARGIN} />
-        <box
-          width={layout.columns}
-          height={frameRows}
-          flexDirection="column"
-          borderStyle="rounded"
-          border={welcome ? true : ["left", "right", "bottom"]}
-          borderColor={palette.border}
-          backgroundColor={palette.panel}
-          paddingLeft={1}
-          paddingRight={1}
-        >
-          <box position="absolute" top={0} left={0} width={layout.columns} height={frameRows}>
-            <Canvas rows={innerRows} columns={layout.columns} color={palette.panel} />
-          </box>
-          <ContentColumns columns={layout.contentColumns}>
-            {layout.liveRows === 0 ? null : (
-              <box height={layout.liveRows} flexDirection="column">
-                {welcome ? (
-                  <Welcome rows={layout.liveRows} palette={palette} />
-                ) : (
-                  <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
-                    <Live store={store} palette={palette} />
-                  </scrollbox>
-                )}
-              </box>
-            )}
-            {layout.hintRows === 0 ? null : (
-              <box height={layout.hintRows}>
-                <Hints
-                  menu={menu}
-                  menuHighlight={menuHighlight}
-                  surface={surface}
-                  selection={selection}
-                  theme={theme}
-                  palette={palette}
-                  rows={layout.hintRows}
-                />
-              </box>
-            )}
-            <InputBlock store={store} palette={palette} rows={layout.inputRows} />
-            <box height={layout.detailRows}>
-              <Detail store={store} palette={palette} />
-            </box>
-          </ContentColumns>
+    <FooterFrame
+      layout={layout}
+      welcome={welcome}
+      palette={palette}
+      below={
+        browser === null ? null : (
+          <Docked store={store} palette={palette} browser={browser} width={width} />
+        )
+      }
+    >
+      {layout.liveRows === 0 ? null : (
+        <box height={layout.liveRows} flexDirection="column">
+          {welcome ? (
+            <SlotRows rows={layout.liveRows}>
+              <Welcome palette={palette} />
+            </SlotRows>
+          ) : (
+            <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
+              <Live store={store} palette={palette} />
+            </scrollbox>
+          )}
         </box>
-      </box>
-      {browser === null ? null : (
-        <Docked store={store} palette={palette} browser={browser} columns={width - PANEL_MARGIN} />
       )}
-      <box height={PANEL_MARGIN} />
-    </box>
+      {layout.hintRows === 0 ? null : (
+        <SlotRows rows={layout.hintRows}>
+          <Hints
+            menu={menu}
+            menuHighlight={menuHighlight}
+            surface={surface}
+            selection={selection}
+            theme={theme}
+            palette={palette}
+          />
+        </SlotRows>
+      )}
+      <SlotRows rows={layout.inputRows}>
+        <InputBlock store={store} palette={palette} />
+      </SlotRows>
+      <SlotRows rows={layout.detailRows}>
+        <box height={layout.detailRows}>
+          <Detail store={store} palette={palette} />
+        </box>
+      </SlotRows>
+    </FooterFrame>
   );
 }

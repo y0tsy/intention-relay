@@ -27,7 +27,13 @@ export { Surface } from "./layout/Surface";
 export { Center } from "./layout/Center";
 export { Rule } from "./layout/Rule";
 export { Badge } from "./layout/Badge";
-export { Pane, Indent, paneContentColumns, paneSlotRows, PANE_PADDING } from "./layout/Pane";
+export {
+  Pane,
+  Indent,
+  paneContentColumns,
+  paneSlotRows,
+  PANE_PADDING,
+} from "./layout/Pane";
 export { Hanging, markerColumns } from "./layout/Hanging";
 export { Lines } from "./layout/Lines";
 export {
@@ -49,10 +55,43 @@ export {
   INPUT_CURSOR,
   INPUT_PROMPT,
   INPUT_CONTINUATION,
+  MIN_BLOCK_ROWS,
   type TextFieldPalette,
   type CursorWindow,
 } from "./layout/TextField";
 export { Hero } from "./layout/Hero";
 export { heroLayout, HERO_LEAD_ROWS, HERO_ROWS, type HeroPlan } from "./layout/hero-plan";
-export { bandSlotRows, pickerSlotRows, MAX_BAND_ROWS } from "./layout/menu-band";
+export {
+  bandColumnWidths,
+  bandSlotRows,
+  pickerSlotRows,
+  MAX_BAND_ROWS,
+  type BandColumnWidths,
+} from "./layout/menu-band";
 export { browserColumnWidths, type BrowserColumns } from "./layout/browser-columns";
+export {
+  footerLayout,
+  printRoom,
+  CONTENT_INDENT,
+  DETAIL_ROWS,
+  LIVE_BAND_ROWS,
+  FOOTER_MARGIN,
+  FOOTER_MIN_COLUMNS,
+  WELCOME_CHROME_ROWS,
+  SESSION_CHROME_ROWS,
+  type FooterLayout,
+  type FooterMode,
+} from "./layout/footer-plan";
+export {
+  browserLayout,
+  browserDataRows,
+  browserPanelColumns,
+  MIN_PANEL_ROWS,
+  MIN_CHAT_ROWS,
+  DOCK_GAP_ROWS,
+  BROWSER_CHROME_ROWS,
+  BROWSER_FOOTER_ROWS,
+  BROWSER_CHROME_COLUMNS,
+  type BrowserLayout,
+} from "./layout/dock-plan";
+export { FooterFrame, type FooterPalette } from "./layout/FooterFrame";

@@ -51,6 +51,18 @@ export interface CommandMenu {
  */
 export const MAX_COMMAND_ROWS = 3;
 
+/** Returns every label one band ranks, in the registry's own order. */
+export function menuLabels(menu: CommandMenu): readonly string[] {
+  return menu.kind === "command"
+    ? COMMANDS.map((command) => `/${command.name}`)
+    : THEME_PREFERENCES;
+}
+
+/** Returns every trailing cell one band ranks, in the registry's own order. */
+export function menuTrailing(menu: CommandMenu): readonly string[] {
+  return menu.kind === "command" ? COMMANDS.map((command) => command.category) : ["theme"];
+}
+
 /** What the picker and the theme values say about each preference. */
 export const THEME_DETAILS: Record<ThemePreference, string> = {
   auto: "follow the terminal background",

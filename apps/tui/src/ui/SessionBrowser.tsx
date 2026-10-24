@@ -16,6 +16,7 @@ import { BROWSER_TABS, type BrowserTab, relativeTime, tabLabel } from "../app/br
 import type { SessionSummaryDto } from "../bindings";
 import {
   browserColumnWidths,
+  browserDataRows,
   Cell,
   Pane,
   Row,
@@ -23,6 +24,8 @@ import {
   scrollWindow,
   Table,
   type TableCellStyle,
+  useContentColumns,
+  useSlotRows,
 } from "../kit";
 import type { Palette } from "../theme/palette";
 import { ACTIVE_TAB, CURSOR_MARKER, INACTIVE_TAB, ROW_MARKER, SEARCH_PLACEHOLDER } from "./glyphs";
@@ -61,15 +64,8 @@ function TabRow({ tab, palette }: { tab: BrowserTab; palette: Palette }) {
 }
 
 /** Returns the search bar, which shows the filter or its placeholder. */
-function SearchBar({
-  filter,
-  columns,
-  palette,
-}: {
-  filter: string;
-  columns: number;
-  palette: Palette;
-}) {
+function SearchBar({ filter, palette }: { filter: string; palette: Palette }) {
+  const columns = useContentColumns();
   const empty = filter.length === 0;
   return (
     <Cell
@@ -112,17 +108,14 @@ function BrowserFooter({
   );
 }
 
-/** Renders the docked browser panel in the rows the window gave it. */
-export function SessionBrowser({
+/** Renders the panel's content: its rows read their own columns from the pane. */
+function BrowserBody({
   rows,
   error,
   selection,
   filter,
   tab,
   palette,
-  rows_,
-  dataRows,
-  contentColumns,
   now,
 }: {
   rows: readonly SessionSummaryDto[];
@@ -131,12 +124,11 @@ export function SessionBrowser({
   filter: string;
   tab: BrowserTab;
   palette: Palette;
-  rows_: number;
-  dataRows: number;
-  contentColumns: number;
   now: number;
 }) {
-  const widths = browserColumnWidths(contentColumns);
+  const columns = useContentColumns();
+  const widths = browserColumnWidths(columns);
+  const dataRows = browserDataRows(useSlotRows(0));
   const window = scrollWindow({ count: rows.length, visible: dataRows, selected: selection });
   const shown = rows.slice(window.start, window.end);
   const tableColumns = [
@@ -170,37 +162,28 @@ export function SessionBrowser({
     },
   }));
   return (
-    <Pane
-      height={rows_}
-      title="Sessions"
-      titleColor={palette.accentDeep}
-      borderColor={palette.border}
-      background={palette.panel}
-      paddingLeft={2}
-      paddingRight={2}
-    >
+    <>
       <box height={1} />
       <TabRow tab={tab} palette={palette} />
-      <SearchBar filter={filter} columns={contentColumns} palette={palette} />
-      <Rule color={palette.inkFaint} columns={contentColumns} background={palette.dividerTint} />
+      <SearchBar filter={filter} palette={palette} />
+      <Rule color={palette.inkFaint} background={palette.dividerTint} />
       <Table
         columns={tableColumns}
         marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
         rows={[header]}
-        width={contentColumns}
-        renderCell={(_column, _cell, row) => headerStyle(row.key === header.key, palette)}
+        renderCell={(): TableCellStyle => headerStyle(true, palette)}
         renderMarker={(row) => ({
           ink: palette.inkMuted,
-          bold: row.key === header.key,
+          bold: row.key === "__header",
         })}
       />
       {error === null ? null : (
-        <Cell text={error} width={contentColumns} ink={palette.error} background={palette.stubBg} />
+        <Cell text={error} width={columns} ink={palette.error} background={palette.stubBg} />
       )}
       {rows.length === 0 && error === null ? (
         <Cell
           text="no sessions yet; send a prompt to create one"
-          width={contentColumns}
+          width={columns}
           ink={palette.accentDeep}
           background={palette.stubBg}
         />
@@ -209,7 +192,6 @@ export function SessionBrowser({
         columns={tableColumns}
         marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
         rows={dataRowsPainted}
-        width={contentColumns}
         renderCell={(column, _cell, row) =>
           sessionStyle(column.key, row.selected === true, palette)
         }
@@ -219,12 +201,54 @@ export function SessionBrowser({
         })}
       />
       <box flexGrow={1} />
-      <Rule color={palette.inkFaint} columns={contentColumns} background={palette.dividerTint} />
+      <Rule color={palette.inkFaint} background={palette.dividerTint} />
       <BrowserFooter
         first={window.first}
         last={window.last}
         total={rows.length}
         palette={palette}
+      />
+    </>
+  );
+}
+
+/** Renders the docked browser panel in the rows the window gave it. */
+export function SessionBrowser({
+  rows,
+  error,
+  selection,
+  filter,
+  tab,
+  palette,
+  now,
+}: {
+  rows: readonly SessionSummaryDto[];
+  error: string | null;
+  selection: number;
+  filter: string;
+  tab: BrowserTab;
+  palette: Palette;
+  now: number;
+}) {
+  const height = useSlotRows(0);
+  return (
+    <Pane
+      height={height}
+      title="Sessions"
+      titleColor={palette.accentDeep}
+      borderColor={palette.border}
+      background={palette.panel}
+      paddingLeft={2}
+      paddingRight={2}
+    >
+      <BrowserBody
+        rows={rows}
+        error={error}
+        selection={selection}
+        filter={filter}
+        tab={tab}
+        palette={palette}
+        now={now}
       />
     </Pane>
   );

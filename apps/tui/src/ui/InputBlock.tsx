@@ -10,7 +10,7 @@
 
 import { selectDraft, selectSessionMode, selectSessionModel } from "../app/select";
 import type { AppStore } from "../app/store";
-import { Badge, Pane, TextField } from "../kit";
+import { Badge, Pane, TextField, useSlotRows } from "../kit";
 import type { Palette } from "../theme/palette";
 import { StatusLine } from "./StatusRow";
 import { useStore } from "./use-store";
@@ -39,18 +39,11 @@ function Badges({
 }
 
 /** Renders the input block: its frame, the badges, the buffer, and the status. */
-export function InputBlock({
-  store,
-  palette,
-  rows,
-}: {
-  store: AppStore;
-  palette: Palette;
-  rows: number;
-}) {
+export function InputBlock({ store, palette }: { store: AppStore; palette: Palette }) {
   const draft = useStore(store, selectDraft);
   const mode = useStore(store, selectSessionMode);
   const model = useStore(store, selectSessionModel);
+  const rows = useSlotRows();
   return (
     <Pane
       height={rows}
@@ -60,7 +53,7 @@ export function InputBlock({
       paddingRight={1}
     >
       <Badges mode={mode} model={model} palette={palette} />
-      <TextField text={draft.text} caret={draft.caret} rows={rows} palette={palette} />
+      <TextField text={draft.text} caret={draft.caret} palette={palette} />
       <box height={1}>
         <StatusLine store={store} palette={palette} />
       </box>

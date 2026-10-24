@@ -27,9 +27,8 @@ import { createPortal, useRenderer } from "@opentui/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
 import type { AppStore } from "../app/store";
-import { ContentColumns, Surface } from "../kit";
+import { CONTENT_INDENT, ContentColumns, FOOTER_MARGIN, printRoom, Surface } from "../kit";
 import type { Palette } from "../theme/palette";
-import { CONTENT_INDENT, PANEL_MARGIN, printRoom } from "./panel";
 import { chunkRows, type Lead, leadRow } from "./print-plan";
 import { type Block, blocks, CommittedBlock } from "./Transcript";
 import { useStore } from "./use-store";
@@ -326,7 +325,7 @@ export function Printer({
   // painted a row at a time, so no row of the transcript is the terminal's own
   // background, and it is exactly as tall as the print.
   const rows = current.rows > 0 ? current.rows : PAGE_ROWS;
-  const frameColumns = surface.width - PANEL_MARGIN * 2;
+  const frameColumns = surface.width - FOOTER_MARGIN * 2;
   const innerColumns = frameColumns - 2;
   return createPortal(
     <box flexDirection="column" width={surface.width}>
@@ -335,7 +334,7 @@ export function Printer({
       </box>
       {current.lead.closing ? (
         <box flexDirection="row" height={1}>
-          <box width={PANEL_MARGIN} />
+          <box width={FOOTER_MARGIN} />
           <box
             width={frameColumns}
             borderStyle="rounded"
@@ -345,7 +344,7 @@ export function Printer({
         </box>
       ) : null}
       <box flexDirection="row">
-        <box width={PANEL_MARGIN} />
+        <box width={FOOTER_MARGIN} />
         <box
           width={frameColumns}
           flexDirection="column"
@@ -372,7 +371,7 @@ export function Printer({
             ))}
           </ContentColumns>
         </box>
-        <box width={PANEL_MARGIN} />
+        <box width={FOOTER_MARGIN} />
       </box>
     </box>,
     surface.root,

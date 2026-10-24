@@ -12,7 +12,7 @@
 //! pane measures nothing.
 
 import { TextAttributes } from "@opentui/core";
-import { Badge, Hero, Pane, Row } from "../kit";
+import { Badge, Hero, Pane, Row, useSlotRows } from "../kit";
 import type { Palette } from "../theme/palette";
 
 /** The product word of the lockup. */
@@ -61,8 +61,9 @@ function Overview({ rows, palette }: { rows: number; palette: Palette }) {
   );
 }
 
-/** Renders the welcome pane over the rows and columns of the transcript region. */
-export function Welcome({ rows, palette }: { rows: number; palette: Palette }) {
+/** Renders the welcome pane over the rows of the transcript region. */
+export function Welcome({ palette }: { palette: Palette }) {
+  const rows = useSlotRows();
   return (
     <Hero
       rows={rows}
