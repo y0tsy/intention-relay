@@ -7,12 +7,10 @@
 //! A card too narrow for a frame falls back to its bare rows, so a narrow panel
 //! shows the message instead of a broken box.
 
+import { markerText, Pane } from "../../kit";
 import type { Palette } from "../../theme/palette";
-import { markerText, USER_GLYPH, USER_LABEL } from "../glyphs";
+import { USER_GLYPH, USER_LABEL } from "../glyphs";
 import { MarkdownBlocks } from "../Markdown";
-
-/** The columns a card's frame and padding take: two borders and two paddings. */
-export const CARD_CHROME_COLUMNS = 4;
 
 /** Renders one committed user row. */
 export function UserCard({
@@ -22,25 +20,21 @@ export function UserCard({
 }: {
   text: string;
   palette: Palette;
-  width: number;
+  /** The card's own outer width; the parent's content width when omitted. */
+  width?: number;
 }) {
-  if (width <= CARD_CHROME_COLUMNS) {
-    return <MarkdownBlocks source={text} palette={palette} ink={palette.ink} />;
-  }
   return (
-    <box
-      flexDirection="column"
-      border
-      borderStyle="rounded"
-      borderColor={palette.userBorder}
-      backgroundColor={palette.userSurface}
+    <Pane
       title={markerText(USER_GLYPH, USER_LABEL)}
       titleColor={palette.userLabel}
-      titleAlignment="left"
+      borderColor={palette.userBorder}
+      background={palette.userSurface}
       paddingLeft={1}
       paddingRight={1}
+      columns={width}
+      fallbackBare
     >
       <MarkdownBlocks source={text} palette={palette} ink={palette.ink} />
-    </box>
+    </Pane>
   );
 }

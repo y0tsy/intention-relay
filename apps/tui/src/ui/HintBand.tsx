@@ -11,162 +11,95 @@
 //! values. The highlighted row carries the cursor marker and the selected wash,
 //! and the first column keeps the accent ink the input line's own prompt uses.
 
-import { TextAttributes } from "@opentui/core";
-import { COMMANDS } from "../app/commands";
 import type { CommandMenu, MenuRow } from "../app/menu";
-import { MAX_COMMAND_ROWS, menuWindow } from "../app/menu";
+import { MAX_COMMAND_ROWS } from "../app/menu";
+import { Pane, scrollWindow, Table, type TableCellStyle } from "../kit";
 import type { Palette } from "../theme/palette";
-import { displayWidth } from "./measure";
-
-/** The blank column between two band columns. */
-const COLUMN_GAP = 1;
-
-/** The columns the cursor marker takes, so every other row aligns with it. */
-const MARKER_COLUMNS = 2;
-
-/** The marker the highlighted row starts with. */
-const CURSOR_MARKER = "> ";
-
-/** The marker every other row starts with, keeping the columns aligned. */
-const ROW_MARKER = "  ";
-
-/** The widths of one band's columns. */
-interface Columns {
-  /** The first cell: a command name or an argument value. */
-  readonly label: number;
-  /** The description cell; `0` hides the column. */
-  readonly description: number;
-  /** The trailing cell: a category or an argument name; `0` hides it. */
-  readonly trailing: number;
-}
-
-/** Returns the columns of one band inside `columns` available. */
-function bandColumns(menu: CommandMenu, columns: number): Columns {
-  const [labels, trailing] =
-    menu.kind === "command"
-      ? [allCommands(), COMMANDS.map((command) => command.category)]
-      : [allValues(), ["theme"]];
-  const label = maxWidth(labels);
-  const trailingCell = maxWidth(trailing);
-  const fixed = MARKER_COLUMNS + label + COLUMN_GAP + trailingCell;
-  if (columns > fixed + COLUMN_GAP) {
-    return { label, description: columns - fixed - COLUMN_GAP, trailing: trailingCell };
-  }
-  return { label: Math.max(0, columns - MARKER_COLUMNS), description: 0, trailing: 0 };
-}
-
-/** Returns the typed names of every registered command. */
-function allCommands(): string[] {
-  return COMMANDS.map((command) => `/${command.name}`);
-}
-
-/** Returns the declared values of the one argument the band ranks. */
-function allValues(): string[] {
-  return ["auto", "dark", "light"];
-}
-
-/** Returns the widest display width of a cell's words. */
-function maxWidth(words: readonly string[]): number {
-  return words.reduce((widest, word) => Math.max(widest, displayWidth(word)), 0);
-}
-
-/** Returns one padded cell of a band row. */
-function cell(text: string, columns: number): string {
-  return `${text}${" ".repeat(Math.max(0, columns - displayWidth(text)))}`;
-}
-
-/** Renders one command or value row. */
-function BandRow({
-  row,
-  highlighted,
-  columns,
-  palette,
-}: {
-  row: MenuRow;
-  highlighted: boolean;
-  columns: Columns;
-  palette: Palette;
-}) {
-  return (
-    <text wrapMode="none" bg={highlighted ? palette.rowSelectedBg : palette.headerBg}>
-      <span fg={palette.accent} attributes={highlighted ? TextAttributes.BOLD : undefined}>
-        {highlighted ? CURSOR_MARKER : ROW_MARKER}
-      </span>
-      <span fg={palette.accentDeep} attributes={highlighted ? TextAttributes.BOLD : undefined}>
-        {cell(row.label, columns.label)}
-      </span>
-      {columns.description > 0 ? (
-        <span fg={palette.ink}>{` ${cell(row.description, columns.description)}`}</span>
-      ) : null}
-      {columns.trailing > 0 ? (
-        <span fg={palette.inkMuted}>{` ${cell(row.trailing, columns.trailing)}`}</span>
-      ) : null}
-    </text>
-  );
-}
-
-/** Renders the row that reports the rows the band does not show. */
-function OverflowRow({
-  hidden,
-  noun,
-  palette,
-}: {
-  hidden: number;
-  noun: string;
-  palette: Palette;
-}) {
-  return (
-    <text wrapMode="none" bg={palette.headerBg}>
-      <span fg={palette.headerBg}>{ROW_MARKER}</span>
-      <span fg={palette.inkMuted}>{`… and ${hidden} more ${noun}`}</span>
-    </text>
-  );
-}
+import { CURSOR_MARKER, ROW_MARKER } from "./glyphs";
 
 /** Renders the band the word the caret sits in opens. */
 export function HintBand({
   menu,
   highlight,
   palette,
-  width,
 }: {
   menu: CommandMenu;
   /** The row the reader is on; the band shows the window around it. */
   highlight: number;
   palette: Palette;
-  width: number;
 }) {
-  const columns = bandColumns(menu, width - 4);
-  // The window follows the cursor, so the row the reader is on is always one of
-  // the rows they can see; the rest are counted by the overflow row below.
-  const start = menuWindow(menu.rows.length, highlight);
-  const shown = menu.rows.slice(start, start + MAX_COMMAND_ROWS);
+  const window = scrollWindow({
+    count: menu.rows.length,
+    visible: MAX_COMMAND_ROWS,
+    selected: highlight,
+  });
+  const shown = menu.rows.slice(window.start, window.end);
   const hidden = menu.rows.length - shown.length;
   const title = menu.kind === "command" ? "commands" : "arguments";
   const noun = menu.kind === "command" ? "commands" : "values";
   return (
-    <box
-      flexDirection="column"
-      border
-      borderStyle="rounded"
-      borderColor={palette.accent}
-      backgroundColor={palette.headerBg}
+    <Pane
       title={title}
       titleColor={palette.accentDeep}
-      titleAlignment="left"
+      borderColor={palette.accent}
+      background={palette.headerBg}
       paddingLeft={1}
       paddingRight={1}
     >
-      {shown.map((row, index) => (
-        <BandRow
-          key={row.label}
-          row={row}
-          highlighted={start + index === highlight}
-          columns={columns}
-          palette={palette}
-        />
-      ))}
-      {hidden > 0 ? <OverflowRow hidden={hidden} noun={noun} palette={palette} /> : null}
-    </box>
+      <Table
+        columns={[
+          { key: "label", grow: true },
+          { key: "description", grow: true, hideOrder: 1 },
+          { key: "trailing", hideOrder: 2 },
+        ]}
+        marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
+        markerGap={0}
+        rows={shown.map((row, index) => bandRow(row, window.start + index === highlight, palette))}
+        renderCell={(column, cell, row): TableCellStyle =>
+          cellStyle(column.key, row.selected === true, cell.text, palette)
+        }
+        renderMarker={(row) => ({
+          ink: palette.accent,
+          bold: row.selected === true,
+        })}
+      />
+      {hidden > 0 ? (
+        <text wrapMode="none" bg={palette.headerBg}>
+          <span fg={palette.headerBg}>{ROW_MARKER}</span>
+          <span fg={palette.inkMuted}>{`… and ${hidden} more ${noun}`}</span>
+        </text>
+      ) : null}
+    </Pane>
   );
+}
+
+/** Returns the row shape the table reads. */
+function bandRow(row: MenuRow, selected: boolean, palette: Palette) {
+  return {
+    key: row.label,
+    selected,
+    background: selected ? palette.rowSelectedBg : palette.headerBg,
+    cells: {
+      label: row.label,
+      description: row.description,
+      trailing: row.trailing,
+    },
+  };
+}
+
+/** Returns one cell's ink for the band's columns. */
+function cellStyle(
+  column: string,
+  selected: boolean,
+  _text: string,
+  palette: Palette,
+): TableCellStyle {
+  switch (column) {
+    case "label":
+      return { ink: palette.accentDeep, bold: selected };
+    case "description":
+      return { ink: palette.ink };
+    default:
+      return { ink: palette.inkMuted };
+  }
 }

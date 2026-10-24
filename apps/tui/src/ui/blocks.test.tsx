@@ -5,7 +5,6 @@ import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { REASONING_VISIBLE_ROWS, Reasoning } from "./blocks/Reasoning";
-import { takeRows, wrapRows } from "./blocks/rows";
 import { TOOL_PREVIEW_ROWS, ToolBlock } from "./blocks/ToolBlock";
 import { UserCard } from "./blocks/UserCard";
 
@@ -13,17 +12,6 @@ import { UserCard } from "./blocks/UserCard";
 async function lines(element: React.ReactNode, width: number): Promise<string[]> {
   return frameLines(await painted(element, width, 20));
 }
-
-test("a word wider than the column is cut, never widened", async () => {
-  assert.deepEqual(wrapRows("abcdefghij", 4), ["abcd", "efgh", "ij"]);
-});
-
-test("takeRows counts the rows it hid", async () => {
-  assert.deepEqual(takeRows("one two three four", 9, 2), {
-    shown: ["one two", "three"],
-    hidden: 1,
-  });
-});
 
 test("a card frames its message on the user wash", async () => {
   const painted_ = await lines(<UserCard text="hi there" palette={DARK} width={20} />, 20);
@@ -40,10 +28,7 @@ test("a card too narrow for a frame falls back to its rows", async () => {
 
 test("a reasoning block shows fifteen rows and the rows it counted", async () => {
   const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
-  const painted_ = await lines(
-    <Reasoning text={text} palette={DARK} width={40} columns={38} expansion={0} />,
-    40,
-  );
+  const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
   assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1 + 1);
   assert.ok(painted_.some((line) => /… 5 more reasoning lines hidden/.test(line)));
 });
@@ -72,7 +57,6 @@ test("a tool block previews twelve rows and names the rows it hid", async () => 
         },
       }}
       palette={DARK}
-      columns={30}
     />,
     40,
   );

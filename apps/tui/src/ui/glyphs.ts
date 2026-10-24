@@ -38,18 +38,6 @@ export const TOOL_GLYPH = "▸";
 /** The rail a structured tool-result row opens with. */
 export const TOOL_LIST_GLYPH = "‣";
 
-/** The blank columns every marker keeps before the text it opens. */
-export const MARKER_GAP = 1;
-
-/** The indent every continuation row of one wrapped logical line carries. */
-export const CONTINUATION_INDENT = "  ";
-
-/** The glyph rendered at the input cursor position. */
-export const CURSOR = "█";
-
-/** The prompt the input buffer's first line carries before its text. */
-export const PROMPT = "> ";
-
 /** The separator between two runs of one sentence. */
 export const SEPARATOR = " · ";
 
@@ -65,13 +53,5 @@ export const ACTIVE_TAB = "⦿";
 /** The glyph of every other browser tab. */
 export const INACTIVE_TAB = "◦";
 
-/** The title the docked browser panel's frame carries. */
-export const SESSIONS_TITLE = "Sessions";
-
 /** The placeholder the browser's search bar shows while the filter is empty. */
 export const SEARCH_PLACEHOLDER = "Type to filter sessions...";
-
-/** Returns one marker's glyph and the text it opens, separated by the gap. */
-export function markerText(glyph: string, text: string): string {
-  return `${glyph}${" ".repeat(MARKER_GAP)}${text}`;
-}

@@ -12,16 +12,12 @@
 import { TextAttributes } from "@opentui/core";
 import { THEME_PREFERENCES, type ThemePreference } from "../app/action";
 import { THEME_DETAILS } from "../app/menu";
+import { Pane, pickerSlotRows } from "../kit";
 import type { Palette } from "../theme/palette";
-
-/** The marker the highlighted row starts with. */
-const CURSOR_MARKER = "> ";
-
-/** The marker every other row starts with, keeping the names aligned. */
-const ROW_MARKER = "  ";
+import { CURSOR_MARKER, ROW_MARKER } from "./glyphs";
 
 /** The rows the picker panel occupies: its frame, one row per preference, its legend. */
-export const PICKER_ROWS = 2 + THEME_PREFERENCES.length + 1;
+export const PICKER_ROWS = pickerSlotRows(1 + THEME_PREFERENCES.length);
 
 /** Renders the picker panel in the rows the panel gave it. */
 export function ThemePicker({
@@ -34,17 +30,14 @@ export function ThemePicker({
   palette: Palette;
 }) {
   return (
-    <box
-      flexDirection="column"
-      border
-      borderStyle="rounded"
-      borderColor={palette.accent}
-      backgroundColor={palette.headerBg}
+    <Pane
       title="Theme"
       titleColor={palette.accentDeep}
-      titleAlignment="left"
+      borderColor={palette.accent}
+      background={palette.headerBg}
       paddingLeft={1}
       paddingRight={1}
+      height={PICKER_ROWS}
     >
       {THEME_PREFERENCES.map((preference, index) => {
         const highlighted = index === selection;
@@ -68,6 +61,6 @@ export function ThemePicker({
       <text wrapMode="none" fg={palette.inkFaint} bg={palette.headerBg}>
         {"enter apply | esc revert"}
       </text>
-    </box>
+    </Pane>
   );
 }

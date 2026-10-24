@@ -27,9 +27,9 @@ import { createPortal, useRenderer } from "@opentui/react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
 import type { AppStore } from "../app/store";
+import { ContentColumns, Surface } from "../kit";
 import type { Palette } from "../theme/palette";
-import { Fill } from "./Fill";
-import { PANEL_MARGIN, printRoom } from "./panel";
+import { CONTENT_INDENT, PANEL_MARGIN, printRoom } from "./panel";
 import { chunkRows, type Lead, leadRow } from "./print-plan";
 import { type Block, blocks, CommittedBlock } from "./Transcript";
 import { useStore } from "./use-store";
@@ -143,12 +143,10 @@ function replayWindow(renderer: ReturnType<typeof useRenderer>): void {
 export function Printer({
   store,
   palette,
-  width,
   onPrinted,
 }: {
   store: AppStore;
   palette: Palette;
-  width: number;
   /** Called with the rows a print takes, so the footer gives them back first. */
   onPrinted: (rows: number) => void;
 }) {
@@ -333,7 +331,7 @@ export function Printer({
   return createPortal(
     <box flexDirection="column" width={surface.width}>
       <box position="absolute" top={0} left={0} width={surface.width} height={rows}>
-        <Fill rows={rows} columns={surface.width} color={palette.canvas} />
+        <Surface rows={rows} columns={surface.width} color={palette.canvas} />
       </box>
       {current.lead.closing ? (
         <box flexDirection="row" height={1}>
@@ -358,20 +356,21 @@ export function Printer({
           paddingRight={1}
         >
           <box position="absolute" top={0} left={0} width={innerColumns} height={rows}>
-            <Fill rows={rows} columns={innerColumns} color={palette.panel} />
+            <Surface rows={rows} columns={innerColumns} color={palette.panel} />
           </box>
-          {current.lead.separator ? <box height={1} /> : null}
-          {current.blocks.map((block, index) => (
-            <box key={block.key} flexDirection="column">
-              {index === 0 ? null : <box height={1} />}
-              <CommittedBlock
-                block={block}
-                palette={palette}
-                width={width}
-                expansion={expansions.get(block.key) ?? 0}
-              />
-            </box>
-          ))}
+          <ContentColumns columns={surface.width - CONTENT_INDENT * 2}>
+            {current.lead.separator ? <box height={1} /> : null}
+            {current.blocks.map((block, index) => (
+              <box key={block.key} flexDirection="column">
+                {index === 0 ? null : <box height={1} />}
+                <CommittedBlock
+                  block={block}
+                  palette={palette}
+                  expansion={expansions.get(block.key) ?? 0}
+                />
+              </box>
+            ))}
+          </ContentColumns>
         </box>
         <box width={PANEL_MARGIN} />
       </box>

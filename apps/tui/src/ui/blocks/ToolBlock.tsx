@@ -14,9 +14,9 @@
 //! command did.
 
 import type { MessageProjectionDto } from "../../bindings";
+import { Lines, markerText, Pane } from "../../kit";
 import type { Palette } from "../../theme/palette";
-import { markerText, TOOL_GLYPH, TOOL_LIST_GLYPH } from "../glyphs";
-import { takeRows, uniqueKeys } from "./rows";
+import { TOOL_GLYPH, TOOL_LIST_GLYPH } from "../glyphs";
 
 /** The display rows a tool block previews before it bounds its content. */
 export const TOOL_PREVIEW_ROWS = 12;
@@ -48,18 +48,15 @@ function statusNotes(status: string | null): string[] {
   }
 }
 
-/** Renders one tool exchange at one width. */
+/** Renders one tool exchange at the columns its parent gives it. */
 export function ToolBlock({
   call,
   result,
   palette,
-  columns,
 }: {
   call: MessageProjectionDto | null;
   result: MessageProjectionDto | null;
   palette: Palette;
-  /** The columns the preview has inside the block's rails. */
-  columns: number;
 }) {
   const tool = call?.tool ?? result?.tool ?? null;
   const identity = tool === null ? "tool" : tool.value.tool_id;
@@ -73,37 +70,31 @@ export function ToolBlock({
   // process did and never repeats a byte of it.
   const printed = result?.text ?? "";
   const previewable = result !== null && identity !== EXECUTE && printed.trim().length > 0;
-  const { shown, hidden } = previewable
-    ? takeRows(printed, Math.max(1, columns - 2), TOOL_PREVIEW_ROWS)
-    : { shown: [], hidden: 0 };
   return (
-    <box
-      flexDirection="column"
-      border
-      borderStyle="rounded"
-      borderColor={palette.toolBorder}
-      backgroundColor={palette.toolSurface}
+    <Pane
       title={markerText(TOOL_GLYPH, identity)}
       titleColor={palette.toolLabel}
-      titleAlignment="left"
+      borderColor={palette.toolBorder}
+      background={palette.toolSurface}
       paddingLeft={1}
       paddingRight={1}
     >
-      {shown.map((row, index) => (
-        <text key={uniqueKeys(shown)[index]} wrapMode="none" fg={palette.toolPreview}>
-          {`${TOOL_LIST_GLYPH} ${row}`}
-        </text>
-      ))}
-      {hidden > 0 ? (
-        <text wrapMode="none" fg={palette.inkFaint}>
-          {`… ${hidden} more rows`}
-        </text>
+      {previewable ? (
+        <Lines
+          text={printed}
+          rows={TOOL_PREVIEW_ROWS}
+          ink={palette.toolPreview}
+          rail={TOOL_LIST_GLYPH}
+          overflow={(hidden) => (
+            <text wrapMode="none" fg={palette.inkFaint}>{`… ${hidden} more rows`}</text>
+          )}
+        />
       ) : null}
       {notes.map((note) => (
         <text key={note} wrapMode="word" fg={palette.inkFaint}>
           {note}
         </text>
       ))}
-    </box>
+    </Pane>
   );
 }

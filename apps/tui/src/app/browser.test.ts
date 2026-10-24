@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summary } from "../testing/fixtures";
-import { browserColumns, browserRows, relativeTime } from "./browser";
+import { browserColumnWidths } from "../kit";
+import { browserRows, relativeTime } from "./browser";
 
 test("the folder tab keeps the sessions of the workspace this front end runs in", () => {
   const sessions = [
@@ -42,8 +43,8 @@ test("an age reads as the browser's columns show it", () => {
 });
 
 test("the title column takes what the purpose columns leave", () => {
-  const columns = browserColumns(74);
+  const columns = browserColumnWidths(74);
   assert.ok(columns.modified >= 8 && columns.created >= 7 && columns.size >= 4);
   assert.ok(columns.title > 0);
-  assert.equal(browserColumns(24).title >= 0, true, "a narrow panel never goes negative");
+  assert.equal(browserColumnWidths(24).title >= 0, true, "a narrow panel never goes negative");
 });

@@ -19,7 +19,6 @@ import type { AppStore } from "../app/store";
 import { type Palette, paletteFor } from "../theme/palette";
 import { Footer } from "./Footer";
 import { keyIntent, pastedText } from "./keys";
-import { CONTENT_INDENT } from "./panel";
 import { Printer } from "./scrollback";
 import { useStore } from "./use-store";
 
@@ -147,12 +146,7 @@ export function App({ store }: { store: AppStore }) {
         printedRows={printedRows}
         footerRows={footerRows}
       />
-      <Printer
-        store={store}
-        palette={palette}
-        width={width - CONTENT_INDENT * 2}
-        onPrinted={addPrinted}
-      />
+      <Printer store={store} palette={palette} onPrinted={addPrinted} />
     </box>
   );
 }

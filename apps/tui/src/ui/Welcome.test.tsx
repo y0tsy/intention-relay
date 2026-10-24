@@ -4,18 +4,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { welcomeLayout } from "./panel";
 import { Welcome } from "./Welcome";
 
 /** Renders the welcome pane at one region size and returns its lines. */
 async function lines(columns: number, rows: number): Promise<string[]> {
-  return frameLines(
-    await painted(<Welcome rows={rows} columns={columns} palette={DARK} />, columns, rows),
-  );
+  return frameLines(await painted(<Welcome rows={rows} palette={DARK} />, columns, rows));
 }
 
 test("the lockup centres in the region it was given", async () => {
-  const frame = await painted(<Welcome rows={12} columns={40} palette={DARK} />, 40, 12);
+  const frame = await painted(<Welcome rows={12} palette={DARK} />, 40, 12);
   const painted_ = frame.split("\n");
   assert.equal(painted_[1]?.trim(), "INTENTION  R E L A Y", "the pair is whole");
   assert.equal(painted_[1]?.indexOf("I"), 10, "and centred in the region");
@@ -30,7 +27,7 @@ test("the overview is pinned to the last rows and names the version", async () =
 });
 
 test("a region too short for the lockup keeps the overview", async () => {
-  const painted_ = await lines(40, welcomeLayout(3).overview);
+  const painted_ = await lines(40, 3);
   assert.equal(painted_.length, 3);
   assert.match(painted_.join("\n"), /Version 0\.0\.0/);
   assert.doesNotMatch(painted_.join("\n"), /INTENTION/);

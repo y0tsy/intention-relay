@@ -167,7 +167,7 @@ function block(token: Token, palette: Palette, ink: string, key: string): ReactN
     case "hr":
       return (
         <text key={key} fg={palette.inkFaint}>
-          {"─".repeat(3)}
+          {"───"}
         </text>
       );
     case "html":

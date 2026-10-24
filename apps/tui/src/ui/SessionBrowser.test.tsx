@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { browserColumns } from "../app/browser";
 import { summary } from "../testing/fixtures";
+import { browserColumnWidths } from "../kit";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { browserLayout } from "./panel";
@@ -62,8 +62,8 @@ test("the panel grows with its rows up to half the window", async () => {
 });
 
 test("the table's columns are shares of the content width", async () => {
-  const wide = browserColumns(74);
-  const narrow = browserColumns(24);
+  const wide = browserColumnWidths(74);
+  const narrow = browserColumnWidths(24);
   assert.ok(wide.title > narrow.title, "the title column takes what the shares leave");
   for (const column of Object.values(narrow)) {
     assert.ok(column >= 0, "no column goes negative");

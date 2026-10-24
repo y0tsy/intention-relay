@@ -21,14 +21,13 @@ import {
 } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { MessageProjectionDto } from "../bindings";
+import { ContentColumns } from "../kit";
 import type { Palette } from "../theme/palette";
 import { Answer } from "./blocks/Answer";
-import { markerColumns } from "./blocks/marker";
 import { Notice } from "./blocks/Notice";
 import { Reasoning } from "./blocks/Reasoning";
 import { ToolBlock } from "./blocks/ToolBlock";
 import { UserCard } from "./blocks/UserCard";
-import { ANSWER_GLYPH } from "./glyphs";
 import { useStore } from "./use-store";
 
 /** The identity a live segment's expansion is kept under. */
@@ -82,23 +81,14 @@ export function blocks(messages: readonly MessageProjectionDto[]): Block[] {
 export function CommittedBlock({
   block,
   palette,
-  width,
   expansion,
 }: {
   block: Block;
   palette: Palette;
-  width: number;
   expansion: number;
 }) {
   if (block.call !== null) {
-    return (
-      <ToolBlock
-        call={block.call}
-        result={block.result}
-        palette={palette}
-        columns={width - markerColumns(ANSWER_GLYPH)}
-      />
-    );
+    return <ToolBlock call={block.call} result={block.result} palette={palette} />;
   }
   const message = block.message;
   if (message === null) {
@@ -106,18 +96,12 @@ export function CommittedBlock({
   }
   switch (message.kind) {
     case "user":
-      return <UserCard text={message.text} palette={palette} width={width} />;
+      return <UserCard text={message.text} palette={palette} />;
     case "assistant":
       return (
         <>
           {message.reasoning === null || message.reasoning.trim().length === 0 ? null : (
-            <Reasoning
-              text={message.reasoning}
-              palette={palette}
-              width={width}
-              columns={width}
-              expansion={expansion}
-            />
+            <Reasoning text={message.reasoning} palette={palette} expansion={expansion} />
           )}
           {message.text.trim().length === 0 ? null : (
             <Answer text={message.text} palette={palette} />
@@ -133,7 +117,6 @@ export function CommittedBlock({
           call={block.call}
           result={block.result ?? (message.kind === "tool_result" ? message : null)}
           palette={palette}
-          columns={width - markerColumns(ANSWER_GLYPH)}
         />
       );
   }
@@ -147,23 +130,24 @@ export function Committed({
 }: {
   store: AppStore;
   palette: Palette;
-  width: number;
+  /** The column the blocks read; the parent's content width when omitted. */
+  width?: number;
 }) {
   const messages = useStore(store, selectTranscript);
   const expansions = useStore(store, selectExpansions);
-  return (
+  const column = (
     <box flexDirection="column" gap={1}>
       {blocks(messages).map((block) => (
         <CommittedBlock
           key={block.key}
           block={block}
           palette={palette}
-          width={width}
           expansion={expansions.get(block.key) ?? 0}
         />
       ))}
     </box>
   );
+  return width === undefined ? column : <ContentColumns columns={width}>{column}</ContentColumns>;
 }
 
 /** Renders the step in flight: its reasoning, then the answer it precedes. */
@@ -174,23 +158,23 @@ export function Live({
 }: {
   store: AppStore;
   palette: Palette;
-  width: number;
+  /** The column the blocks read; the parent's content width when omitted. */
+  width?: number;
 }) {
   const expansions = useStore(store, selectExpansions);
   const reasoning = useStore(store, selectProvisionalReasoning);
   const text = useStore(store, selectProvisionalText);
-  return (
+  const column = (
     <box flexDirection="column" gap={1}>
       {reasoning.length === 0 ? null : (
         <Reasoning
           text={reasoning}
           palette={palette}
-          width={width}
-          columns={width}
           expansion={expansions.get(LIVE_REASONING) ?? 0}
         />
       )}
       {text.length === 0 ? null : <Answer text={text} palette={palette} />}
     </box>
   );
+  return width === undefined ? column : <ContentColumns columns={width}>{column}</ContentColumns>;
 }

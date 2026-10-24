@@ -58,15 +58,6 @@ export const THEME_DETAILS: Record<ThemePreference, string> = {
   light: "for a light terminal",
 };
 
-/** Returns the rows the band occupies for one ranked row count, or `0` while closed. */
-export function menuRows(count: number | null): number {
-  if (count === null || count === 0) {
-    return 0;
-  }
-  const shown = Math.min(count, MAX_COMMAND_ROWS);
-  return 2 + shown + (count > MAX_COMMAND_ROWS ? 1 : 0);
-}
-
 /**
  * Returns the rows the word the caret sits in opens.
  *
@@ -200,10 +191,4 @@ export function menuCompletion(
     return null;
   }
   return { start: menu.word.start, end: menu.word.end, text: `${row.label} ` };
-}
-
-/** Returns the window of rows the band paints around one highlighted row. */
-export function menuWindow(total: number, highlight: number): number {
-  const shown = Math.min(total, MAX_COMMAND_ROWS);
-  return Math.max(0, Math.min(highlight - shown + 1, total - shown));
 }

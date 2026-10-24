@@ -7,48 +7,43 @@
 //! `Ctrl+E` reveals one chunk at a time. The rows the affordance counts are the
 //! rows this block measured, so the number it prints is the number it hid.
 
+import { Indent, Lines, markerText, Rule } from "../../kit";
 import type { Palette } from "../../theme/palette";
-import { markerText, REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
-import { takeRows, uniqueKeys } from "./rows";
+import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
 
 /** The display rows a reasoning block shows before it collapses. */
 export const REASONING_VISIBLE_ROWS = 15;
 
-/** Renders one reasoning block at one width. */
+/** Renders one reasoning block at the columns its parent gives it. */
 export function Reasoning({
   text,
   palette,
-  width,
-  columns,
   expansion,
 }: {
   text: string;
   palette: Palette;
-  width: number;
-  /** The columns the body has: the block's width less its own indent. */
-  columns: number;
   /** How many extra chunks of rows the reader revealed. */
   expansion: number;
 }) {
-  const { shown, hidden } = takeRows(text, columns, REASONING_VISIBLE_ROWS + expansion);
   return (
     <box flexDirection="column">
       <text fg={palette.reasoningHeader}>{markerText(REASONING_GLYPH, REASONING_LABEL)}</text>
-      <box flexDirection="column" paddingLeft={2} backgroundColor={palette.panel}>
-        {shown.map((row, index) => (
-          <text key={uniqueKeys(shown)[index]} wrapMode="none" fg={palette.reasoningBody}>
-            {row}
-          </text>
-        ))}
-      </box>
-      {hidden > 0 ? (
-        <text wrapMode="none" fg={palette.reasoningMarker}>
-          {`${markerText(REASONING_EXPAND, `… ${hidden} more reasoning lines hidden — click or Ctrl+E to reveal more`)}`}
-        </text>
-      ) : null}
-      <text wrapMode="none" fg={palette.accent}>
-        {"─".repeat(Math.max(1, width))}
-      </text>
+      <Indent columns={2} background={palette.panel}>
+        <Lines
+          text={text}
+          rows={REASONING_VISIBLE_ROWS + expansion}
+          ink={palette.reasoningBody}
+          overflow={(hidden) => (
+            <text wrapMode="none" fg={palette.reasoningMarker}>
+              {markerText(
+                REASONING_EXPAND,
+                `… ${hidden} more reasoning lines hidden — click or Ctrl+E to reveal more`,
+              )}
+            </text>
+          )}
+        />
+      </Indent>
+      <Rule color={palette.accent} />
     </box>
   );
 }

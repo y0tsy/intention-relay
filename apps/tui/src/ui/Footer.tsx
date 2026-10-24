@@ -17,7 +17,7 @@
 import { useRenderer } from "@opentui/react";
 import { type RefObject, useLayoutEffect } from "react";
 import type { ThemePreference } from "../app/action";
-import { type CommandMenu, menuRows } from "../app/menu";
+import { type CommandMenu, MAX_COMMAND_ROWS } from "../app/menu";
 import {
   selectBrowserFilter,
   selectBrowserRows,
@@ -33,8 +33,8 @@ import {
 } from "../app/select";
 import type { Surface } from "../app/state";
 import type { AppStore } from "../app/store";
+import { bandSlotRows, ContentColumns, Surface as Canvas } from "../kit";
 import type { Palette } from "../theme/palette";
-import { Fill } from "./Fill";
 import { HintBand } from "./HintBand";
 import { InputBlock } from "./InputBlock";
 import {
@@ -65,7 +65,9 @@ import { Welcome } from "./Welcome";
  * into.
  */
 function hintRows(menu: CommandMenu | null, surface: Surface): number {
-  return surface === "theme" ? PICKER_ROWS : menuRows(menu?.rows.length ?? null);
+  return surface === "theme"
+    ? PICKER_ROWS
+    : bandSlotRows(menu?.rows.length ?? null, MAX_COMMAND_ROWS);
 }
 
 /** Renders the hint region: the picker's panel, or the band on the caret's word. */
@@ -76,7 +78,6 @@ function Hints({
   selection,
   theme,
   palette,
-  columns,
   rows,
 }: {
   menu: CommandMenu | null;
@@ -85,7 +86,6 @@ function Hints({
   selection: number;
   theme: ThemePreference;
   palette: Palette;
-  columns: number;
   rows: number;
 }) {
   return (
@@ -93,7 +93,7 @@ function Hints({
       {surface === "theme" ? (
         <ThemePicker selection={selection} current={theme} palette={palette} />
       ) : menu === null ? null : (
-        <HintBand menu={menu} highlight={menuHighlight} palette={palette} width={columns} />
+        <HintBand menu={menu} highlight={menuHighlight} palette={palette} />
       )}
     </box>
   );
@@ -210,7 +210,7 @@ export function Footer({
       {/* The page is painted under every row of the region first: a row that
           shows no text is still a row of the page, not a hole through it. */}
       <box position="absolute" top={0} left={0} width={width} height={height}>
-        <Fill rows={height} columns={width} color={palette.canvas} />
+        <Canvas rows={height} columns={width} color={palette.canvas} />
       </box>
       {welcome ? <box height={PANEL_MARGIN} /> : null}
       <box flexDirection="row" height={frameRows}>
@@ -227,42 +227,38 @@ export function Footer({
           paddingRight={1}
         >
           <box position="absolute" top={0} left={0} width={layout.columns} height={frameRows}>
-            <Fill rows={innerRows} columns={layout.columns} color={palette.panel} />
+            <Canvas rows={innerRows} columns={layout.columns} color={palette.panel} />
           </box>
-          {layout.liveRows === 0 ? null : (
-            <box height={layout.liveRows} flexDirection="column">
-              {welcome ? (
-                <Welcome rows={layout.liveRows} columns={layout.contentColumns} palette={palette} />
-              ) : (
-                <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
-                  <Live store={store} palette={palette} width={layout.contentColumns} />
-                </scrollbox>
-              )}
+          <ContentColumns columns={layout.contentColumns}>
+            {layout.liveRows === 0 ? null : (
+              <box height={layout.liveRows} flexDirection="column">
+                {welcome ? (
+                  <Welcome rows={layout.liveRows} palette={palette} />
+                ) : (
+                  <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
+                    <Live store={store} palette={palette} />
+                  </scrollbox>
+                )}
+              </box>
+            )}
+            {layout.hintRows === 0 ? null : (
+              <box height={layout.hintRows}>
+                <Hints
+                  menu={menu}
+                  menuHighlight={menuHighlight}
+                  surface={surface}
+                  selection={selection}
+                  theme={theme}
+                  palette={palette}
+                  rows={layout.hintRows}
+                />
+              </box>
+            )}
+            <InputBlock store={store} palette={palette} rows={layout.inputRows} />
+            <box height={layout.detailRows}>
+              <Detail store={store} palette={palette} />
             </box>
-          )}
-          {layout.hintRows === 0 ? null : (
-            <box height={layout.hintRows}>
-              <Hints
-                menu={menu}
-                menuHighlight={menuHighlight}
-                surface={surface}
-                selection={selection}
-                theme={theme}
-                palette={palette}
-                columns={layout.contentColumns}
-                rows={layout.hintRows}
-              />
-            </box>
-          )}
-          <InputBlock
-            store={store}
-            palette={palette}
-            rows={layout.inputRows}
-            columns={layout.contentColumns}
-          />
-          <box height={layout.detailRows}>
-            <Detail store={store} palette={palette} />
-          </box>
+          </ContentColumns>
         </box>
       </box>
       {browser === null ? null : (

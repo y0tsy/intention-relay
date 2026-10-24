@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Draft } from "../app/editor";
-import { commandMenu, MAX_COMMAND_ROWS, menuRows } from "../app/menu";
+import { commandMenu, MAX_COMMAND_ROWS } from "../app/menu";
+import { bandSlotRows } from "../kit";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { HintBand } from "./HintBand";
@@ -18,11 +19,7 @@ async function lines(text: string, width = 60, highlight = 0): Promise<string[]>
   const menu = commandMenu(draft(text));
   assert.ok(menu !== null, `${text} opens a band`);
   return frameLines(
-    await painted(
-      <HintBand menu={menu} highlight={highlight} palette={DARK} width={width} />,
-      width,
-      10,
-    ),
+    await painted(<HintBand menu={menu} highlight={highlight} palette={DARK} />, width, 10),
   );
 }
 
@@ -86,10 +83,14 @@ test("the theme's word ranks its declared values", async () => {
 });
 
 test("the band spends two frame rows around the rows it shows", async () => {
-  assert.equal(menuRows(null), 0);
-  assert.equal(menuRows(0), 0);
-  assert.equal(menuRows(MAX_COMMAND_ROWS), 2 + MAX_COMMAND_ROWS);
-  assert.equal(menuRows(6), 2 + MAX_COMMAND_ROWS + 1, "the overflow row reports the rest");
+  assert.equal(bandSlotRows(null, MAX_COMMAND_ROWS), 0);
+  assert.equal(bandSlotRows(0, MAX_COMMAND_ROWS), 0);
+  assert.equal(bandSlotRows(MAX_COMMAND_ROWS, MAX_COMMAND_ROWS), 2 + MAX_COMMAND_ROWS);
+  assert.equal(
+    bandSlotRows(6, MAX_COMMAND_ROWS),
+    2 + MAX_COMMAND_ROWS + 1,
+    "the overflow row reports the rest",
+  );
 });
 
 test("the band paints the rows with the first one cursored", async () => {

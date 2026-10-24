@@ -12,17 +12,20 @@
 //! fragment, and a row the filter hides is a row the cursor cannot reach.
 
 import { TextAttributes } from "@opentui/core";
-import {
-  BROWSER_TABS,
-  type BrowserTab,
-  browserColumns,
-  relativeTime,
-  tabLabel,
-} from "../app/browser";
+import { BROWSER_TABS, type BrowserTab, relativeTime, tabLabel } from "../app/browser";
 import type { SessionSummaryDto } from "../bindings";
+import {
+  browserColumnWidths,
+  Cell,
+  Pane,
+  Row,
+  Rule,
+  scrollWindow,
+  Table,
+  type TableCellStyle,
+} from "../kit";
 import type { Palette } from "../theme/palette";
 import { ACTIVE_TAB, CURSOR_MARKER, INACTIVE_TAB, ROW_MARKER, SEARCH_PLACEHOLDER } from "./glyphs";
-import { displayWidth } from "./measure";
 
 /** The keys the browser offers, as the legend spells them. */
 export const BROWSER_HINTS = [
@@ -30,19 +33,6 @@ export const BROWSER_HINTS = [
   { keys: "Tab", action: "switch tab" },
   { keys: "Esc", action: "close" },
 ];
-
-/** Returns one cell padded to its column. */
-function pad(text: string, columns: number): string {
-  return `${text}${" ".repeat(Math.max(0, columns - displayWidth(text)))}`;
-}
-
-/** Returns one cell cut to its column. */
-function truncate(text: string, columns: number): string {
-  const characters = [...text];
-  return displayWidth(text) <= columns
-    ? text
-    : `${characters.slice(0, Math.max(0, columns - 1)).join("")}…`;
-}
 
 /** Returns the tab radio row. */
 function TabRow({ tab, palette }: { tab: BrowserTab; palette: Palette }) {
@@ -82,85 +72,17 @@ function SearchBar({
 }) {
   const empty = filter.length === 0;
   return (
-    <text wrapMode="none" bg={palette.inputBg} fg={empty ? palette.inkFaint : palette.ink}>
-      {pad(empty ? SEARCH_PLACEHOLDER : filter, columns)}
-    </text>
-  );
-}
-
-/** Returns one divider band across the panel's content. */
-function Divider({ columns, palette }: { columns: number; palette: Palette }) {
-  return (
-    <text wrapMode="none" bg={palette.dividerTint} fg={palette.inkFaint}>
-      {"─".repeat(Math.max(1, columns))}
-    </text>
-  );
-}
-
-/** Returns the table's column header. */
-function HeaderRow({
-  columns,
-  palette,
-}: {
-  columns: ReturnType<typeof browserColumns>;
-  palette: Palette;
-}) {
-  const line = [
-    ROW_MARKER,
-    pad("Modified", columns.modified),
-    pad("Created", columns.created),
-    pad("Size", columns.size),
-    pad("Title", columns.title),
-    pad("Path", columns.path),
-  ].join(" ");
-  return (
-    <text
-      wrapMode="none"
-      bg={palette.headerBg}
-      fg={palette.inkMuted}
-      attributes={TextAttributes.BOLD}
-    >
-      {line}
-    </text>
-  );
-}
-
-/** Returns one session row. */
-function SessionRow({
-  session,
-  selected,
-  columns,
-  now,
-  palette,
-}: {
-  session: SessionSummaryDto;
-  selected: boolean;
-  columns: ReturnType<typeof browserColumns>;
-  now: number;
-  palette: Palette;
-}) {
-  const line = [
-    selected ? CURSOR_MARKER : ROW_MARKER,
-    pad(truncate(relativeTime(session.updated_at, now), columns.modified), columns.modified),
-    pad(truncate(relativeTime(session.created_at, now), columns.created), columns.created),
-    pad(String(session.message_count), columns.size),
-    pad(truncate(session.session_id, columns.title), columns.title),
-    pad(truncate(session.workspace_root, columns.path), columns.path),
-  ].join(" ");
-  return (
-    <text
-      wrapMode="none"
-      bg={selected ? palette.rowSelectedBg : palette.panel}
-      fg={selected ? palette.ink : palette.inkMuted}
-      attributes={selected ? TextAttributes.BOLD : undefined}
-    >
-      {line}
-    </text>
+    <Cell
+      text={empty ? SEARCH_PLACEHOLDER : filter}
+      width={columns}
+      ink={empty ? palette.inkFaint : palette.ink}
+      background={palette.inputBg}
+    />
   );
 }
 
 /** Returns the footer: the legend, and the counter of the rows the window shows. */
-function Footer({
+function BrowserFooter({
   first,
   last,
   total,
@@ -173,8 +95,8 @@ function Footer({
 }) {
   const counter = total === 0 ? "0 of 0" : `${first}-${last} of ${total}`;
   return (
-    <box flexDirection="row" backgroundColor={palette.panel}>
-      <box flexGrow={1} flexDirection="row">
+    <Row background={palette.panel}>
+      <Row grow={1}>
         {BROWSER_HINTS.map((hint, index) => (
           <text key={hint.keys} wrapMode="none">
             {index === 0 ? null : <span fg={palette.inkFaint}>{"  "}</span>}
@@ -182,11 +104,11 @@ function Footer({
             <span fg={palette.inkFaint}>{` ${hint.action}`}</span>
           </text>
         ))}
-      </box>
+      </Row>
       <text wrapMode="none" fg={palette.inkFaint}>
         {counter}
       </text>
-    </box>
+    </Row>
   );
 }
 
@@ -214,61 +136,109 @@ export function SessionBrowser({
   contentColumns: number;
   now: number;
 }) {
-  const columns = browserColumns(contentColumns);
-  const visible = Math.max(1, Math.min(dataRows, rows.length));
-  const offset = Math.max(0, Math.min(selection - visible + 1, rows.length - visible));
-  const window = rows.slice(offset, offset + visible);
+  const widths = browserColumnWidths(contentColumns);
+  const window = scrollWindow({ count: rows.length, visible: dataRows, selected: selection });
+  const shown = rows.slice(window.start, window.end);
+  const tableColumns = [
+    { key: "modified", width: widths.modified },
+    { key: "created", width: widths.created },
+    { key: "size", width: widths.size },
+    { key: "title", width: widths.title },
+    { key: "path", width: widths.path },
+  ];
+  const header = {
+    key: "__header",
+    background: palette.headerBg,
+    cells: {
+      modified: "Modified",
+      created: "Created",
+      size: "Size",
+      title: "Title",
+      path: "Path",
+    },
+  };
+  const dataRowsPainted = shown.map((session, index) => ({
+    key: session.session_id,
+    selected: window.start + index === selection,
+    background: window.start + index === selection ? palette.rowSelectedBg : palette.panel,
+    cells: {
+      modified: relativeTime(session.updated_at, now),
+      created: relativeTime(session.created_at, now),
+      size: String(session.message_count),
+      title: session.session_id,
+      path: session.workspace_root,
+    },
+  }));
   return (
-    <box
+    <Pane
       height={rows_}
-      width="100%"
-      flexDirection="column"
-      border
-      borderStyle="rounded"
-      borderColor={palette.border}
-      backgroundColor={palette.panel}
       title="Sessions"
       titleColor={palette.accentDeep}
-      titleAlignment="left"
+      borderColor={palette.border}
+      background={palette.panel}
       paddingLeft={2}
       paddingRight={2}
     >
       <box height={1} />
       <TabRow tab={tab} palette={palette} />
       <SearchBar filter={filter} columns={contentColumns} palette={palette} />
-      <Divider columns={contentColumns} palette={palette} />
-      <HeaderRow columns={columns} palette={palette} />
+      <Rule color={palette.inkFaint} columns={contentColumns} background={palette.dividerTint} />
+      <Table
+        columns={tableColumns}
+        marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
+        rows={[header]}
+        width={contentColumns}
+        renderCell={(_column, _cell, row) => headerStyle(row.key === header.key, palette)}
+        renderMarker={(row) => ({
+          ink: palette.inkMuted,
+          bold: row.key === header.key,
+        })}
+      />
       {error === null ? null : (
-        <text wrapMode="none" bg={palette.stubBg} fg={palette.error}>
-          {truncate(error, contentColumns)}
-        </text>
+        <Cell text={error} width={contentColumns} ink={palette.error} background={palette.stubBg} />
       )}
       {rows.length === 0 && error === null ? (
-        <text wrapMode="none" bg={palette.stubBg} fg={palette.accentDeep}>
-          {pad(
-            truncate("no sessions yet; send a prompt to create one", contentColumns),
-            contentColumns,
-          )}
-        </text>
-      ) : null}
-      {window.map((session, index) => (
-        <SessionRow
-          key={session.session_id}
-          session={session}
-          selected={offset + index === selection}
-          columns={columns}
-          now={now}
-          palette={palette}
+        <Cell
+          text="no sessions yet; send a prompt to create one"
+          width={contentColumns}
+          ink={palette.accentDeep}
+          background={palette.stubBg}
         />
-      ))}
+      ) : null}
+      <Table
+        columns={tableColumns}
+        marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
+        rows={dataRowsPainted}
+        width={contentColumns}
+        renderCell={(column, _cell, row) =>
+          sessionStyle(column.key, row.selected === true, palette)
+        }
+        renderMarker={(row) => ({
+          ink: row.selected === true ? palette.ink : palette.inkMuted,
+          bold: row.selected === true,
+        })}
+      />
       <box flexGrow={1} />
-      <Divider columns={contentColumns} palette={palette} />
-      <Footer
-        first={rows.length === 0 ? 0 : offset + 1}
-        last={offset + visible}
+      <Rule color={palette.inkFaint} columns={contentColumns} background={palette.dividerTint} />
+      <BrowserFooter
+        first={window.first}
+        last={window.last}
         total={rows.length}
         palette={palette}
       />
-    </box>
+    </Pane>
   );
+}
+
+/** Returns the header cell's ink. */
+function headerStyle(header: boolean, palette: Palette): TableCellStyle {
+  if (!header) {
+    return { ink: palette.inkMuted };
+  }
+  return { ink: palette.inkMuted, bold: true };
+}
+
+/** Returns one session cell's ink. */
+function sessionStyle(_column: string, selected: boolean, palette: Palette): TableCellStyle {
+  return { ink: selected ? palette.ink : palette.inkMuted, bold: selected };
 }
