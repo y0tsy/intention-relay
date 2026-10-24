@@ -10,7 +10,6 @@ export interface PrintedBlock {
 /** The palette roles the printed page paints. */
 export interface PrintPalette {
   readonly canvas: string;
-  readonly panel: string;
   readonly border: string;
 }
 

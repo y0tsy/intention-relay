@@ -193,7 +193,7 @@ test("the transcript prints the rows the daemon sent, once, above the footer", a
       "the welcome is gone once a row is printed",
     );
     assert.equal(
-      shown.printed.filter((line) => line.includes("explain this repository")).length,
+      visible(shown.printed).filter((line) => line.includes("explain this repository")).length,
       1,
       "a committed row is printed exactly once",
     );

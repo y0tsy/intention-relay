@@ -2,7 +2,22 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkRows, leadRow, pushScreen, windowRows } from "./index";
+import {
+  chunkRows,
+  leadRow,
+  pushScreen,
+  transcriptColumns,
+  TRANSCRIPT_INDENT,
+  windowRows,
+} from "./index";
+
+test("a printed row keeps the footer's own text columns", () => {
+  // The rule sits under the input's left border and the text under the input's
+  // first column, so a printed row and the composer line up at every width.
+  assert.equal(TRANSCRIPT_INDENT, 5);
+  assert.equal(transcriptColumns(80), 71);
+  assert.equal(transcriptColumns(4), 0, "a page too narrow for its rule keeps no text");
+});
 
 test("the window clears what is on screen and keeps the history", () => {
   const bytes = pushScreen(30);
@@ -30,25 +45,14 @@ test("the rows the window pushes are the rows it returns to", () => {
   }
 });
 
-test("the first print of a session opens the frame", () => {
-  const lead = leadRow(0, false);
-  assert.equal(lead.top, true, "the first print carries the frame's top edge");
+test("the first print of a session leads with nothing", () => {
+  const lead = leadRow(0);
   assert.equal(lead.separator, false, "nothing is above it to be separated from");
-  assert.equal(lead.closing, false, "no session is open above it");
 });
 
 test("a later print of the same session is separated from the block above it", () => {
-  const lead = leadRow(12, false);
+  const lead = leadRow(12);
   assert.equal(lead.separator, true, "two blocks are one blank row apart");
-  assert.equal(lead.top, false, "the frame's top edge was printed once already");
-  assert.equal(lead.closing, false);
-});
-
-test("the first print after a session switch closes the frame above it", () => {
-  const lead = leadRow(12, true);
-  assert.equal(lead.closing, true, "the previous session's frame gets its bottom edge");
-  assert.equal(lead.top, true, "and the new session's frame gets its top edge");
-  assert.equal(lead.separator, false, "the closing edge separates them");
 });
 
 test("a chunk never runs past the print", () => {

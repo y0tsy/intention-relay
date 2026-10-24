@@ -18,7 +18,7 @@ import { delta, row, run } from "../testing/fixtures";
 import { frameLines, mountApp, printedRows } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { App } from "./App";
-import { CONTENT_INDENT } from "../kit";
+import { TRANSCRIPT_INDENT } from "../kit";
 
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width = 60, height = 16) {
@@ -54,17 +54,14 @@ function withoutComposer(lines: readonly string[]): string[] {
   return lines.filter((_, index) => index !== composer);
 }
 
-/** The columns one answer's marker takes before its text. */
-const ANSWER_MARK = /^∷ /;
-
 /**
- * Returns the text of a transcript's answers, their markers aside.
+ * Returns the text of a transcript's answers.
  *
- * An answer's marker rides its first display row and the body hangs beside it,
- * so naming the marker is what makes two rows of the same answer comparable.
+ * An answer opens with its own label row and its prose follows, so the label is
+ * what two answers of the same text are compared without.
  */
 function answerRows(lines: readonly string[]): string[] {
-  return lines.map((line) => line.replace(ANSWER_MARK, "").replace(/^ {2}(?=\S)/, ""));
+  return lines.filter((line) => !line.startsWith("∷"));
 }
 
 /**
@@ -111,16 +108,16 @@ function transcriptLines(lines: readonly string[]): string[] {
 const frameEdge = /^[╭╰│╮╯─\s]*$/;
 
 /**
- * Returns the printed rows without the frame the print continues.
+ * Returns the printed rows without the rule the transcript runs beside them.
  *
- * Each printed row carries the window's own border on both sides, and the first
- * print of a session carries the frame's top edge: none of that is the block's,
- * so only what the frame holds is a row the transcript said.
+ * Every printed row carries the transcript's left rule, and a print leads with
+ * the blank row that separates two blocks: neither is the block's, so only what
+ * the rule holds is a row the transcript said.
  */
 function printedLines(rows: readonly string[]): string[] {
   const lines = rows.map((line) => {
-    const text = visible(line.slice(CONTENT_INDENT)).trimEnd();
-    return frameEdge.test(text) ? "" : text.replace(/ ?│[^│]*$/, "").trimEnd();
+    const text = visible(line.slice(TRANSCRIPT_INDENT)).trimEnd();
+    return frameEdge.test(text) ? "" : text;
   });
   while (lines.length > 0 && (lines[0] ?? "").length === 0) {
     lines.shift();
@@ -160,7 +157,7 @@ test("a keystroke never reaches the printed rows", async (t) => {
   // The mount printed the committed transcript; from here the rows are the
   // terminal's and nothing may print again.
   const committed = printedRows(setup);
-  assert.ok(printedLines(committed).some((line) => line === "∷ It relays intentions."));
+  assert.ok(printedLines(committed).some((line) => line === "It relays intentions."));
   const seen = watchParses();
   t.after(() => mock.restoreAll());
 
@@ -186,7 +183,7 @@ test("an appended row prints once and repaints nothing else", async (t) => {
   const store = offlineStore();
   const state = openSession(store, {
     messages: [row(1, "user", "first"), row(2, "assistant", "an earlier answer")],
-    run: run("completed"),
+    run: run("running"),
   });
   const setup = await mount(store, 60, 24);
   const before = setup.captureCharFrame();
@@ -201,8 +198,8 @@ test("an appended row prints once and repaints nothing else", async (t) => {
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
   assert.deepEqual(
     printedLines(rows),
-    ["∷ a later answer"],
-    "the row is printed once, between blank rows",
+    ["∷ assistant", "a later answer"],
+    "the row is printed once, under its label",
   );
   // The footer gives the printed rows back: the window paints exactly the rows
   // the print did not take, and no other row of it moves.
@@ -239,11 +236,7 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
     "every frame parses the block still being written",
   );
   const stream = transcriptLines(frameLines(setup.captureCharFrame()));
-  assert.deepEqual(
-    answerRows(stream.filter((line) => line.startsWith("∷"))),
-    ["one two three"],
-    "the tail is the answer the row becomes",
-  );
+  assert.deepEqual(answerRows(stream), ["one two three"], "the tail is the answer the row becomes");
 
   store.dispose();
   await setup.dispose();

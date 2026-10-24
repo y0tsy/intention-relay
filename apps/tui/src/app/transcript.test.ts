@@ -2,8 +2,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { row } from "../testing/fixtures";
-import { callId, transcriptBlocks } from "./transcript";
+import { row, run, RUN_ID } from "../testing/fixtures";
+import { callId, transcriptBlocks, withRunMeta } from "./transcript";
 
 /** A tool row carrying one call identity. */
 function call(id: number, callId: string, tool = "grep") {
@@ -52,4 +52,25 @@ test("a call with no result keeps a null result", () => {
 test("a row without a tool carries no call identity", () => {
   assert.equal(callId(row(1, "user", "hi")), null);
   assert.equal(callId(call(2, "c9")), "c9");
+});
+
+test("a finished run closes the blocks it wrote with its own row", () => {
+  const blocks = transcriptBlocks([row(1, "user", "hi"), row(2, "assistant", "there")]);
+  const closed = withRunMeta(blocks, run("completed"));
+  assert.deepEqual(
+    closed.map((block) => block.key),
+    ["1", "2", `meta:${RUN_ID}`],
+    "the closing row follows the run's last block",
+  );
+  assert.ok("run" in (closed[2] ?? {}), "the block carries the run it closes");
+});
+
+test("a run still in flight prints no closing row", () => {
+  const blocks = transcriptBlocks([row(1, "user", "hi")]);
+  assert.equal(withRunMeta(blocks, run("running")).length, 1);
+});
+
+test("a run whose rows the transcript does not carry prints no closing row", () => {
+  const blocks = transcriptBlocks([row(1, "user", "hi")]);
+  assert.equal(withRunMeta(blocks, run("completed", { run_id: "another-run" })).length, 1);
 });

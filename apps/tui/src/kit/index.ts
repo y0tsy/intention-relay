@@ -120,6 +120,7 @@ export {
 export { FooterFrame, type FooterPalette } from "./layout/FooterFrame";
 export { Screen } from "./screen/Screen";
 export { Printer, type PrintedBlock, type PrintPalette } from "./screen/Printer";
+export { transcriptColumns, TRANSCRIPT_INDENT } from "./screen/PrintPage";
 export { chunkRows, leadRow, type Lead } from "./screen/print-plan";
 export { createSplitScreen, closeScreen } from "./screen/terminal";
 export { pushScreen, windowRows } from "./screen/startup";

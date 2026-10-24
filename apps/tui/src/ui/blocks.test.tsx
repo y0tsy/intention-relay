@@ -3,8 +3,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
+import { run } from "../testing/fixtures";
 import { DARK } from "../theme/palette";
 import { REASONING_VISIBLE_ROWS, Reasoning } from "./blocks/Reasoning";
+import { runMetaText } from "./blocks/RunMeta";
 import { TOOL_PREVIEW_ROWS, ToolBlock } from "./blocks/ToolBlock";
 import { UserCard } from "./blocks/UserCard";
 
@@ -13,15 +15,12 @@ async function lines(element: React.ReactNode, width: number): Promise<string[]>
   return frameLines(await painted(element, width, 20));
 }
 
-test("a card frames its message on the user wash", async () => {
+test("a user row opens with its label and prints its message under it", async () => {
   const painted_ = await lines(<UserCard text="hi there" palette={DARK} />, 20);
-  assert.equal(painted_.length, 3, "a three-row card: its top border, its line, its bottom");
-  assert.match(painted_[0] ?? "", /^╭─❯ you─+╮$/);
-  assert.match(painted_[1] ?? "", /^│ hi there +│$/);
-  assert.match(painted_[2] ?? "", /^╰─+╯$/);
+  assert.deepEqual(painted_, ["❯ you", "hi there"], "the label, then the message, nothing else");
 });
 
-test("a card too narrow for a frame falls back to its rows", async () => {
+test("a user row wraps its message in a narrow column", async () => {
   const painted_ = await lines(<UserCard text="hi there" palette={DARK} />, 4);
   assert.ok(painted_.join("").includes("hi"), "the message is painted");
   assert.ok(!painted_.some((line) => line.includes("╭")), "no frame is drawn around it");
@@ -32,6 +31,26 @@ test("a reasoning block shows fifteen rows and the rows it counted", async () =>
   const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
   assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1 + 1);
   assert.ok(painted_.some((line) => /… 5 more · click or Ctrl\+E/.test(line)));
+});
+
+test("a finished run closes with its status, its seconds, and its tokens", () => {
+  const meta = runMetaText(
+    run("completed", {
+      usage: {
+        state: "reported",
+        input_tokens: 12_400,
+        output_tokens: 2_100,
+        total_tokens: 14_500,
+      },
+      started_at: 1_726_000_000,
+      finished_at: 1_726_000_004,
+    }),
+  );
+  assert.equal(meta, "run complete · 4s · 12.4k in / 2.1k out");
+});
+
+test("a run without reported usage closes with what it has", () => {
+  assert.equal(runMetaText(run("failed", { finished_at: null })), "run failed");
 });
 
 test("a tool block previews twelve rows and names the rows it hid", async () => {

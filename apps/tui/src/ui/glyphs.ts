@@ -20,6 +20,12 @@ export const USER_LABEL = "you";
  */
 export const ANSWER_GLYPH = "∷";
 
+/** The label a committed answer's marker introduces. */
+export const ASSISTANT_LABEL = "assistant";
+
+/** The glyph that opens the row a finished run closes with. */
+export const RUN_GLYPH = "▸";
+
 /** The glyph that opens a reasoning block. */
 export const REASONING_GLYPH = "∴";
 

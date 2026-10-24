@@ -35,7 +35,7 @@ export function usePrintSession<Block extends PrintedBlock>({
   blocks,
   onPrinted,
 }: {
-  /** The session the blocks belong to; a switch closes the frame above them. */
+  /** The session the blocks belong to; a switch starts its book over. */
   session: string | null;
   /** The blocks waiting to print, in transcript order. */
   blocks: readonly Block[];
@@ -53,19 +53,15 @@ export function usePrintSession<Block extends PrintedBlock>({
   // The frame that advances a print reads the job it is printing.
   const advancing = useRef<PrintJob<Block> | null>(null);
   advancing.current = currentJob;
-  // A session switch closes the frame the previous session left open, and that
-  // edge belongs to the first print after the switch even when a commit of the
-  // previous session lands in between.
-  const reopen = useRef(false);
   const pins = useRef(0);
   const replayed = useRef(false);
   /**
    * Records a block as printed and lets the next one start.
    *
    * A block of the session that is gone keeps its own book: the new session
-   * starts from nothing, and the closing edge is what joins the two. The job is
-   * state, never a ref, so the print moving forward is a render the surface's own
-   * frame carries.
+   * starts from nothing, and its first print leads with a separator like any
+   * other. The job is state, never a ref, so the print moving forward is a
+   * render the surface's own frame carries.
    */
   const settle = useCallback((done: PrintJob<Block>): void => {
     if (book.current.session === done.session) {
@@ -155,7 +151,6 @@ export function usePrintSession<Block extends PrintedBlock>({
       return;
     }
     if (book.current.session !== session) {
-      reopen.current = book.current.session !== null;
       book.current = { session, keys: NOTHING };
     }
     const current = currentJob;
@@ -171,11 +166,10 @@ export function usePrintSession<Block extends PrintedBlock>({
       setCurrentJob({
         session,
         blocks: fold,
-        lead: leadRow(book.current.keys.size, reopen.current),
+        lead: leadRow(book.current.keys.size),
         rows: 0,
         next: 0,
       });
-      reopen.current = false;
       return;
     }
     surface.render();

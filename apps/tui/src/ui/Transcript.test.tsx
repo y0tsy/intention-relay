@@ -69,15 +69,22 @@ async function lines(
   return frameLines(frame);
 }
 
-test("a committed turn reads as its card, its reasoning, and its answer", async () => {
+test("a committed turn reads as its label, its reasoning, and its answer", async () => {
   const painted_ = await lines([
     row(1, "user", "explain this repository"),
     { ...row(2, "assistant", "It relays intentions."), reasoning: "they asked" },
   ]);
-  assert.ok(painted_.some((line) => line.startsWith("╭─") && line.includes("❯ you")));
+  assert.ok(
+    painted_.some((line) => line === "❯ you"),
+    "the reader's turn opens with its label",
+  );
   assert.ok(painted_.some((line) => line.includes("explain this repository")));
   assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
-  assert.ok(painted_.some((line) => line.startsWith("∷ It relays intentions.")));
+  assert.ok(
+    painted_.some((line) => line === "∷ assistant"),
+    "the answer carries its label",
+  );
+  assert.ok(painted_.some((line) => line === "It relays intentions."));
 });
 
 test("a long reasoning collapses after fifteen rows and reveals more on a gesture", async () => {
@@ -95,7 +102,8 @@ test("a long reasoning collapses after fifteen rows and reveals more on a gestur
 test("the step in flight reads as the reasoning and the answer it becomes", async () => {
   const painted_ = await lines([], { reasoning: "...", answer: "hold on" });
   assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
-  assert.ok(painted_.includes("∷ hold on"));
+  assert.ok(painted_.some((line) => line === "∷ assistant"));
+  assert.ok(painted_.some((line) => line === "hold on"));
 });
 
 test("the step in flight borrows the expansion of the row it becomes", async () => {
@@ -152,11 +160,11 @@ test("a notice stays a plain line, never prose", async () => {
 
 test("the blocks of one turn are separated by exactly one blank row", async () => {
   const painted_ = await lines([row(1, "user", "hi"), row(2, "assistant", "hello")]);
-  const card = painted_.findIndex((line) => line.startsWith("╭─"));
-  const answer = painted_.findIndex((line) => line.includes("∷ hello"));
-  assert.ok(card >= 0 && answer > card, "the card opens the turn and the answer follows");
+  const user = painted_.indexOf("❯ you");
+  const answer = painted_.indexOf("∷ assistant");
+  assert.ok(user >= 0 && answer > user, "the reader's turn opens and the answer follows");
   assert.deepEqual(
-    painted_.slice(card, answer).filter((line) => line.trim().length === 0),
+    painted_.slice(user, answer).filter((line) => line.trim().length === 0),
     [""],
     "one blank row, not two",
   );

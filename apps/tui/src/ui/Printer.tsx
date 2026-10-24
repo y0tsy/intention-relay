@@ -2,14 +2,22 @@
 //!
 //! The kernel owns the surface, the folding, and the chunking; this module only
 //! names the block a key stands for and renders it with the expansion the store
-//! keeps for it.
+//! keeps for it. A run that has finished contributes one more block, the line the
+//! transcript closes the turn with, built from the run projection the store
+//! carries.
 
 import { useMemo } from "react";
-import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
+import {
+  selectActiveRun,
+  selectExpansions,
+  selectSessionId,
+  selectTranscript,
+} from "../app/select";
 import type { AppStore } from "../app/store";
-import { transcriptBlocks } from "../app/transcript";
+import { transcriptBlocks, withRunMeta } from "../app/transcript";
 import { Printer as KernelPrinter } from "../kit";
 import type { Palette } from "../theme/palette";
+import { RunMeta } from "./blocks/RunMeta";
 import { CommittedBlock } from "./Transcript";
 import { useStore } from "./use-store";
 
@@ -27,20 +35,25 @@ export function Printer({
   const session = useStore(store, selectSessionId);
   const messages = useStore(store, selectTranscript);
   const expansions = useStore(store, selectExpansions);
-  const transcript = useMemo(() => transcriptBlocks(messages), [messages]);
+  const run = useStore(store, selectActiveRun);
+  const blocks = useMemo(() => withRunMeta(transcriptBlocks(messages), run), [messages, run]);
   return (
     <KernelPrinter
       session={session}
-      blocks={transcript}
+      blocks={blocks}
       palette={palette}
       onPrinted={onPrinted}
-      renderBlock={(block) => (
-        <CommittedBlock
-          block={block}
-          palette={palette}
-          expansion={expansions.get(block.key) ?? 0}
-        />
-      )}
+      renderBlock={(block) =>
+        "run" in block ? (
+          <RunMeta run={block.run} palette={palette} />
+        ) : (
+          <CommittedBlock
+            block={block}
+            palette={palette}
+            expansion={expansions.get(block.key) ?? 0}
+          />
+        )
+      }
     />
   );
 }
