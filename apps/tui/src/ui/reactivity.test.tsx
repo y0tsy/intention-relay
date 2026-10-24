@@ -11,6 +11,7 @@
 
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import type { TestRendererSetup } from "@opentui/core/testing";
 import { marked } from "marked";
 import type { AppStore } from "../app/store";
 import { delta, row, run } from "../testing/fixtures";
@@ -22,6 +23,29 @@ import { CONTENT_INDENT } from "./panel";
 /** Renders the app and returns the setup a test drives it with. */
 async function mount(store: AppStore, width = 60, height = 16) {
   return mountApp(<App store={store} />, width, height);
+}
+
+/**
+ * Renders until the printer has nothing left to write, and returns the rows.
+ *
+ * A print takes a frame per chunk: the frame in between is what applies the rows
+ * the print took and puts the surface back on the window's last row, so a block
+ * that the window is too short to hold arrives over several frames.
+ */
+async function printed(setup: TestRendererSetup): Promise<string[]> {
+  const rows: string[] = [];
+  let quiet = 0;
+  for (let frame = 0; frame < 24 && quiet < 2; frame += 1) {
+    const batch = printedRows(setup);
+    rows.push(...batch);
+    if (batch.length > 0) {
+      quiet = 0;
+    } else if (rows.length > 0) {
+      quiet += 1;
+    }
+    await setup.renderOnce();
+  }
+  return rows;
 }
 
 /** Returns the frame without the composer line, which is where typing lands. */
@@ -172,10 +196,9 @@ test("an appended row prints once and repaints nothing else", async (t) => {
 
   state.applyFrame({ kind: "content", data: row(3, "assistant", "a later answer") });
   store.dispatch({ kind: "frame_received", state });
-  await setup.renderOnce();
+  const rows = await printed(setup);
 
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
-  const rows = printedRows(setup);
   assert.deepEqual(
     printedLines(rows),
     ["∷ a later answer"],
@@ -243,10 +266,7 @@ test("the streaming tail paints the rows the printed block will have", async () 
 
   state.applyFrame({ kind: "content", data: row(1, "assistant", source) });
   store.dispatch({ kind: "frame_received", state });
-  await setup.renderOnce();
-  await setup.flush();
-  await setup.renderOnce();
-  const committed = printedLines(printedRows(setup));
+  const committed = printedLines(await printed(setup));
 
   assert.deepEqual(answerRows(tail), ["- one", "- two", "", "after the list"]);
   assert.deepEqual(
@@ -255,6 +275,72 @@ test("the streaming tail paints the rows the printed block will have", async () 
     "the row lands exactly where the tail stood",
   );
 
+  store.dispose();
+  await setup.dispose();
+});
+
+test("a burst of rows prints every block once, in the order it committed", async () => {
+  const store = offlineStore();
+  const texts = Array.from(
+    { length: 24 },
+    (_, index) => `burst row ${String(index + 1).padStart(2, "0")}`,
+  );
+  openSession(store, {
+    messages: texts.map((text, index) =>
+      row(index + 1, index % 2 === 0 ? "user" : "assistant", text),
+    ),
+    run: run("completed"),
+  });
+  const setup = await mount(store, 80, 24);
+  const lines: string[] = [];
+  // One print is one block, so a burst takes a frame per block: the window does
+  // not mount the whole burst into one surface.
+  for (let frame = 0; frame < 40; frame += 1) {
+    lines.push(...printedRows(setup));
+    await setup.renderOnce();
+  }
+  const printed = printedLines(lines);
+  for (const [index, text] of texts.entries()) {
+    const seen = printed.filter((line) => line.includes(text)).length;
+    assert.equal(seen, 1, `"${text}" is printed once, not ${seen} times`);
+    if (index === 0) {
+      continue;
+    }
+    const at = printed.findIndex((line) => line.includes(text));
+    const before = printed.findIndex((line) => line.includes(texts[index - 1] as string));
+    assert.ok(before < at, `"${text}" is printed under the row before it`);
+  }
+  store.dispose();
+  await setup.dispose();
+});
+
+test("a block taller than the window prints in chunks and keeps every row", async () => {
+  const store = offlineStore();
+  const items = Array.from(
+    { length: 96 },
+    (_, index) => `- item ${String(index + 1).padStart(3, "0")}`,
+  );
+  openSession(store, {
+    messages: [row(1, "assistant", items.join("\n"))],
+    run: run("completed"),
+  });
+  const setup = await mount(store, 80, 24);
+  const lines: string[] = [];
+  let quiet = 0;
+  for (let frame = 0; frame < 40 && quiet < 3; frame += 1) {
+    const batch = printedRows(setup);
+    lines.push(...batch);
+    // One chunk per frame: the print moves on the frame that carries the rows
+    // the last chunk took, so the block arrives over several of them.
+    quiet = batch.length === 0 ? quiet + 1 : 0;
+    await setup.renderOnce();
+  }
+  const printed = printedLines(lines);
+  assert.ok(printed.length >= items.length, "every row of the block reached the terminal");
+  for (const item of items) {
+    const seen = printed.filter((line) => line.includes(item)).length;
+    assert.equal(seen, 1, `"${item}" is printed once, not ${seen} times`);
+  }
   store.dispose();
   await setup.dispose();
 });

@@ -154,6 +154,17 @@ export function footerLayout(
   };
 }
 
+/**
+ * Returns the rows one chunk of a print may carry above the footer.
+ *
+ * A chunk is written into the rows the window gave back, which are exactly the
+ * rows above the footer: a chunk taller than that would scroll the whole screen,
+ * and the copy of the footer the scroll leaves behind is never painted again.
+ */
+export function printRoom(terminalHeight: number, footerHeight: number): number {
+  return Math.max(1, Math.trunc(terminalHeight) - Math.trunc(footerHeight));
+}
+
 /** Returns how the welcome region spends `rows` rows. */
 export function welcomeLayout(rows: number): WelcomeLayout {
   const overview = Math.min(rows, OVERVIEW_ROWS);

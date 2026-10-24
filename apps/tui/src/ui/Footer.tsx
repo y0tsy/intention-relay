@@ -201,8 +201,10 @@ export function Footer({
   // printed, so the footer draws the sides and the bottom only, and the blank
   // window margin under it.
   const dockedRows = browser === null ? 0 : PANEL_GAP_ROWS + browser.rows;
-  const frameRows = height - dockedRows - layout.chromeRows + (welcome ? 2 : 1);
-  const innerRows = frameRows - (welcome ? 2 : 1);
+  // A body that a browser and a frame spend past the window's rows shows an
+  // empty frame rather than one drawn at a negative height.
+  const frameRows = Math.max(0, height - dockedRows - layout.chromeRows + (welcome ? 2 : 1));
+  const innerRows = Math.max(0, frameRows - (welcome ? 2 : 1));
   return (
     <box flexDirection="column" height={height} backgroundColor={palette.canvas}>
       {/* The page is painted under every row of the region first: a row that

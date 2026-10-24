@@ -8,6 +8,7 @@ import { AppStore } from "./app/store";
 import { IntentionClient } from "./client/client";
 import { ProcessDaemonLauncher } from "./client/daemon";
 import { resolveEndpoint } from "./client/endpoint";
+import { pushScreen } from "./startup";
 import { configPath, readThemePreference, writeThemePreference } from "./theme/config";
 import { App } from "./ui/App";
 
@@ -27,14 +28,22 @@ function daemonProgram(): string {
   return fileURLToPath(new URL(`../../../target/debug/intention-daemon${suffix}`, import.meta.url));
 }
 
+// The window owns the last rows of the screen, so what the shell printed above
+// the launch is pushed into the terminal's history before the panel paints over
+// it: the rows stay in the scrollback and the window starts empty.
+if (process.stdout.isTTY) {
+  process.stdout.write(pushScreen(process.stdout.rows));
+}
 // The window is a footer: the transcript is printed into the terminal's own
 // scrollback, so the wheel, the scrollbar, and a drag belong to the terminal and
-// the application never asks for the mouse.
+// the application never asks for the mouse. The terminal's saved lines are never
+// cleared: the rows the app printed are the session's history.
 const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   useMouse: false,
   screenMode: "split-footer",
   footerHeight: 12,
+  clearOnShutdown: false,
 });
 renderer.footerHeight = renderer.terminalHeight;
 const root = createRoot(renderer);
@@ -54,10 +63,17 @@ const store = new AppStore({
   onQuit: () => void quit(),
 });
 
-/** Leaves the terminal exactly as it was found. */
+/**
+ * Leaves the terminal while keeping what it has printed.
+ *
+ * The frame's bottom edge is the window's last row, so the shell's prompt needs
+ * a row of its own under it; the rows above stay in the terminal's history and
+ * the saved lines are never dropped.
+ */
 async function quit(): Promise<void> {
   renderer.destroy();
   await renderer.closed;
+  process.stdout.write("\n");
   process.exit(0);
 }
 

@@ -11,6 +11,7 @@ import {
   LIVE_BAND_ROWS,
   MIN_BLOCK_ROWS,
   PANEL_MARGIN,
+  printRoom,
   SESSION_CHROME_ROWS,
   WELCOME_CHROME_ROWS,
   welcomeLayout,
@@ -174,6 +175,16 @@ test("the printed transcript starts at the footer's content column", () => {
   const layout = footerLayout(80, 24, MIN_BLOCK_ROWS, 0, "session", 0);
   assert.equal(layout.contentColumns, 80 - CONTENT_INDENT * 2);
   assert.equal(layout.columns, 80 - PANEL_MARGIN * 2);
+});
+
+test("a print chunk fits the rows above the footer", () => {
+  // The rows above the footer are the rows a print gave back: a chunk taller
+  // than them scrolls the whole screen, and the footer it moves is never
+  // painted again.
+  assert.equal(printRoom(30, 14), 16);
+  assert.equal(printRoom(24, 8), 16);
+  assert.equal(printRoom(30, 30), 1, "a footer that is the whole window still prints a row");
+  assert.equal(printRoom(24, 40), 1, "a footer taller than the window cannot stop the print");
 });
 
 test("the input block grows one row per line break", () => {
