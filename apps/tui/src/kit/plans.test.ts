@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   bandColumnWidths,
   browserDataRows,
+  composerSlotRows,
   CONTENT_INDENT,
   DETAIL_ROWS,
   footerPlan,
@@ -94,7 +95,7 @@ test("the welcome pane fills the window above the input block", () => {
   assert.equal(
     welcome.chromeRows,
     WELCOME_CHROME_ROWS,
-    "the frame and both margins are the welcome's",
+    "the header and the margin under the welcome are its chrome",
   );
   assert.equal(
     welcome.liveRows,
@@ -192,6 +193,8 @@ test("a print chunk fits the rows above the footer", () => {
 test("the input block grows one row per line break", () => {
   assert.equal(inputSlotRows(""), MIN_BLOCK_ROWS);
   assert.equal(inputSlotRows("a\nb\nc\nd"), MIN_BLOCK_ROWS + 3);
+  assert.equal(composerSlotRows(""), 3, "the bare composer is a frame and one line");
+  assert.equal(composerSlotRows("a\nb"), 4, "and one row per buffer line after it");
 });
 
 test("the band gives its label and trailing cell their registry width", () => {

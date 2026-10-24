@@ -84,10 +84,10 @@ export function footerPlan(
 ): FooterLayout {
   const available = Math.max(0, terminalHeight - docked);
   const detailRows = available > 0 ? DETAIL_ROWS : 0;
-  // The welcome paints its frame from its own first row, so it also owns the
-  // blank row above the frame and the frame's top edge. A session's frame starts
-  // in the rows the transcript printed, so the footer owns only the frame's
-  // bottom edge and the blank row under it.
+  // A welcome paints an open page: its header row and the blank row under the
+  // content are the chrome. A session's frame starts in the rows the transcript
+  // printed, so the footer owns only the frame's bottom edge and the blank row
+  // under it.
   const chromeRows =
     available > 0 ? (mode === "welcome" ? WELCOME_CHROME_ROWS : SESSION_CHROME_ROWS) : 0;
   const room = Math.max(0, available - detailRows - chromeRows);
@@ -131,8 +131,8 @@ export function printRoom(terminalHeight: number, footerHeight: number): number 
   return Math.max(1, Math.trunc(terminalHeight) - Math.trunc(footerHeight));
 }
 
-/** The rows the welcome's frame spends: its two edges and the margin above and below. */
-export const WELCOME_CHROME_ROWS = 4;
+/** The rows the welcome's open page spends: its header and the margin below. */
+export const WELCOME_CHROME_ROWS = 2;
 
 /** The rows a session's frame spends: its bottom edge and the margin below it. */
 export const SESSION_CHROME_ROWS = 2;

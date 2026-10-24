@@ -14,6 +14,9 @@ import { SEPARATOR } from "./glyphs";
 /** The detail line this front end shows while no error or notice claims it. */
 export const DEFAULT_HINT = "enter sends · /new · /sessions";
 
+/** The detail line a wide window shows: every command the welcome offers. */
+export const WIDE_HINT = "enter send · /new session · /sessions browse · /theme palette";
+
 /** The word for a daemon this front end has not reached yet. */
 const CONNECTING = "Connecting…";
 
@@ -59,7 +62,7 @@ export function shortIdentifier(id: string): string {
 }
 
 /** Returns the connection word and the role it paints. */
-function connectionRun(connection: ConnectionStatus): StatusRun {
+export function connectionStatus(connection: ConnectionStatus): StatusRun {
   switch (connection) {
     case "connecting":
       return { text: CONNECTING, ink: "warning" };
@@ -169,7 +172,7 @@ function joinPieces(pieces: readonly StatusPiece[]): StatusRun[] {
  */
 export function statusRuns(facts: StatusFacts, columns = Number.POSITIVE_INFINITY): StatusRun[] {
   const pieces: StatusPiece[] = [
-    { runs: [connectionRun(facts.connection)], optional: false, rank: 0 },
+    { runs: [connectionStatus(facts.connection)], optional: false, rank: 0 },
     {
       runs:
         facts.sessionId === null
@@ -193,16 +196,24 @@ export function statusRuns(facts: StatusFacts, columns = Number.POSITIVE_INFINIT
   return joinPieces(fitted(pieces, columns));
 }
 
-/** Returns the text the detail line prints, and the role it paints. */
-export function detailRuns(facts: {
-  readonly error: string | null;
-  readonly notice: string | null;
-}): StatusRun[] {
+/**
+ * Returns the text the detail line prints, and the role it paints.
+ *
+ * A window wide enough for the full command line shows it; a narrower one keeps
+ * the same sentence short enough to stay whole.
+ */
+export function detailRuns(
+  facts: {
+    readonly error: string | null;
+    readonly notice: string | null;
+  },
+  columns = 0,
+): StatusRun[] {
   if (facts.error !== null) {
     return [{ text: facts.error, ink: "error" }];
   }
   if (facts.notice !== null) {
     return [{ text: facts.notice, ink: "inkMuted" }];
   }
-  return [{ text: DEFAULT_HINT, ink: "inkMuted" }];
+  return [{ text: columns >= 64 ? WIDE_HINT : DEFAULT_HINT, ink: "inkMuted" }];
 }

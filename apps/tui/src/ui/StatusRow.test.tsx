@@ -8,6 +8,7 @@ import {
   DEFAULT_HINT,
   DetailLine,
   detailRuns,
+  WIDE_HINT,
   type StatusFacts,
   StatusRow,
   statusRuns,
@@ -130,6 +131,11 @@ test("the detail line carries the notice, then the idle hint", () => {
     "unknown command /x",
   );
   assert.equal(textOf(detailRuns({ error: null, notice: null })), DEFAULT_HINT);
+  assert.equal(
+    textOf(detailRuns({ error: null, notice: null }, 80)),
+    WIDE_HINT,
+    "a wide page names every command",
+  );
 });
 
 test("the detail line paints one row at the panel's width", async () => {

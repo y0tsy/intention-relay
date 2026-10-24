@@ -7,9 +7,13 @@
 
 import { displayWidth } from "../text";
 import { useContentColumns, useSlotRows } from "./context";
+import { Spacer } from "./Stack";
 
 /** The rows the input's chrome takes around its buffer lines: the frame, the badge, and the status. */
 export const INPUT_CHROME_ROWS = 4;
+
+/** The rows a bare composer's frame takes around its buffer lines. */
+export const COMPOSER_CHROME_ROWS = 2;
 
 /** The glyph rendered at the input cursor position. */
 export const INPUT_CURSOR = "█";
@@ -26,6 +30,11 @@ export const MIN_BLOCK_ROWS = INPUT_CHROME_ROWS + 1;
 /** Returns the rows the input keeps for one buffer: its chrome and its lines. */
 export function inputSlotRows(text: string): number {
   return INPUT_CHROME_ROWS + Math.max(1, text.split("\n").length);
+}
+
+/** Returns the rows a bare composer keeps for one buffer: its frame and its lines. */
+export function composerSlotRows(text: string): number {
+  return COMPOSER_CHROME_ROWS + Math.max(1, text.split("\n").length);
 }
 
 /** One buffer line split around the cursor, in display columns. */
@@ -83,26 +92,47 @@ function BufferRow({
   line,
   cursor,
   columns,
+  prompt,
+  placeholder,
+  placeholderInk,
+  trailing,
+  trailingInk,
   palette,
 }: {
   first: boolean;
   line: string;
   cursor: number | null;
   columns: number;
+  prompt: string;
+  placeholder?: string;
+  placeholderInk?: string;
+  trailing?: string;
+  trailingInk?: string;
   palette: TextFieldPalette;
 }) {
-  const prefix = first ? INPUT_PROMPT : INPUT_CONTINUATION;
+  const prefix = first ? prompt : INPUT_CONTINUATION;
   const body =
     cursor === null ? { before: line, after: "" } : cursorWindow(line, cursor, columns - 2);
-  const text = cursor === null ? body.before : `${body.before}${INPUT_CURSOR}${body.after}`;
+  const showing = first && cursor !== null && line.length === 0 && placeholder !== undefined;
   return (
     <box flexDirection="row" height={1} backgroundColor={palette.inputBg}>
       <text fg={first ? palette.accent : palette.inputBg} attributes={first ? 1 : undefined}>
         {prefix}
       </text>
       <text fg={palette.ink} wrapMode="none">
-        {text}
+        {body.before}
+        {cursor === null ? null : INPUT_CURSOR}
+        {body.after}
+        {showing ? <span fg={placeholderInk ?? palette.ink}>{placeholder}</span> : null}
       </text>
+      {first && trailing !== undefined ? (
+        <>
+          <Spacer grow />
+          <text fg={trailingInk ?? palette.ink} wrapMode="none">
+            {trailing}
+          </text>
+        </>
+      ) : null}
     </box>
   );
 }
@@ -119,19 +149,37 @@ export function TextField({
   caret,
   rows,
   columns,
+  prompt = INPUT_PROMPT,
+  placeholder,
+  placeholderInk,
+  trailing,
+  trailingInk,
+  chromeRows = INPUT_CHROME_ROWS,
   palette,
 }: {
   text: string;
   caret: number;
   rows?: number;
   columns?: number;
+  /** The marker the first buffer line opens with. */
+  prompt?: string;
+  /** The dim text a first, empty line shows beside the cursor. */
+  placeholder?: string;
+  /** The ink of the placeholder; the body ink when omitted. */
+  placeholderInk?: string;
+  /** The quiet legend a first line keeps at its right edge. */
+  trailing?: string;
+  /** The ink of the trailing legend; the body ink when omitted. */
+  trailingInk?: string;
+  /** The rows the caller's frame keeps around the visible buffer lines. */
+  chromeRows?: number;
   palette: TextFieldPalette;
 }) {
   const inheritedSlot = useSlotRows(inputSlotRows(text));
   const inheritedColumns = useContentColumns();
   const slot = rows ?? inheritedSlot;
   const content = columns ?? inheritedColumns;
-  const visible = Math.max(1, slot - INPUT_CHROME_ROWS);
+  const visible = Math.max(1, slot - chromeRows);
   const caretAt = locateCaret(text, caret);
   const start = windowStart(caretAt.line, visible);
   const lines = text.split("\n");
@@ -146,6 +194,11 @@ export function TextField({
             line={line}
             cursor={index === caretAt.line ? caretAt.column : null}
             columns={content}
+            prompt={prompt}
+            placeholder={placeholder}
+            placeholderInk={placeholderInk}
+            trailing={trailing}
+            trailingInk={trailingInk}
             palette={palette}
           />
         );

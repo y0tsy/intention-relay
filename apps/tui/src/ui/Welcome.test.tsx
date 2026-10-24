@@ -1,18 +1,20 @@
-//! The welcome surface: the lockup over the version, in the region it was given.
+//! The welcome page: the open Atrium surface and its responsive commands.
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { SlotRows } from "../kit";
+import { Slot, SlotRows } from "../kit";
 import { Welcome } from "./Welcome";
 
-/** Renders the welcome pane at one region size and returns its lines. */
+/** Renders the welcome page at one region size and returns its lines. */
 async function lines(columns: number, rows: number): Promise<string[]> {
   return frameLines(
     await painted(
       <SlotRows rows={rows}>
-        <Welcome palette={DARK} />
+        <Slot>
+          <Welcome palette={DARK} />
+        </Slot>
       </SlotRows>,
       columns,
       rows,
@@ -23,7 +25,9 @@ async function lines(columns: number, rows: number): Promise<string[]> {
 test("the lockup stacks the fullwidth words and stars RELAY", async () => {
   const frame = await painted(
     <SlotRows rows={12}>
-      <Welcome palette={DARK} />
+      <Slot>
+        <Welcome palette={DARK} />
+      </Slot>
     </SlotRows>,
     40,
     12,
@@ -43,28 +47,43 @@ test("the lockup stacks the fullwidth words and stars RELAY", async () => {
     bottom.length - bottom.trimEnd().length,
     "the trailing word is centred",
   );
-  assert.match(painted_[3] ?? "", /^\s*$/, "the overview follows the wordmark");
+  assert.equal(painted_[3]?.trim(), "A local agent for the long run.", "the promise follows");
 });
 
-test("the overview is pinned to the last rows and names the version", async () => {
-  const painted_ = await lines(40, 12);
+test("a narrow page keeps the command row and the short note", async () => {
+  const text = (await lines(40, 12)).join("\n");
+  assert.match(text, /A local agent for the long run\./);
+  assert.match(text, /local-first · single-user · no cloud/);
+  assert.match(text, /\/new · \/sessions · \/theme/);
+  assert.match(text, /No session yet\./);
+});
+
+test("a wide page offers three command cards", async () => {
+  const painted_ = await lines(140, 30);
   const text = painted_.join("\n");
-  assert.match(text, /Version 0\.0\.0/);
-  assert.match(painted_.at(-1) ?? "", /╰/, "the overview's bottom edge is the last row");
+  assert.ok(painted_.join("").split("╭").length - 1 >= 3, "each command has its own card");
+  assert.match(text, /\/new/);
+  assert.match(text, /start a fresh session/);
+  assert.match(text, /01/);
+  assert.match(text, /\/sessions/);
+  assert.match(text, /browse this machine/);
+  assert.match(text, /\/theme/);
+  assert.match(text, /choose the palette/);
+  assert.match(text, /03/);
+  assert.match(text, /No session yet\. Type a prompt, or pick a command\./);
 });
 
 test("a region too short for the lockup keeps the orientation", async () => {
   const painted_ = await lines(40, 3);
-  assert.equal(painted_.length, 3);
   assert.match(painted_.join("\n"), /A local agent for the long run\./);
   assert.doesNotMatch(painted_.join("\n"), /INTENTION/);
 });
 
-test("a welcome with room for the overview names the commands and the version", async () => {
+test("a welcome with room names the commands and the empty state", async () => {
   const text = (await lines(80, 16)).join("\n");
   assert.match(text, /A local agent for the long run\./);
   assert.match(text, /\/new start · \/sessions browse · \/theme palette/);
-  assert.match(text, /Version 0\.0\.0/);
+  assert.match(text, /No session yet\. Type a prompt, or pick a command\./);
 });
 
 test("a region with no rows draws nothing", async () => {

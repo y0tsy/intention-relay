@@ -1,6 +1,9 @@
-//! The footer's frame: the page under it, the window margin, the rounded frame,
-//! and the rows it reserves for the renderer.
+//! The footer's frame: the page under it, the window margin, and the rows it
+//! reserves for the renderer.
 //!
+//! A launch paints an open page: one header row, the welcome region, and the
+//! composer on the page itself. An open session keeps the rounded frame that
+//! closes under the input, because the transcript above it is the terminal's.
 //! The frame is the one region that must agree with the renderer: its height is
 //! the footer height, and the renderer has to know it before the printer writes
 //! the rows above. The effect lives here, beside the box it measures, so a
@@ -10,7 +13,12 @@ import { useRenderer } from "@opentui/react";
 import type { ReactNode } from "react";
 import { useLayoutEffect } from "react";
 import { ContentColumns } from "./context";
-import { FOOTER_MARGIN, FOOTER_MIN_COLUMNS, type FooterLayout } from "./footer-plan";
+import {
+  CONTENT_INDENT,
+  FOOTER_MARGIN,
+  FOOTER_MIN_COLUMNS,
+  type FooterLayout,
+} from "./footer-plan";
 import { Surface } from "./Surface";
 
 /** The palette roles the frame paints. */
@@ -18,6 +26,7 @@ export interface FooterPalette {
   readonly canvas: string;
   readonly panel: string;
   readonly border: string;
+  readonly headerBg: string;
 }
 
 /** Renders the live footer over the canvas, and the surface below it. */
@@ -25,13 +34,16 @@ export function FooterFrame({
   layout,
   welcome,
   palette,
+  header,
   below,
   children,
 }: {
   layout: FooterLayout;
-  /** The welcome paints its own top edge and the row above it. */
+  /** A welcome paints the open page; a session keeps the closing frame. */
   welcome: boolean;
   palette: FooterPalette;
+  /** The welcome's top bar, painted across the page above the content. */
+  header?: ReactNode;
   /** A surface docked under the frame, before the window's bottom margin. */
   below?: ReactNode;
   children?: ReactNode;
@@ -49,8 +61,46 @@ export function FooterFrame({
     // box: the plan has already spent its body.
     return <box />;
   }
-  const frameRows = Math.max(0, rows - layout.dockedRows - layout.chromeRows + (welcome ? 2 : 1));
-  const innerRows = Math.max(0, frameRows - (welcome ? 2 : 1));
+  if (welcome) {
+    const headerRows = 1;
+    const contentRows = Math.max(0, rows - layout.dockedRows - headerRows - FOOTER_MARGIN);
+    return (
+      <box flexDirection="column" height={rows} backgroundColor={palette.canvas}>
+        <box position="absolute" top={0} left={0} width={layout.windowColumns} height={rows}>
+          <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
+        </box>
+        <box height={headerRows} backgroundColor={palette.headerBg}>
+          <box
+            position="absolute"
+            top={0}
+            left={0}
+            width={layout.windowColumns}
+            height={headerRows}
+          >
+            <Surface rows={headerRows} columns={layout.windowColumns} color={palette.headerBg} />
+          </box>
+          <box flexDirection="row" height={headerRows}>
+            <box width={CONTENT_INDENT} />
+            <box flexGrow={1}>
+              <ContentColumns columns={layout.contentColumns}>{header}</ContentColumns>
+            </box>
+            <box width={CONTENT_INDENT} />
+          </box>
+        </box>
+        <box flexDirection="row" height={contentRows}>
+          <box width={CONTENT_INDENT} />
+          <box flexDirection="column" flexGrow={1}>
+            <ContentColumns columns={layout.contentColumns}>{children}</ContentColumns>
+          </box>
+          <box width={CONTENT_INDENT} />
+        </box>
+        {below}
+        <box height={FOOTER_MARGIN} />
+      </box>
+    );
+  }
+  const frameRows = Math.max(0, rows - layout.dockedRows - layout.chromeRows + 1);
+  const innerRows = Math.max(0, frameRows - 1);
   return (
     <box flexDirection="column" height={rows} backgroundColor={palette.canvas}>
       {/* The page is painted under every row of the region first: a row that
@@ -58,7 +108,6 @@ export function FooterFrame({
       <box position="absolute" top={0} left={0} width={layout.windowColumns} height={rows}>
         <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
       </box>
-      {welcome ? <box height={FOOTER_MARGIN} /> : null}
       <box flexDirection="row" height={frameRows}>
         <box width={FOOTER_MARGIN} />
         <box
@@ -66,7 +115,7 @@ export function FooterFrame({
           height={frameRows}
           flexDirection="column"
           borderStyle="rounded"
-          border={welcome ? true : ["left", "right", "bottom"]}
+          border={["left", "right", "bottom"]}
           borderColor={palette.border}
           backgroundColor={palette.panel}
           paddingLeft={1}

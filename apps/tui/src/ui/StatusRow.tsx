@@ -24,7 +24,7 @@ import { useRunClock } from "./run-clock";
 import { detailRuns, type StatusFacts, type StatusRun, statusRuns } from "./status-phrases";
 import { useStore } from "./use-store";
 
-export { DEFAULT_HINT, detailRuns, shortIdentifier, statusRuns } from "./status-phrases";
+export { DEFAULT_HINT, detailRuns, shortIdentifier, statusRuns, WIDE_HINT } from "./status-phrases";
 export type { StatusFacts, StatusRun } from "./status-phrases";
 
 /** Returns the runs with the palette's own ink resolved. */
@@ -51,12 +51,15 @@ export function DetailLine({
   error,
   notice,
   palette,
+  columns,
 }: {
   error: string | null;
   notice: string | null;
   palette: Palette;
+  /** The line's own columns; the inherited content width when omitted. */
+  columns?: number;
 }) {
-  return <Runs runs={inked(detailRuns({ error, notice }), palette)} />;
+  return <Runs runs={inked(detailRuns({ error, notice }, columns), palette)} />;
 }
 
 /**
@@ -101,5 +104,6 @@ export function StatusLine({ store, palette }: { store: AppStore; palette: Palet
 export function Detail({ store, palette }: { store: AppStore; palette: Palette }) {
   const error = useStore(store, selectError);
   const notice = useStore(store, selectNotice);
-  return <DetailLine error={error} notice={notice} palette={palette} />;
+  const columns = useContentColumns();
+  return <DetailLine error={error} notice={notice} palette={palette} columns={columns} />;
 }

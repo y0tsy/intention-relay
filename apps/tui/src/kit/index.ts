@@ -23,6 +23,8 @@ export {
   usePrintedRows,
 } from "./layout/context";
 export { Stack, Row, Spacer } from "./layout/Stack";
+export { Columns } from "./layout/Columns";
+
 export { Line } from "./layout/Line";
 export { Slot } from "./layout/Slot";
 export { Scroll } from "./layout/Scroll";
@@ -60,10 +62,12 @@ export { scrollWindow, type ScrollWindow } from "./layout/ScrollWindow";
 export {
   TextField,
   inputSlotRows,
+  composerSlotRows,
   cursorWindow,
   locateCaret,
   windowStart,
   INPUT_CHROME_ROWS,
+  COMPOSER_CHROME_ROWS,
   INPUT_CURSOR,
   INPUT_PROMPT,
   INPUT_CONTINUATION,

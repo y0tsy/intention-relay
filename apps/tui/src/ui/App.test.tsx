@@ -9,6 +9,7 @@ import test from "node:test";
 import type { AppStore } from "../app/store";
 import { withDaemon } from "../testing/daemon-stand-in";
 import { row, run, SESSION_ID, snapshot } from "../testing/fixtures";
+import { displayWidth } from "../kit";
 import { frameLines, mountApp, printedRows } from "../testing/render";
 import { offlineStore, storeFor } from "../testing/store";
 import { App } from "./App";
@@ -49,7 +50,7 @@ function visible(lines: readonly string[]): string[] {
   return lines.map((line) => line.replace(/ /g, " "));
 }
 
-test("the window ends on the footer's own last row, with the input block framed in it", async () => {
+test("the open page fills the window and ends on the detail line", async () => {
   const store = offlineStore();
   const setup = await mountApp(<App store={store} />, 60, 16);
   const frame = setup.captureCharFrame();
@@ -58,15 +59,14 @@ test("the window ends on the footer's own last row, with the input block framed 
   const raw = visible(frame.replace(/\n$/, "").split("\n"));
   assert.equal(raw.length, 16, "the footer fills the terminal");
   const painted_ = raw.filter((line) => line.trimEnd().length > 0);
+  assert.match(painted_[0] ?? "", /INTENTION RELAY/, "the header opens the page");
   assert.match(
     painted_.at(-1) ?? "",
-    /^\s*╰─+╯\s*$/,
-    "the window's frame closes last, so nothing is left open below it",
+    /enter sends · \/new · \/sessions/,
+    "the detail line closes the page",
   );
   const framed = raw.filter((line) => line.includes("╭"));
-  // The window's own frame, the overview card, and the input block: the footer
-  // carries everything the alt-screen panel did.
-  assert.equal(framed.length, 3, "the window, the overview, and the input block frame the rows");
+  assert.equal(framed.length, 1, "the composer is the only frame on the open page");
   for (const line of raw) {
     assert.ok(line.trimEnd().length <= 60, `"${line}" fits the window`);
   }
@@ -81,24 +81,30 @@ test("every row the footer owns carries the page, blank rows included", async ()
   assert.equal(raw.length, 12, "the footer fills the terminal");
   for (const [row, line] of raw.entries()) {
     // A terminal paints only the cells an application draws, so a row left empty
-    // is a hole through the page: each row holds a glyph in every cell.
-    assert.equal(line.length, 40, `row ${row + 1} paints its full width`);
-    assert.match(line.replace(/\u00a0/g, "·"), /·/, `row ${row + 1} holds the page`);
+    // is a hole through the page: each row holds a glyph in every cell. A
+    // fullwidth word spans two cells per glyph, so the row is measured in cells,
+    // and a full row of text is a painted page even without a blank cell.
+    assert.equal(displayWidth(line), 40, `row ${row + 1} paints its full width`);
+    const painted = line.replace(/\u00a0/g, "·");
+    assert.ok(painted.trim().length > 0 || painted.includes("·"), `row ${row + 1} holds the page`);
   }
 });
 
-test("an app with nothing open paints the welcome, the input block, and the status row", async () => {
+test("an app with nothing open paints the Atrium page and its composer", async () => {
   const store = offlineStore();
   const painted_ = await lines(store, 60, 18);
   const text = painted_.join("\n");
+  assert.match(text, /INTENTION RELAY/, "the page opens with the product header");
+  assert.match(text, /v0\.0\.0/);
+  assert.match(text, /● (?:Connecting…|Ready)/);
   assert.match(text, /Ｉ Ｎ Ｔ Ｅ Ｎ Ｔ Ｉ Ｏ Ｎ/);
   assert.match(text, /✦ Ｒ Ｅ Ｌ Ａ Ｙ ✦/);
-  assert.match(text, /Version 0\.0\.0/);
-  assert.match(text, /> █/);
-  assert.match(text, /Connecting… · no session/);
-  assert.match(text, /enter sends · \/new · \/sessions/);
   assert.match(text, /A local agent for the long run\./);
+  assert.match(text, /local-first · single-user · no cloud/);
   assert.match(text, /\/new start · \/sessions browse · \/theme palette/);
+  assert.match(text, /No session yet\. Type a prompt, or pick a command\./);
+  assert.match(text, /› █ Ask anything…/);
+  assert.match(text, /enter sends · \/new · \/sessions/);
   store.dispose();
 });
 

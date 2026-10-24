@@ -33,10 +33,10 @@ function frameLines(setup: { captureCharFrame: () => string }): string[] {
 
 /** Returns the composer's line, wherever the frame put it. */
 function composerLine(setup: { captureCharFrame: () => string }): string {
-  const line = frameLines(setup).find((row) => row.includes("> ")) ?? "";
-  // The frame pads its inside to the panel's width, so the trailing border is
-  // not part of what the composer painted.
-  return line.replace(/\s*│$/, "").trimEnd();
+  const line = frameLines(setup).find((row) => row.includes("› ")) ?? "";
+  // The frame pads its inside to the panel's width, so the leading and trailing
+  // borders are not part of what the composer painted.
+  return line.replace(/^.*› /, "› ").replace(/\s*│$/, "").trimEnd();
 }
 
 test("a typed prompt reaches the composer and a return submits it", async () => {
@@ -44,10 +44,10 @@ test("a typed prompt reaches the composer and a return submits it", async () => 
   const setup = await mount(store, 60, 16);
   await setup.mockInput.pressKeys(["h", "i"]);
   await setup.renderOnce();
-  assert.match(composerLine(setup), /> hi█/);
+  assert.match(composerLine(setup), /› hi█/);
   await setup.mockInput.pressEnter();
   await setup.renderOnce();
-  assert.match(composerLine(setup), /> █/, "the draft is spent");
+  assert.match(composerLine(setup), /› █/, "the draft is spent");
   store.dispose();
   await setup.dispose();
 });
@@ -134,7 +134,7 @@ test("a wheel notch is the terminal's, and changes no row the window paints", as
   await setup.mockMouse.scroll(10, 8, "up");
   await setup.renderOnce();
   assert.deepEqual(frameLines(setup), before, "the footer is the cell it was");
-  assert.match(composerLine(setup), /> █/, "the input block still owns the keys");
+  assert.match(composerLine(setup), /› █/, "the composer still owns the keys");
   store.dispose();
   await setup.dispose();
 });
@@ -171,7 +171,7 @@ test("escape is a gesture the composer owns", async () => {
   const setup = await mount(store, 60, 16);
   await setup.mockInput.pressKeys(["h", "i"]);
   await setup.renderOnce();
-  assert.match(composerLine(setup), /> hi█/);
+  assert.match(composerLine(setup), /› hi█/);
   store.dispose();
   await setup.dispose();
 });
