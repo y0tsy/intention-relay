@@ -108,6 +108,7 @@ export function footerLayout(
   wantedHintRows: number,
   mode: FooterMode,
   docked = 0,
+  printedRows = 0,
 ): FooterLayout {
   const available = Math.max(0, terminalHeight - docked);
   const detailRows = available > 0 ? DETAIL_ROWS : 0;
@@ -126,11 +127,17 @@ export function footerLayout(
   // takes the whole window, because nothing has been printed above it yet.
   const liveRows = mode === "welcome" ? band : Math.min(band, LIVE_BAND_ROWS);
   const body = detailRows + hintRows + liveRows + inputRows;
+  const natural = Math.min(terminalHeight, Math.min(available, body) + docked);
+  // The rows nobody owns yet - a transcript shorter than the window - are the
+  // footer's: the band takes them, so the empty part of the window sits between
+  // the printed rows and the input, and the print never pads its history with
+  // blank rows to reach the window's last line.
+  const slack = Math.max(0, terminalHeight - printedRows - natural);
   return {
     columns: Math.max(0, width - PANEL_MARGIN * 2),
-    rows: Math.min(terminalHeight, Math.min(available, body) + docked),
-    body,
-    liveRows,
+    rows: natural + slack,
+    body: body + slack,
+    liveRows: liveRows + slack,
     hintRows,
     inputRows,
     detailRows,

@@ -147,12 +147,15 @@ export function Footer({
   palette,
   width,
   terminalHeight,
+  printedRows,
   footerRows,
 }: {
   store: AppStore;
   palette: Palette;
   width: number;
   terminalHeight: number;
+  /** The rows the transcript has already printed above the footer. */
+  printedRows: number;
   /** The printer reads this during its own effect, which runs after this one. */
   footerRows: RefObject<number>;
 }) {
@@ -174,6 +177,7 @@ export function Footer({
     hintRows(menu, surface),
     mode,
     browser === null ? 0 : PANEL_GAP_ROWS + browser.rows,
+    printedRows,
   );
   const height = layout.rows;
   // The rows above the footer are the terminal's; the renderer is told how many
@@ -181,6 +185,9 @@ export function Footer({
   useLayoutEffect(() => {
     footerRows.current = height;
     renderer.footerHeight = height;
+    // A print changes the rows the transcript leaves, so the region is a new one
+    // on this commit and needs the frame that applies it.
+    renderer.requestRender();
   }, [renderer, height, footerRows]);
   if (layout.columns < MIN_COLUMNS || layout.body < 1) {
     // A window too narrow to read anything in draws nothing rather than a

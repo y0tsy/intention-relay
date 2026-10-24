@@ -161,12 +161,19 @@ test("an appended row prints once and repaints nothing else", async (t) => {
   await setup.renderOnce();
 
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
-  const printed = printedLines(printedRows(setup));
-  assert.deepEqual(printed, ["∷ a later answer"], "the row is printed once, between blank rows");
+  const rows = printedRows(setup);
   assert.deepEqual(
-    frameLines(setup.captureCharFrame()),
-    before,
-    "a committed row never repaints the footer",
+    printedLines(rows),
+    ["∷ a later answer"],
+    "the row is printed once, between blank rows",
+  );
+  // The footer gives the printed rows back to the transcript: on a window the
+  // print does not fill, it shrinks by exactly the rows that were printed.
+  const after = frameLines(setup.captureCharFrame());
+  assert.equal(
+    after.length,
+    before.length - rows.length,
+    "the footer keeps every row the print did not take",
   );
 
   store.dispose();

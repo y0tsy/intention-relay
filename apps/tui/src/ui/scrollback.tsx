@@ -19,7 +19,7 @@
 //! no hole is left below it.
 
 import { createPortal, useRenderer } from "@opentui/react";
-import { type RefObject, useEffect, useLayoutEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { Palette } from "../theme/palette";
@@ -39,19 +39,13 @@ interface Printed {
 /** Nothing printed yet. */
 const NOTHING: ReadonlySet<string> = new Set();
 
-/** The rows the app has committed into the terminal's scrollback. */
-function useCommitted(): [number, (grow: number) => void] {
-  const [count, setCount] = useState(0);
-  return [count, (grow: number) => setCount((before) => before + grow)];
-}
-
 /**
- * Prints the committed blocks the window has not printed yet, padding the
- * output when it would leave the footer floating above the window's last row.
+ * Prints the committed blocks the window has not printed yet.
  *
- * `footerRows` is the footer's own height from the footer's own effect, which
- * runs first in the same commit, so the padding always matches the window the
- * rows are printed onto.
+ * Nothing but the blocks is printed: the rows a short transcript leaves are the
+ * footer's, so the history holds what the reader said and what the daemon
+ * answered, never a run of blank rows that would sit above the first question
+ * for the rest of the session.
  *
  * A session switch prints the transcript it opens under the one before it: the
  * rows a reader scrolled through are the terminal's, and nothing the application
@@ -61,14 +55,13 @@ export function Printer({
   store,
   palette,
   width,
-  terminalHeight,
-  footerRows,
+  onPrinted,
 }: {
   store: AppStore;
   palette: Palette;
   width: number;
-  terminalHeight: number;
-  footerRows: RefObject<number>;
+  /** Called with the rows a commit added, so the footer can take back the rest. */
+  onPrinted: (rows: number) => void;
 }) {
   const renderer = useRenderer();
   const session = useStore(store, selectSessionId);
@@ -77,23 +70,13 @@ export function Printer({
   const surface = useMemo(() => renderer.createScrollbackSurface(), [renderer]);
   useEffect(() => () => surface.destroy(), [surface]);
   const [printed, setPrinted] = useState<Printed>({ session: null, keys: NOTHING });
-  const [committed, addCommitted] = useCommitted();
-  const [filler, setFiller] = useState(0);
   const known = printed.session === session ? printed.keys : NOTHING;
   const pending = useMemo(
     () => blocks(messages).filter((block) => !known.has(block.key)),
     [messages, known],
   );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: footerRows is a ref; its .current the footer's own effect writes first in the same commit.
   useLayoutEffect(() => {
-    if (surface.isDestroyed || (pending.length === 0 && filler === 0)) {
-      return;
-    }
-    // The padding is a row range of its own, so it is laid out before it is
-    // committed: a block never lands above the blank rows that follow it.
-    const needed = Math.max(0, terminalHeight - (footerRows.current ?? 0) - committed);
-    if (needed > filler) {
-      setFiller(needed);
+    if (surface.isDestroyed || pending.length === 0) {
       return;
     }
     surface.render();
@@ -103,25 +86,15 @@ export function Printer({
       // next commit starts on a line of its own regardless.
       surface.commitRows(0, surface.height, { trailingNewline: false });
     }
-    addCommitted(surface.height);
-    // The rows just written can defer the footer's own height: a frame after
-    // them is what applies it, and without one the stale region would keep the
-    // window open below the footer.
-    renderer.requestRender();
-    if (filler > 0) {
-      setFiller(0);
-    }
-    if (pending.length > 0) {
-      setPrinted({ session, keys: new Set([...known, ...pending.map((block) => block.key)]) });
-    }
-  }, [surface, renderer, pending, filler, committed, terminalHeight, session, known]);
+    onPrinted(surface.height);
+    setPrinted({ session, keys: new Set([...known, ...pending.map((block) => block.key)]) });
+  }, [surface, pending, onPrinted, session, known]);
 
-  if (pending.length === 0 && filler === 0) {
+  if (pending.length === 0) {
     return null;
   }
   return createPortal(
     <box flexDirection="column" width={surface.width} backgroundColor={palette.canvas}>
-      {filler === 0 ? null : <Fill rows={filler} columns={surface.width} palette={palette} />}
       {pending.map((block) => (
         <box key={block.key} flexDirection="column">
           <box paddingLeft={CONTENT_INDENT}>

@@ -12,7 +12,7 @@
 //! step in flight each subscribe to their own values.
 
 import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ThemePreference } from "../app/action";
 import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
@@ -61,6 +61,13 @@ export function App({ store }: { store: AppStore }) {
   // The footer writes its height here in its own effect, before the printer
   // reads it in the same commit, so padded rows always match the window.
   const footerRows = useRef(0);
+  // The rows the transcript has printed above the footer: the footer takes the
+  // window rows the print does not reach, so the two never overlap and no blank
+  // row has to stand between them.
+  const [printedRows, setPrintedRows] = useState(0);
+  const addPrinted = useCallback((rows: number) => {
+    setPrintedRows((before) => before + rows);
+  }, []);
 
   useKeyboard((event) => {
     const intent = keyIntent(event, { surface, menu: menu !== null });
@@ -137,14 +144,14 @@ export function App({ store }: { store: AppStore }) {
         palette={palette}
         width={width}
         terminalHeight={terminalHeight}
+        printedRows={printedRows}
         footerRows={footerRows}
       />
       <Printer
         store={store}
         palette={palette}
         width={width - CONTENT_INDENT * 2}
-        terminalHeight={terminalHeight}
-        footerRows={footerRows}
+        onPrinted={addPrinted}
       />
     </box>
   );
