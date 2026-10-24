@@ -81,27 +81,32 @@ export function Footer({
     browser === null ? 0 : DOCK_GAP_ROWS + browser.rows,
     printedRows,
   );
+  const live =
+    welcome || layout.liveRows === 0 ? null : (
+      <SlotRows rows={layout.liveRows}>
+        <Slot>
+          <Scroll>
+            <Live store={store} palette={palette} />
+          </Scroll>
+        </Slot>
+      </SlotRows>
+    );
   return (
     <FooterFrame
       layout={layout}
       welcome={welcome}
       palette={palette}
       header={welcome ? <WelcomeHeader store={store} palette={palette} /> : undefined}
+      live={live}
       below={browser === null ? null : <Docked store={store} palette={palette} browser={browser} />}
     >
-      {layout.liveRows === 0 ? null : (
+      {welcome && layout.liveRows > 0 ? (
         <SlotRows rows={layout.liveRows}>
           <Slot>
-            {welcome ? (
-              <Welcome palette={palette} />
-            ) : (
-              <Scroll>
-                <Live store={store} palette={palette} />
-              </Scroll>
-            )}
+            <Welcome palette={palette} />
           </Slot>
         </SlotRows>
-      )}
+      ) : null}
       {layout.hintRows === 0 ? null : (
         <SlotRows rows={layout.hintRows}>
           <Hints

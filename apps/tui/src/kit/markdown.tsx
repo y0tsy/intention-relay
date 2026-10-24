@@ -26,6 +26,9 @@ export interface MarkdownPalette {
   readonly codeSurface: string;
   readonly markdownHeading: string;
   readonly markdownCode: string;
+  /** The page's accent, which a list marker wears. */
+  readonly accent: string;
+
   readonly markdownLink: string;
 }
 
@@ -136,7 +139,7 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
         <box key={key} flexDirection="column">
           {list.items.map((item, index) => (
             <box key={blockKey(index, item.raw)} flexDirection="row">
-              <text fg={palette.inkMuted}>{list.ordered ? `${start + index}. ` : "• "}</text>
+              <text fg={palette.accent}>{list.ordered ? `${start + index}. ` : "• "}</text>
               <box flexDirection="column" flexGrow={1}>
                 {item.tokens.map((inner, innerIndex) =>
                   block(inner, palette, ink, blockKey(innerIndex, inner.raw)),

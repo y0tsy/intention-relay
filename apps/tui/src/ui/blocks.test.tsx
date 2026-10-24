@@ -26,11 +26,22 @@ test("a user row wraps its message in a narrow column", async () => {
   assert.ok(!painted_.some((line) => line.includes("╭")), "no frame is drawn around it");
 });
 
-test("a reasoning block opens on its header and counts the rows it hid", async () => {
+test("a reasoning block in flight counts the rows it hid", async () => {
   const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
   const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
   assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1);
-  assert.ok(painted_.some((line) => /… 20 more · click or Ctrl\+E/.test(line)));
+  const hidden = 20 - REASONING_VISIBLE_ROWS;
+  assert.ok(painted_.some((line) => line.includes(`… ${hidden} more · click or Ctrl+E`)));
+});
+
+test("a printed reasoning keeps every row under its header", async () => {
+  const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
+  const painted_ = frameLines(
+    await painted(<Reasoning text={text} palette={DARK} printed />, 40, 30),
+  );
+  assert.equal(painted_[0], "∴ reasoning");
+  assert.equal(painted_.length, 21);
+  assert.ok(!painted_.some((line) => line.includes("more ·")));
 });
 
 test("a finished run closes with its status, its seconds, and its tokens", () => {

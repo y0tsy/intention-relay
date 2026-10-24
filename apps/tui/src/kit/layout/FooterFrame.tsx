@@ -36,6 +36,7 @@ export function FooterFrame({
   welcome,
   palette,
   header,
+  live,
   below,
   children,
 }: {
@@ -45,6 +46,8 @@ export function FooterFrame({
   palette: FooterPalette;
   /** The welcome's top bar, painted across the page above the content. */
   header?: ReactNode;
+  /** The step in flight, painted on the page above a session's frame. */
+  live?: ReactNode;
   /** A surface docked under the frame, before the window's bottom margin. */
   below?: ReactNode;
   children?: ReactNode;
@@ -102,7 +105,7 @@ export function FooterFrame({
   }
   const frameRows = Math.max(
     0,
-    rows - layout.dockedRows - layout.chromeRows + 1 - layout.slackRows,
+    rows - layout.dockedRows - layout.chromeRows + 1 - layout.slackRows - layout.liveRows,
   );
   const innerRows = Math.max(0, frameRows - 1);
   return (
@@ -113,6 +116,17 @@ export function FooterFrame({
         <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
       </box>
       <box height={layout.slackRows} />
+      {/* The step in flight is the next block of the transcript, not a row of
+          the tray: it paints on the page above the frame, at the columns a
+          printed row's text has, and the frame below it stays the tray's height. */}
+      {layout.liveRows < 1 ? null : (
+        <box flexDirection="row" height={layout.liveRows}>
+          <box width={SESSION_MARGIN + 2} />
+          <box flexGrow={1}>
+            <ContentColumns columns={layout.contentColumns}>{live}</ContentColumns>
+          </box>
+        </box>
+      )}
       <box flexDirection="row" height={frameRows}>
         <box width={SESSION_MARGIN} />
         <box

@@ -87,16 +87,17 @@ test("a committed turn reads as its label, its reasoning, and its answer", async
   assert.ok(painted_.some((line) => line === "It relays intentions."));
 });
 
-test("a long reasoning opens collapsed and reveals its rows on a gesture", async () => {
+test("a committed reasoning prints every row it was given", async () => {
   const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
-  const bounded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }]);
-  assert.ok(bounded.some((line) => /… 20 more · click or Ctrl\+E/.test(line)));
-  const expanded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }], {
-    reasoningExpansion: { "2": 20 },
-    height: 60,
-  });
-  assert.ok(expanded.some((line) => line.trim() === "thought 20"));
-  assert.ok(!expanded.some((line) => /more · click or Ctrl\+E/.test(line)));
+  const printed = await lines([{ ...row(2, "assistant", "an answer"), reasoning }], { height: 40 });
+  assert.ok(printed.some((line) => line.trim() === "thought 20"));
+  assert.ok(!printed.some((line) => /more · click or Ctrl\+E/.test(line)));
+});
+
+test("the step in flight bounds its reasoning and names what it hid", async () => {
+  const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
+  const bounded = await lines([], { reasoning, answer: "hold on", height: 30 });
+  assert.ok(bounded.some((line) => /… \d+ more · click or Ctrl\+E/.test(line)));
 });
 
 test("the step in flight reads as the reasoning and the answer it becomes", async () => {

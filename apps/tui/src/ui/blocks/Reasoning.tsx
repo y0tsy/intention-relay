@@ -1,47 +1,55 @@
 //! A reasoning block: what the model thought before it answered.
 //!
-//! The block opens with its own header, shows the first fifteen display rows of
-//! the reasoning, and closes with the accent bar that marks the end of the
-//! segment. A longer block bounds itself: the last row it paints is the expand
-//! affordance, which names how many rows stay hidden and is what a click or
-//! `Ctrl+E` reveals one chunk at a time. The rows the affordance counts are the
-//! rows this block measured, so the number it prints is the number it hid.
+//! The block opens with its own header on the muted ink the block wears, and the
+//! transcript prints the reasoning whole: a printed row is a record, and a record
+//! that keeps a part of the turn out of the log is not the log. The step in flight
+//! is bounded instead, because the footer's band is: it names the rows it hid and
+//! `Ctrl+E` reveals them one chunk at a time.
 
 import { TextAttributes } from "@opentui/core";
 import { Lines, markerText, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
 
-/** The display rows a reasoning block shows before it collapses. */
-export const REASONING_VISIBLE_ROWS = 0;
+/** The display rows the step in flight shows before it collapses. */
+export const REASONING_VISIBLE_ROWS = 4;
+
+/** More rows than any printed reasoning block paints. */
+const REASONING_WHOLE = 100_000;
 
 /** Renders one reasoning block at the columns its parent gives it. */
 export function Reasoning({
   text,
   palette,
-  expansion,
+  expansion = 0,
+  printed = false,
 }: {
   text: string;
   palette: Palette;
   /** How many extra chunks of rows the reader revealed. */
-  expansion: number;
+  expansion?: number;
+  /** Whether the block is a printed row, which keeps everything it was given. */
+  printed?: boolean;
 }) {
   return (
     <Stack>
-      <text attributes={TextAttributes.BOLD}>
-        <span fg={palette.accent}>{REASONING_GLYPH}</span>
-        <span fg={palette.reasoningHeader}>{` ${REASONING_LABEL}`}</span>
+      <text fg={palette.reasoningHeader} attributes={TextAttributes.BOLD}>
+        {markerText(REASONING_GLYPH, REASONING_LABEL)}
       </text>
       <Lines
         text={text}
-        rows={REASONING_VISIBLE_ROWS + expansion}
+        rows={printed ? REASONING_WHOLE : REASONING_VISIBLE_ROWS + expansion}
         ink={palette.reasoningBody}
         indent={2}
-        overflow={(hidden) => (
-          <text wrapMode="none" fg={palette.reasoningMarker}>
-            {markerText(REASONING_EXPAND, `… ${hidden} more · click or Ctrl+E`)}
-          </text>
-        )}
+        overflow={
+          printed
+            ? undefined
+            : (hidden) => (
+                <text wrapMode="none" fg={palette.reasoningMarker}>
+                  {markerText(REASONING_EXPAND, `… ${hidden} more · click or Ctrl+E`)}
+                </text>
+              )
+        }
       />
     </Stack>
   );

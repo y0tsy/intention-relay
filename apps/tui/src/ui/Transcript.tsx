@@ -52,7 +52,7 @@ export function CommittedBlock({
       return (
         <Stack spaced>
           {message.reasoning === null || message.reasoning.trim().length === 0 ? null : (
-            <Reasoning text={message.reasoning} palette={palette} expansion={expansion} />
+            <Reasoning text={message.reasoning} palette={palette} expansion={expansion} printed />
           )}
           {message.text.trim().length === 0 ? null : (
             <Answer text={message.text} palette={palette} />
