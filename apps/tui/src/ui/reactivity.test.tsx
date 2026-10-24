@@ -65,8 +65,12 @@ function transcriptLines(lines: readonly string[]): string[] {
     }
   }
   // The band above the input block is the step in flight; its rows are painted
-  // on the canvas, so the only chrome to peel is the block's leading spaces.
-  const body = lines.slice(0, inputTop).map((line) => visible(line).replace(/^ +/, "").trimEnd());
+  // on the panel inside the window's frame, so the margin, the frame's side, and
+  // the panel's own padding come off before the block's leading spaces.
+  const body = lines.slice(0, inputTop).map((line) => {
+    const text = visible(line);
+    return frameEdge.test(text) ? "" : text.replace(/^│ ?/, "").replace(/ ?│$/, "").trimEnd();
+  });
   while (body.length > 0 && (body[0] ?? "").trim().length === 0) {
     body.shift();
   }
@@ -77,13 +81,23 @@ function transcriptLines(lines: readonly string[]): string[] {
 }
 
 /**
- * Returns the printed rows without the indent the transcript keeps.
+ * A row that holds only the window's frame is a separator, not a row the block
+ * said: the top edge, the bottom edge, and the frame's sides on an empty row.
+ */
+const frameEdge = /^[╭╰│╮╯─\s]*$/;
+
+/**
+ * Returns the printed rows without the frame the print continues.
  *
- * The window pads a short transcript with canvas rows so the footer stays on the
- * window's last row; those rows are the terminal's, not the block's.
+ * Each printed row carries the window's own border on both sides, and the first
+ * print of a session carries the frame's top edge: none of that is the block's,
+ * so only what the frame holds is a row the transcript said.
  */
 function printedLines(rows: readonly string[]): string[] {
-  const lines = rows.map((line) => visible(line.slice(CONTENT_INDENT)).trimEnd());
+  const lines = rows.map((line) => {
+    const text = visible(line.slice(CONTENT_INDENT)).trimEnd();
+    return frameEdge.test(text) ? "" : text.replace(/ ?│[^│]*$/, "").trimEnd();
+  });
   while (lines.length > 0 && (lines[0] ?? "").length === 0) {
     lines.shift();
   }
@@ -151,7 +165,7 @@ test("an appended row prints once and repaints nothing else", async (t) => {
     run: run("completed"),
   });
   const setup = await mount(store, 60, 24);
-  const before = frameLines(setup.captureCharFrame());
+  const before = setup.captureCharFrame();
   printedRows(setup);
   const seen = watchParses();
   t.after(() => mock.restoreAll());
@@ -167,12 +181,12 @@ test("an appended row prints once and repaints nothing else", async (t) => {
     ["∷ a later answer"],
     "the row is printed once, between blank rows",
   );
-  // The footer gives the printed rows back to the transcript: on a window the
-  // print does not fill, it shrinks by exactly the rows that were printed.
-  const after = frameLines(setup.captureCharFrame());
+  // The footer gives the printed rows back: the window paints exactly the rows
+  // the print did not take, and no other row of it moves.
+  const paintedRows = (frame: string): number => frame.replace(/\n$/, "").split("\n").length;
   assert.equal(
-    after.length,
-    before.length - rows.length,
+    paintedRows(setup.captureCharFrame()),
+    paintedRows(before) - rows.length,
     "the footer keeps every row the print did not take",
   );
 

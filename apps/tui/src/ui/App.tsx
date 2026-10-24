@@ -61,9 +61,9 @@ export function App({ store }: { store: AppStore }) {
   // The footer writes its height here in its own effect, before the printer
   // reads it in the same commit, so padded rows always match the window.
   const footerRows = useRef(0);
-  // The rows the transcript has printed above the footer: the footer takes the
-  // window rows the print does not reach, so the two never overlap and no blank
-  // row has to stand between them.
+  // The rows the transcript has printed above the footer: the band takes the
+  // window rows the print does not reach, so the empty part of the window sits
+  // between the transcript and the input and no blank row lands in the history.
   const [printedRows, setPrintedRows] = useState(0);
   const addPrinted = useCallback((rows: number) => {
     setPrintedRows((before) => before + rows);

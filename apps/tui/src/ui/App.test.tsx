@@ -57,13 +57,16 @@ test("the window ends on the footer's own last row, with the input block framed 
   store.dispose();
   const raw = visible(frame.replace(/\n$/, "").split("\n"));
   assert.equal(raw.length, 16, "the footer fills the terminal");
+  const painted_ = raw.filter((line) => line.trimEnd().length > 0);
   assert.match(
-    raw.at(-1)?.trimEnd() ?? "",
-    /enter sends/,
-    "the notice line is the window's last row, so nothing is left open below it",
+    painted_.at(-1) ?? "",
+    /^\s*╰─+╯\s*$/,
+    "the window's frame closes last, so nothing is left open below it",
   );
-  const framed = raw.filter((line) => line.trimStart().startsWith("╭"));
-  assert.equal(framed.length, 2, "the overview and the input block are the only frames");
+  const framed = raw.filter((line) => line.includes("╭"));
+  // The window's own frame, the overview card, and the input block: the footer
+  // carries everything the alt-screen panel did.
+  assert.equal(framed.length, 3, "the window, the overview, and the input block frame the rows");
   for (const line of raw) {
     assert.ok(line.trimEnd().length <= 60, `"${line}" fits the window`);
   }
@@ -169,7 +172,9 @@ test("the transcript prints the rows the daemon sent, once, above the footer", a
     store.dispatch({ kind: "connect_requested" });
     await until(() => store.state.stream === "live");
     const shown = await screen(store, 60, 16);
-    const text = shown.printed.join("\n");
+    // A printed row carries the page between its glyphs, so its blanks are the
+    // page's own and read as ordinary spaces here.
+    const text = visible(shown.printed).join("\n");
     assert.match(text, /❯ you/);
     assert.match(text, /explain this repository/);
     assert.match(text, /It relays intentions\./);

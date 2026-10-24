@@ -11,8 +11,6 @@
 //! copy is a row of non-breaking spaces, which renders as a blank line anywhere
 //! and strips like whitespace.
 
-import type { Palette } from "../theme/palette";
-
 /** The glyph a blank cell holds: a space the renderer writes and keeps. */
 const BLANK = "\u00a0";
 
@@ -26,18 +24,19 @@ const BLANK = "\u00a0";
 export function Fill({
   rows,
   columns,
-  palette,
+  color,
 }: {
   rows: number;
   columns: number;
-  palette: Palette;
+  /** The page colour: a blank cell paints it in both the glyph and the cell. */
+  color: string;
 }) {
   if (rows < 1 || columns < 1) {
     return null;
   }
   const row = BLANK.repeat(columns);
   return (
-    <text fg={palette.canvas} bg={palette.canvas}>
+    <text fg={color} bg={color}>
       {Array.from({ length: rows }, () => row).join("\n")}
     </text>
   );

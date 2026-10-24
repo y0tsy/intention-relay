@@ -3,14 +3,16 @@
 //! The transcript is the terminal's scrollback, so the rows the application
 //! paints are the ones that can still change: the hint band or the theme
 //! picker's panel, the step in flight, the input block, and the notice line,
-//! inside one rounded frame. A session with nothing committed yet fills the
-//! frame with the welcome pane instead, so a launch looks exactly like the
-//! panel did.
+//! inside the window's rounded frame. A session with nothing committed yet fills
+//! the frame with the welcome pane, so a launch is the panel the alt-screen
+//! surface drew, cell for cell.
 //!
 //! The geometry comes from [`footerLayout`], and the footer tells the renderer
-//! how many rows it took: above them the terminal owns everything, below them
-//! nothing exists. The session browser is a layout row docked under the footer,
-//! and the footer reflows into the rows the browser leaves.
+//! how many rows it took: above them the terminal owns the rows the transcript
+//! printed, below them nothing exists. The footer draws the frame's bottom edge
+//! and the window's margin, so the panel the transcript printed closes on the
+//! window's last row. The session browser is a layout row docked under the
+//! footer, and the footer reflows into the rows the browser leaves.
 
 import { useRenderer } from "@opentui/react";
 import { type RefObject, useLayoutEffect } from "react";
@@ -141,7 +143,7 @@ function Docked({
   );
 }
 
-/** Renders the footer and reserves exactly the rows it painted. */
+/** Renders the footer's part of the window's frame and reserves its rows. */
 export function Footer({
   store,
   palette,
@@ -194,57 +196,77 @@ export function Footer({
     // broken box: the footer's own arithmetic has already spent its body.
     return <box />;
   }
+  const welcome = mode === "welcome";
+  // The frame closes here in a session: its top edge is the row the transcript
+  // printed, so the footer draws the sides and the bottom only, and the blank
+  // window margin under it.
+  const dockedRows = browser === null ? 0 : PANEL_GAP_ROWS + browser.rows;
+  const frameRows = height - dockedRows - layout.chromeRows + (welcome ? 2 : 1);
+  const innerRows = frameRows - (welcome ? 2 : 1);
   return (
     <box flexDirection="column" height={height} backgroundColor={palette.canvas}>
       {/* The page is painted under every row of the region first: a row that
           shows no text is still a row of the page, not a hole through it. */}
       <box position="absolute" top={0} left={0} width={width} height={height}>
-        <Fill rows={height} columns={width} palette={palette} />
+        <Fill rows={height} columns={width} color={palette.canvas} />
       </box>
-      {layout.liveRows === 0 ? null : (
-        <box height={layout.liveRows} flexDirection="column">
-          {mode === "welcome" ? (
-            <Welcome rows={layout.liveRows} columns={layout.contentColumns} palette={palette} />
-          ) : (
-            <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
-              <Live store={store} palette={palette} width={layout.contentColumns} />
-            </scrollbox>
-          )}
-        </box>
-      )}
-      {layout.hintRows === 0 ? null : (
-        <box height={layout.hintRows} paddingLeft={PANEL_MARGIN} paddingRight={PANEL_MARGIN}>
-          <Hints
-            menu={menu}
-            menuHighlight={menuHighlight}
-            surface={surface}
-            selection={selection}
-            theme={theme}
-            palette={palette}
-            columns={layout.columns}
-            rows={layout.hintRows}
-          />
-        </box>
-      )}
-      <box flexDirection="row">
+      {welcome ? <box height={PANEL_MARGIN} /> : null}
+      <box flexDirection="row" height={frameRows}>
         <box width={PANEL_MARGIN} />
-        {/* The block stretches inside its own width: a row that let it size to
-            its content would shrink it to the prompt's own text. */}
-        <box width={layout.columns}>
+        <box
+          width={layout.columns}
+          height={frameRows}
+          flexDirection="column"
+          borderStyle="rounded"
+          border={welcome ? true : ["left", "right", "bottom"]}
+          borderColor={palette.border}
+          backgroundColor={palette.panel}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <box position="absolute" top={0} left={0} width={layout.columns} height={frameRows}>
+            <Fill rows={innerRows} columns={layout.columns} color={palette.panel} />
+          </box>
+          {layout.liveRows === 0 ? null : (
+            <box height={layout.liveRows} flexDirection="column">
+              {welcome ? (
+                <Welcome rows={layout.liveRows} columns={layout.contentColumns} palette={palette} />
+              ) : (
+                <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
+                  <Live store={store} palette={palette} width={layout.contentColumns} />
+                </scrollbox>
+              )}
+            </box>
+          )}
+          {layout.hintRows === 0 ? null : (
+            <box height={layout.hintRows}>
+              <Hints
+                menu={menu}
+                menuHighlight={menuHighlight}
+                surface={surface}
+                selection={selection}
+                theme={theme}
+                palette={palette}
+                columns={layout.contentColumns}
+                rows={layout.hintRows}
+              />
+            </box>
+          )}
           <InputBlock
             store={store}
             palette={palette}
             rows={layout.inputRows}
             columns={layout.contentColumns}
           />
+          <box height={layout.detailRows}>
+            <Detail store={store} palette={palette} />
+          </box>
         </box>
-      </box>
-      <box height={layout.detailRows} paddingLeft={PANEL_MARGIN}>
-        <Detail store={store} palette={palette} />
       </box>
       {browser === null ? null : (
         <Docked store={store} palette={palette} browser={browser} columns={width - PANEL_MARGIN} />
       )}
+      <box height={PANEL_MARGIN} />
     </box>
   );
 }

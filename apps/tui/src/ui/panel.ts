@@ -69,8 +69,10 @@ export interface FooterLayout {
   readonly columns: number;
   /** The rows the footer occupies, which is what the window is asked to reserve. */
   readonly rows: number;
-  /** The rows inside the footer's frame. */
+  /** The rows the footer spends: its frame, its margin, and everything inside. */
   readonly body: number;
+  /** The rows the frame's border and the window's margin take of the body. */
+  readonly chromeRows: number;
   /** The rows of the step in flight, or of the welcome pane. */
   readonly liveRows: number;
   /** The rows above the input block: the band, or the picker's panel. */
@@ -112,7 +114,13 @@ export function footerLayout(
 ): FooterLayout {
   const available = Math.max(0, terminalHeight - docked);
   const detailRows = available > 0 ? DETAIL_ROWS : 0;
-  const room = Math.max(0, available - detailRows);
+  // The welcome paints its frame from its own first row, so it also owns the
+  // blank row above the frame and the frame's top edge. A session's frame starts
+  // in the rows the transcript printed, so the footer owns only the frame's
+  // bottom edge and the blank row under it.
+  const chromeRows =
+    available > 0 ? (mode === "welcome" ? WELCOME_CHROME_ROWS : SESSION_CHROME_ROWS) : 0;
+  const room = Math.max(0, available - detailRows - chromeRows);
   // The cap bounds the buffer lines the block shows, never its own chrome: a
   // block taller than its share windows the lines instead of growing further.
   const share = Math.floor(room / INPUT_LINE_SHARE);
@@ -126,17 +134,18 @@ export function footerLayout(
   // footer never moves while a run streams and commits. Only the welcome pane
   // takes the whole window, because nothing has been printed above it yet.
   const liveRows = mode === "welcome" ? band : Math.min(band, LIVE_BAND_ROWS);
-  const body = detailRows + hintRows + liveRows + inputRows;
+  const body = chromeRows + detailRows + hintRows + liveRows + inputRows;
   const natural = Math.min(terminalHeight, Math.min(available, body) + docked);
-  // The rows nobody owns yet - a transcript shorter than the window - are the
-  // footer's: the band takes them, so the empty part of the window sits between
-  // the printed rows and the input, and the print never pads its history with
-  // blank rows to reach the window's last line.
-  const slack = Math.max(0, terminalHeight - printedRows - natural);
+  // The rows the print has not reached are the footer's: the band takes them, so
+  // the empty part of the window sits between the transcript and the input, and
+  // a short session never pads its own history with blank rows.
+  const reached = Math.min(printedRows, terminalHeight);
+  const slack = Math.max(0, terminalHeight - reached - natural);
   return {
     columns: Math.max(0, width - PANEL_MARGIN * 2),
     rows: natural + slack,
     body: body + slack,
+    chromeRows,
     liveRows: liveRows + slack,
     hintRows,
     inputRows,
@@ -153,6 +162,12 @@ export function welcomeLayout(rows: number): WelcomeLayout {
   const lead = lockup >= LOCKUP_ROWS ? LOGO_LEAD_ROWS : 0;
   return { lead, logo: lockup - lead, filler: above - lockup, overview };
 }
+
+/** The rows the welcome's frame spends: its two edges and the margin above and below. */
+export const WELCOME_CHROME_ROWS = 4;
+
+/** The rows a session's frame spends: its bottom edge and the margin below it. */
+export const SESSION_CHROME_ROWS = 2;
 
 /** The rows above the welcome's lockup: margin, frame, padding. */
 const LOGO_LEAD_ROWS = 1;
