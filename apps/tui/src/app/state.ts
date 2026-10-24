@@ -15,87 +15,34 @@ import type {
   RunStatusDto,
   SendUserTurnOutcomeDto,
   SessionId,
-  SessionSnapshotDto,
   SessionSummariesDto,
   SessionSummaryDto,
   WorkspaceRootDto,
 } from "../bindings";
-import { runStatusIsTerminal, SessionStreamState } from "../client/stream";
 import { type Action, isClientReport, THEME_PREFERENCES, type ThemePreference } from "./action";
 import { type Arm, EXIT_ARM_NOTICE, stopArmNotice } from "./arm";
-import { BROWSER_TABS, type BrowserTab, browserRows } from "./browser";
-import { isCommandLine, notice, resolveCommand, themeValue } from "./commands";
-import {
-  type Draft,
-  type DraftEdit,
-  EMPTY_DRAFT,
-  editDraft,
-  insertNewline,
-  insertText,
-  moveCaretLine,
-  replaceDraft,
-} from "./editor";
+import type { SessionStreamState } from "../client/stream";
+import type { BrowserTab } from "./browser";
+import type { Draft } from "./editor";
 import type { Effect } from "./effect";
-import { PromptHistory } from "./history";
-import {
-  type CommandMenu,
-  commandMenu,
-  menuCompletesNothing,
-  menuCompletion,
-  menuKey,
-} from "./menu";
-import {
-  expandPastes,
-  normalisePaste,
-  type PastedText,
-  pasteIsLarge,
-  pasteLabel,
-  pasteSpans,
-} from "./paste";
-import { type RunPhase, TOOL_WORKING_AFTER_MILLIS } from "./run";
+import { type CommandMenu, menuCompletesNothing } from "./menu";
+import { Composer } from "./composer";
+import { resolveSubmission } from "./submit";
+import type { RunPhase } from "./run";
+import { ReasoningExpansions } from "./reasoning";
+import { Session, type ConnectionStatus, type StreamStatus } from "./session";
+import { RunWatch } from "./run-watch";
+import { BrowserState } from "./browser-state";
 
 /** Which surface owns the keyboard. */
 export type Surface = "chat" | "sessions" | "theme";
 
-/** How far the one live channel of a session has got. */
-export type StreamStatus = "inactive" | "live" | "failed" | "ended";
-
-/**
- * The rows of a session this front end has not opened.
- *
- * The empty list is one value, not one per read: a view subscribes to the rows
- * and compares the value it was handed, so a selector that built a fresh empty
- * list on every call would repaint forever.
- */
-const NO_ROWS: readonly MessageProjectionDto[] = [];
-
-/** Whether the daemon this front end talks to has answered. */
-export type ConnectionStatus = "connecting" | "ready" | "offline";
+export type { ConnectionStatus, StreamStatus } from "./session";
 
 /** Every value one front end holds, with no terminal attached. */
 export class AppState {
-  readonly initialSession: SessionId | null;
-  sessionId: SessionId | null = null;
-  /**
-   * The client's state of the open session, if any.
-   *
-   * The client owns the committed transcript - its rows, its one retention
-   * bound, its run projection, and its transient text - so this front end holds
-   * no second copy of any of it.
-   */
-  sessionState: SessionStreamState | null = null;
-  /**
-   * How many reconnects this front end has asked for the current stream.
-   *
-   * The budget is one reconnect per lost stream: the first loss asks for it and
-   * a second loss inside the same recovery asks for nothing, so the front end
-   * reports its typed failure instead of retrying in a loop. Only a frame the
-   * state accepts restores it: a subscription that opened and delivered no
-   * traffic leaves it spent.
-   */
-  reconnectsAsked = 0;
-  stream: StreamStatus = "inactive";
-  error: string | null = null;
+  /** The open session, its stream, and the transcript cache. */
+  readonly #session: Session;
   /**
    * The surface that owns the keyboard.
    *
@@ -104,65 +51,20 @@ export class AppState {
    * painted.
    */
   surface: Surface = "chat";
-  /** The session list the browser shows, once the daemon has answered. */
-  sessions: SessionSummariesDto | null = null;
-  /** The failure the session browser reports instead of a list. */
-  sessionsError: string | null = null;
+  /** The browser's own list, tab, and filter. */
+  readonly #browser = new BrowserState();
   /** The index the surface that owns the keyboard has highlighted. */
   selection = 0;
-  /**
-   * The browser's tab.
-   *
-   * `all` is the deliberate default: the browser opens on the whole list, so a
-   * front end with no declared workspace root still shows sessions instead of an
-   * empty current folder.
-   */
-  browserTab: BrowserTab = "all";
-  /** The word the browser filters its rows by. */
-  browserFilter = "";
-  /** The row of the command band the reader is on. */
-  menuSelection = 0;
+  /** The draft line, its history, and its command band. */
+  readonly #composer = new Composer();
   /** The palette preference the configuration file declares. */
   theme: ThemePreference;
-  /**
-   * The prompt line the composer shows, and where its caret sits.
-   *
-   * The input line is the state's own: a keystroke reaches the draft through an
-   * action, so typing never touches the committed rows a transcript lays out.
-   */
-  draft: Draft = EMPTY_DRAFT;
   /** The one-line notice the chat surface shows instead of an effect. */
   notice: string | null = null;
-  /** Whether the daemon this front end talks to has answered. */
-  connection: ConnectionStatus = "connecting";
-  /** The run mode the open session's projection carries, or `null`. */
-  sessionMode: RunModeDto | null = null;
-  /** The effective provider model the session's projection names, or `null`. */
-  sessionModel: string | null = null;
-  /** The live phase of the run this front end observes, if one is live. */
-  phase: RunPhase | null = null;
-  /** The elapsed time this front end measured for the current or last turn. */
-  elapsedMillis: number | null = null;
-  /** When the current turn began, in Unix milliseconds, or `null` before one. */
-  turnStartedAt: number | null = null;
-  /** The chunks each reasoning block has revealed, keyed by block identity. */
-  expansions: ReadonlyMap<string, number> = new Map();
-  /** The elapsed reading at which the newest open tool call was first seen. */
-  #toolSince: number | null = null;
-  /** Whether an open tool call has been in flight past the working threshold. */
-  #toolWorking = false;
-  /** The rows {@link AppState.transcript} handed out last, and their revision. */
-  #rows: readonly MessageProjectionDto[] = NO_ROWS;
-  #rowsSource: SessionStreamState | null = null;
-  #rowsRevision = -1;
-  /** The prompts this front end has submitted, for the arrow keys to walk. */
-  readonly #history = new PromptHistory();
-  /** The pastes the input line stands for with one labelled line each. */
-  #pastes: readonly PastedText[] = [];
-  /** What the last layered key press armed for its next consecutive press. */
-  #armed: Arm | null = null;
-  /** The word the band's cursor belongs to, which a new word resets. */
-  #menuWord: string | null = null;
+  /** The phase, start, and elapsed reading of the turn in flight. */
+  readonly #watch = new RunWatch();
+  /** The chunks each reasoning block has revealed. */
+  readonly #reasoning = new ReasoningExpansions();
 
   /**
    * Creates the state a front end starts from.
@@ -172,7 +74,7 @@ export class AppState {
    * `initialTheme` is the preference the configuration file declared.
    */
   constructor(initialSession: SessionId | null, initialTheme: ThemePreference = "auto") {
-    this.initialSession = initialSession;
+    this.#session = new Session(initialSession);
     this.theme = initialTheme;
   }
 
@@ -183,30 +85,30 @@ export class AppState {
     // frames, the front end's elapsed readings - arrives between two presses
     // without being an action of the user's at all.
     if (!isClientReport(action) && !this.#armedIsPressedBy(action)) {
-      this.#armed = null;
+      this.#composer.armed = null;
     }
     switch (action.kind) {
       case "connect_requested":
-        this.connection = "connecting";
+        this.#session.connection = "connecting";
         return [{ kind: "connect" }];
       case "bootstrapped":
-        return this.#applyBootstrapped();
+        return this.#session.bootstrapped();
       case "bootstrap_failed":
-        return this.#applyBootstrapFailed(action.error);
+        return this.#session.bootstrapFailed(action.error);
       case "session_snapshot_loaded":
-        return this.#applySessionSnapshot(action.snapshot);
+        return this.#session.snapshot(action.snapshot);
       case "session_snapshot_failed":
         return this.#applyFailure(action.error);
       case "session_created":
-        return this.#applySessionCreated(action.sessionId);
+        return this.#session.created(action.sessionId);
       case "session_create_failed":
         return this.#applyFailure(action.error);
       case "session_stream_opened":
-        return this.#applySessionStreamOpened(action.state);
+        return this.#session.streamOpened(action.state);
       case "session_stream_failed":
-        return this.#applySessionStreamFailed(action.error);
+        return this.#session.streamFailed(action.error);
       case "session_stream_ended":
-        return this.#applySessionStreamEnded();
+        return this.#session.streamEnded();
       case "frame_received":
         return this.#applyFrame(action.state);
       case "turn_accepted":
@@ -214,7 +116,7 @@ export class AppState {
       case "turn_failed":
         return this.#applyFailure(action.error);
       case "elapsed_reported":
-        this.#applyElapsedReported(action.millis);
+        this.#watch.reportElapsed(action.millis, this.activeRun?.open_tool_calls ?? 0);
         return [];
       case "reasoning_expanded":
         this.#applyReasoningExpanded(action.id);
@@ -225,25 +127,24 @@ export class AppState {
       case "effect_failed":
         return this.#applyFailure(action.error);
       case "draft_typed":
-        this.draft = insertText(this.draft, action.text);
-        this.#refreshMenu();
+        this.#composer.type(action.text);
         return [];
       case "draft_pasted":
-        this.#applyDraftPasted(action.text);
+        this.#composer.paste(action.text);
         return [];
       case "draft_edited":
-        this.#applyDraftEdited(action.edit);
+        this.#composer.edit(action.edit);
         return [];
       case "draft_newline":
-        this.draft = insertNewline(this.draft);
-        this.#refreshMenu();
+        this.#composer.newline();
         return [];
       case "escape_pressed":
         return this.#applyEscape();
       case "ctrl_c_pressed":
         return this.#applyCtrlC();
       case "history_recalled":
-        return this.#applyHistoryRecalled(action.delta);
+        this.#composer.recall(action.delta);
+        return [];
       case "notice_shown":
         this.notice = action.text;
         return [];
@@ -258,34 +159,34 @@ export class AppState {
       case "sessions_requested":
         return this.#applySessionsRequested();
       case "sessions_listed":
-        this.sessions = action.summaries;
-        this.sessionsError = null;
+        this.#browser.listed(action.summaries);
         this.selection = 0;
         return [];
       case "sessions_list_failed":
-        this.sessions = null;
-        this.sessionsError = `${action.error.code}: ${action.error.message}`;
+        this.#browser.failed(`${action.error.code}: ${action.error.message}`);
+        this.selection = 0;
         return [];
       case "selection_moved":
         return this.#applySelectionMoved(action.delta);
       case "selection_committed":
         return this.#applySelectionCommitted();
       case "browser_filter_typed":
-        this.browserFilter += action.text;
+        this.#browser.typeFilter(action.text);
         this.selection = 0;
         return [];
       case "browser_filter_backspace":
-        this.browserFilter = [...this.browserFilter].slice(0, -1).join("");
+        this.#browser.backspaceFilter();
         this.selection = 0;
         return [];
       case "browser_tab_moved":
-        this.#applyBrowserTabMoved(action.delta);
+        this.#browser.moveTab(action.delta);
+        this.selection = 0;
         return [];
       case "menu_moved":
-        this.menuSelection += action.delta;
+        this.#composer.moveMenu(action.delta);
         return [];
       case "menu_accepted":
-        this.#acceptMenu();
+        this.#composer.acceptMenu();
         return [];
       case "surface_closed":
         return this.#applySurfaceClosed();
@@ -307,63 +208,39 @@ export class AppState {
     return 0;
   }
 
-  /**
-   * Returns the row of the command band the reader is on.
-   *
-   * The cursor is the state's, and it is clamped to the rows the current word
-   * ranks: a keystroke that narrows the list leaves the cursor on a row that
-   * exists, and a band with no rows cursors nothing. The walk stops at the
-   * first and last row instead of wrapping, which is the same bounded walk the
-   * session browser's cursor makes.
-   */
+  /** Returns the row of the command band the reader is on. */
   get menuHighlight(): number {
-    const rows = this.menu?.rows.length ?? 0;
-    if (rows === 0) {
-      return 0;
-    }
-    return Math.min(rows - 1, Math.max(0, this.menuSelection));
+    return this.#composer.menuHighlight;
   }
 
-  /**
-   * Resets the band's cursor whenever the word it ranks is another word.
-   *
-   * A word that ranks other rows is another list, and the row the reader was on
-   * says nothing about it; the same word keeps the row it had, so a caret that
-   * moves inside a word does not move the highlight.
-   */
-  #refreshMenu(): void {
-    const menu = this.menu;
-    const word = menu === null ? null : menuKey(menu);
-    if (word !== this.#menuWord) {
-      this.#menuWord = word;
-      this.menuSelection = 0;
-    }
+  /** Returns the session list the browser shows, once the daemon answered. */
+  get sessions(): SessionSummariesDto | null {
+    return this.#browser.summaries;
+  }
+
+  /** Returns the failure the session browser reports instead of a list. */
+  get sessionsError(): string | null {
+    return this.#browser.failure;
+  }
+
+  /** Returns the browser's tab. */
+  get browserTab(): BrowserTab {
+    return this.#browser.tab;
+  }
+
+  /** Returns the word the browser filters its rows by. */
+  get browserFilter(): string {
+    return this.#browser.filter;
   }
 
   /** Returns the rows the browser's tab and filter show. */
   get browserRows(): readonly SessionSummaryDto[] {
-    return browserRows(
-      this.sessions?.sessions ?? [],
-      this.browserTab,
-      this.browserFilter,
-      this.workspaceRoot ?? "",
-    );
+    return this.#browser.rows(this.workspaceRoot ?? "");
   }
-
-  /** Returns the workspace root the folder tab filters by, when one is known. */
-  workspaceRoot: WorkspaceRootDto | null = null;
 
   /** Returns the session the browser has highlighted. */
   get selectedSession(): SessionId | null {
-    return this.browserRows[this.selection]?.session_id ?? null;
-  }
-
-  /** Switches the browser's tab and keeps the cursor on a row that exists. */
-  #applyBrowserTabMoved(delta: number): void {
-    const index = BROWSER_TABS.indexOf(this.browserTab);
-    const count = BROWSER_TABS.length;
-    this.browserTab = BROWSER_TABS[(((index + delta) % count) + count) % count] ?? "all";
-    this.selection = 0;
+    return this.#browser.rows(this.workspaceRoot ?? "")[this.selection]?.session_id ?? null;
   }
 
   /** Returns the theme preference the picker has highlighted. */
@@ -371,185 +248,139 @@ export class AppState {
     return THEME_PREFERENCES[this.selection] ?? null;
   }
 
-  /**
-   * Returns the committed transcript rows of the current session.
-   *
-   * The client mutates its rows in place, so the rows a view compares are copied
-   * once per revision: the same read hands back the same list, and an appended
-   * row hands back a new one.
-   */
-  get transcript(): readonly MessageProjectionDto[] {
-    const state = this.sessionState;
-    if (state === null) {
-      return NO_ROWS;
-    }
-    if (this.#rowsSource !== state || this.#rowsRevision !== state.revision) {
-      this.#rowsSource = state;
-      this.#rowsRevision = state.revision;
-      this.#rows = state.messages.slice();
-    }
-    return this.#rows;
+  /** Returns the session the caller selected, or `null` before one opens. */
+  get initialSession(): SessionId | null {
+    return this.#session.initialSession;
   }
 
-  /** Returns the rows the band shows for the word the caret sits in, if any. */
-  get menu(): CommandMenu | null {
-    return commandMenu(this.draft);
+  /** Returns the open session's identity, or `null` before one is open. */
+  get sessionId(): SessionId | null {
+    return this.#session.sessionId;
+  }
+
+  /** Sets the open session's identity. */
+  set sessionId(value: SessionId | null) {
+    this.#session.sessionId = value;
+  }
+
+  /** Returns the client state of the open session, if any. */
+  get sessionState(): SessionStreamState | null {
+    return this.#session.sessionState;
+  }
+
+  /** Sets the client state of the open session. */
+  set sessionState(value: SessionStreamState | null) {
+    this.#session.sessionState = value;
+  }
+
+  /** Returns how many reconnects this front end has asked for. */
+  get reconnectsAsked(): number {
+    return this.#session.reconnectsAsked;
+  }
+
+  /** Returns how far the one live channel has got. */
+  get stream(): StreamStatus {
+    return this.#session.stream;
+  }
+
+  /** Sets how far the one live channel has got. */
+  set stream(value: StreamStatus) {
+    this.#session.stream = value;
+  }
+
+  /** Returns the failure the chat surface reports. */
+  get error(): string | null {
+    return this.#session.error;
+  }
+
+  /** Sets the failure the chat surface reports. */
+  set error(value: string | null) {
+    this.#session.error = value;
+  }
+
+  /** Returns whether the daemon this front end talks to has answered. */
+  get connection(): ConnectionStatus {
+    return this.#session.connection;
+  }
+
+  /** Returns the run mode the open session projects, if any. */
+  get sessionMode(): RunModeDto | null {
+    return this.#session.sessionMode;
+  }
+
+  /** Returns the effective provider model, if any. */
+  get sessionModel(): string | null {
+    return this.#session.sessionModel;
+  }
+
+  /** Returns the workspace root the folder tab filters by, if known. */
+  get workspaceRoot(): WorkspaceRootDto | null {
+    return this.#session.workspaceRoot;
+  }
+
+  /** Sets the workspace root the folder tab filters by. */
+  set workspaceRoot(value: WorkspaceRootDto | null) {
+    this.#session.workspaceRoot = value;
+  }
+
+  /** Returns the committed transcript rows of the current session. */
+  get transcript(): readonly MessageProjectionDto[] {
+    return this.#session.transcript;
   }
 
   /** Returns the last known run projection. */
   get activeRun(): RunProjectionDto | null {
-    return this.sessionState?.run ?? null;
+    return this.#session.activeRun;
   }
 
   /** Returns the last known run lifecycle status. */
   get runStatus(): RunStatusDto | null {
-    return this.sessionState?.status ?? null;
+    return this.#session.runStatus;
   }
 
-  /** Returns the transient answer text of the model step in flight. */
+  /** Returns the transient answer text of the step in flight. */
   get provisionalText(): string {
-    return this.sessionState?.provisionalText ?? "";
+    return this.#session.provisionalText;
   }
 
-  /** Returns the transient reasoning text of the model step in flight. */
+  /** Returns the transient reasoning text of the step in flight. */
   get provisionalReasoning(): string {
-    return this.sessionState?.provisionalReasoning ?? "";
+    return this.#session.provisionalReasoning;
   }
 
-  /**
-   * Returns the run this front end currently observes as live.
-   *
-   * A run counts as live only while a live subscription observes it: the
-   * projection outlives the stream when the daemon dies, and a front end that
-   * trusted it would keep offering to stop a run nobody runs any more.
-   */
+  /** Returns the run this front end observes as live, if any. */
   get liveRun(): RunProjectionDto | null {
-    if (this.stream !== "live") {
-      return null;
-    }
-    const run = this.activeRun;
-    if (run === null || isTerminal(run.status)) {
-      return null;
-    }
-    return run;
+    return this.#session.liveRun;
   }
 
-  /** Records a ready daemon and asks for the selected session. */
-  #applyBootstrapped(): readonly Effect[] {
-    this.error = null;
-    this.connection = "ready";
-    const sessionId = this.sessionId ?? this.initialSession;
-    return sessionId === null ? [] : [{ kind: "open_session", sessionId }];
+  /** Returns the chunks each reasoning block has revealed. */
+  get expansions(): ReadonlyMap<string, number> {
+    return this.#reasoning.expansions;
   }
 
-  /** Shows one session snapshot and opens the one subscription it needs. */
-  #applySessionSnapshot(snapshot: SessionSnapshotDto): readonly Effect[] {
-    const read = SessionStreamState.fromSnapshot(snapshot);
-    this.#mergeTranscript(read);
-    this.sessionId = snapshot.session_id;
-    this.sessionMode = snapshot.projection.mode;
-    this.sessionModel = snapshot.projection.provider_model ?? null;
-    this.stream = "inactive";
-    this.error = null;
-    // Opening a session records no notice: the notice line stays free for real
-    // transient events.
-    return this.#ensureSessionStream();
+  /** Returns the line the composer shows. */
+  get draft(): Draft {
+    return this.#composer.draft;
   }
 
-  /** Opens the session the daemon just created. */
-  #applySessionCreated(sessionId: SessionId): readonly Effect[] {
-    this.error = null;
-    return [{ kind: "open_session", sessionId }];
+  /** Sets the line the composer shows. */
+  set draft(value: Draft) {
+    this.#composer.draft = value;
   }
 
-  /**
-   * Merges one read of a session's durable transcript into the client state.
-   *
-   * Rows are matched by durable identity, so a read of the session this front
-   * end already holds joins the rows it has; a read of another session seeds the
-   * state, because a front end holds exactly one session's rows.
-   */
-  #mergeTranscript(read: SessionStreamState): void {
-    if (this.sessionId !== read.sessionId || this.sessionState === null) {
-      this.sessionState = read;
-      return;
-    }
-    this.sessionState.reconcile(read);
+  /** Returns the row of the command band the reader is on. */
+  get menuSelection(): number {
+    return this.#composer.menuSelection;
   }
 
-  /**
-   * Takes the client's committed state of a freshly opened subscription.
-   *
-   * An accepted subscription proves only that a stream exists: the reconnect
-   * budget a loss spent stays spent until a frame the state accepts shows the
-   * stream is carrying the session's traffic.
-   */
-  #applySessionStreamOpened(state: SessionStreamState): readonly Effect[] {
-    this.sessionState = state;
-    this.stream = "live";
-    this.error = null;
-    return [];
+  /** Sets the row of the command band the reader is on. */
+  set menuSelection(value: number) {
+    this.#composer.menuSelection = value;
   }
 
-  /**
-   * Records a subscription that failed to open or stay live.
-   *
-   * The stream is this front end's one live channel, so its loss is not a dead
-   * end: the state ends the observation the stream justified and asks for the
-   * one reconnect this loss is owed.
-   */
-  #applySessionStreamFailed(error: ErrorDto): readonly Effect[] {
-    this.stream = "failed";
-    this.#endStreamObservation();
-    return [...this.#applyFailure(error), ...this.#reconnectOnce()];
-  }
-
-  /** Records a stream the daemon closed: the same loss, the same one reconnect. */
-  #applySessionStreamEnded(): readonly Effect[] {
-    this.stream = "ended";
-    this.#endStreamObservation();
-    return this.#reconnectOnce();
-  }
-
-  /** Ends the observation the lost stream justified. */
-  #endStreamObservation(): void {
-    this.sessionState?.endStream();
-  }
-
-  /**
-   * Returns the one reconnect this front end asks for after a lost stream.
-   *
-   * The loss stays visible: a typed failure keeps its error line, and the stream
-   * status keeps naming the loss.
-   */
-  #reconnectOnce(): readonly Effect[] {
-    if (this.reconnectsAsked > 0) {
-      return [];
-    }
-    this.reconnectsAsked += 1;
-    return [{ kind: "connect" }];
-  }
-
-  /**
-   * Applies one run-stream frame the client already derived.
-   *
-   * The client applies every frame to the one session state it exposes, so the
-   * state carried beside the frame is the derivation's own result: this front
-   * end holds it instead of replaying the frame into a copy of its own.
-   */
-  #applyFrame(state: SessionStreamState): readonly Effect[] {
-    if (this.stream !== "live") {
-      // A frame for a subscription this front end no longer holds is stale;
-      // dropping it keeps the committed rows authoritative.
-      return [];
-    }
-    this.#applyPhase(state);
-    this.sessionState = state;
-    // A frame the client accepted is the evidence that this stream carries the
-    // session's traffic: the one reconnect a later loss is owed is restored
-    // here, and never by a subscription that only opened.
-    this.reconnectsAsked = 0;
-    return [];
+  /** Returns the rows the band shows for the word the caret sits in, if any. */
+  get menu(): CommandMenu | null {
+    return this.#composer.menu;
   }
 
   /**
@@ -561,146 +392,11 @@ export class AppState {
    * re-established.
    */
   #applyTurnAccepted(outcome: SendUserTurnOutcomeDto): readonly Effect[] {
-    this.error = null;
-    if (this.sessionId === null) {
+    if (!this.#session.turnStarted(outcome)) {
       return [];
     }
-    switch (outcome.kind) {
-      case "started":
-      case "pending":
-        this.#beginTurn();
-        return this.#ensureSessionStream();
-    }
-  }
-
-  /**
-   * Recalls one earlier prompt into the input line.
-   *
-   * A walk that comes back to the live draft leaves what the user had typed
-   * alone: the draft is the fallback, so an accidental arrow key never spends a
-   * half-written prompt.
-   */
-  #applyHistoryRecalled(delta: number): readonly Effect[] {
-    // A multi-line prompt is navigated the way its own rows are: the arrows
-    // move the caret while the draft carries a line in that direction, and only
-    // at the first and last line do they walk the history.
-    const moved = moveCaretLine(this.draft, delta);
-    if (moved !== null) {
-      this.draft = moved;
-      this.#refreshMenu();
-      return [];
-    }
-    const recalled = this.#history.navigate(delta);
-    if (recalled !== null) {
-      this.draft = replaceDraft(recalled);
-      this.#pastes = [];
-      this.#refreshMenu();
-    }
-    return [];
-  }
-
-  /**
-   * Applies one caret edit, with a paste label read as one unit.
-   *
-   * Removing one character of a label would leave a label standing for nothing,
-   * so the whole label goes at once, exactly as it was inserted, and the caret
-   * steps over one instead of into it.
-   */
-  #applyDraftEdited(edit: DraftEdit): void {
-    const spans = pasteSpans(this.draft.text, this.#pastes);
-    const caret = this.draft.caret;
-    const removal =
-      edit === "backspace"
-        ? spans.find((span) => span.start < caret && caret <= span.end)
-        : edit === "delete"
-          ? spans.find((span) => span.start === caret)
-          : undefined;
-    if (removal !== undefined) {
-      this.draft = {
-        text: this.draft.text.slice(0, removal.start) + this.draft.text.slice(removal.end),
-        caret: removal.start,
-      };
-      this.#pastes = this.#pastes.filter((_, index) => index !== removal.index);
-      this.#refreshMenu();
-      return;
-    }
-    const step = spans.find((span) =>
-      edit === "left" ? span.end === caret : edit === "right" ? span.start === caret : false,
-    );
-    if (step !== undefined) {
-      this.draft = { text: this.draft.text, caret: edit === "left" ? step.start : step.end };
-      return;
-    }
-    this.draft = editDraft(this.draft, edit);
-    this.#refreshMenu();
-  }
-
-  /**
-   * Applies one paste, as one edit.
-   *
-   * A paste the line can hold is inserted as the ordinary text it is; a paste
-   * larger than the line can show - more characters than the inline limit, or
-   * more lines than one - leaves one labelled line behind and keeps its text
-   * outside the buffer, because a line the user cannot read at a glance is not a
-   * line they can edit.
-   */
-  #applyDraftPasted(raw: string): void {
-    const text = normalisePaste(raw);
-    if (text === "") {
-      return;
-    }
-    if (pasteIsLarge(text)) {
-      const label = pasteLabel(text);
-      this.draft = insertText(this.draft, label);
-      this.#pastes = [...this.#pastes, { label, text }];
-    } else {
-      this.draft = insertText(this.draft, text);
-    }
-    this.#refreshMenu();
-  }
-
-  /**
-   * Commits the band's highlighted row into the input line.
-   *
-   * The word the band was opened for is replaced by the row's completion, and
-   * the band then follows the same open rule: a command that declares an
-   * argument reopens it on the argument word, and a complete command or value
-   * closes it.
-   */
-  #acceptMenu(): void {
-    const menu = this.menu;
-    if (menu === null) {
-      return;
-    }
-    const completion = menuCompletion(menu, this.menuHighlight);
-    if (completion === null) {
-      return;
-    }
-    const text =
-      this.draft.text.slice(0, completion.start) +
-      completion.text +
-      this.draft.text.slice(completion.end);
-    this.draft = { text, caret: completion.start + completion.text.length };
-    this.#refreshMenu();
-  }
-
-  /**
-   * Abandons the input line into the recallable history and clears it.
-   *
-   * The line is kept whole: a paste label is expanded first, so the history
-   * carries the text the user pasted and a recall puts it back as the line it
-   * was.
-   */
-  #clearIntoHistory(): readonly Effect[] {
-    const text = expandPastes(this.draft.text, this.#pastes);
-    if (text.trim() !== "") {
-      this.#history.push(text);
-    }
-    this.draft = EMPTY_DRAFT;
-    this.#pastes = [];
-    this.notice = null;
-    this.#refreshMenu();
-    return [];
+    this.#watch.beginTurn();
+    return this.#session.ensureStream();
   }
 
   /**
@@ -725,19 +421,21 @@ export class AppState {
   #applyCtrlC(): readonly Effect[] {
     const run = this.liveRun;
     if (run !== null) {
-      if (this.#armed === "stop") {
-        this.#armed = null;
+      if (this.#composer.armed === "stop") {
+        this.#composer.armed = null;
         return this.#requestCancel();
       }
       this.#arm("stop", stopArmNotice(run.run_id));
       return [];
     }
-    if (this.draft.text.trim() !== "") {
-      this.#armed = null;
-      return this.#clearIntoHistory();
+    if (this.#composer.hasText) {
+      this.#composer.armed = null;
+      this.#composer.clearIntoHistory();
+      this.notice = null;
+      return [];
     }
-    if (this.#armed === "exit") {
-      this.#armed = null;
+    if (this.#composer.armed === "exit") {
+      this.#composer.armed = null;
       return [{ kind: "quit" }];
     }
     this.#arm("exit", EXIT_ARM_NOTICE);
@@ -746,13 +444,13 @@ export class AppState {
 
   /** Arms one act for its next consecutive press and shows its notice. */
   #arm(arm: Arm, notice: string): void {
-    this.#armed = arm;
+    this.#composer.armed = arm;
     this.notice = notice;
   }
 
   /** Returns whether the arm standing belongs to the key one action pressed. */
   #armedIsPressedBy(action: Action): boolean {
-    return this.#armed !== null && action.kind === "ctrl_c_pressed";
+    return this.#composer.armed !== null && action.kind === "ctrl_c_pressed";
   }
 
   /**
@@ -771,48 +469,34 @@ export class AppState {
       // line grows to its command or value first. A word that already spells
       // the command or a declared value has nothing left to complete, so Enter
       // runs the line - one press for `/sessions`, not two.
-      this.#acceptMenu();
+      this.#composer.acceptMenu();
       return [];
     }
-    const text = expandPastes(this.draft.text, this.#pastes);
+    const text = this.#composer.expanded();
     if (text.trim().length === 0) {
       this.notice = "type a message before sending it";
       return [];
     }
-    this.#history.push(text);
-    this.draft = EMPTY_DRAFT;
-    this.#pastes = [];
+    this.#composer.remember(text);
+    this.#composer.clear();
     this.notice = null;
-    this.#refreshMenu();
-    const line = text.trim();
-    if (!isCommandLine(line)) {
-      return this.#submitTurn(text);
-    }
-    const resolution = resolveCommand(line.slice(1));
-    if (resolution.kind !== "invocation") {
-      this.notice = notice(resolution);
-      return [];
-    }
-    const { spec, words } = resolution.invocation;
-    switch (spec.action) {
+    const submission = resolveSubmission(text);
+    switch (submission.kind) {
+      case "prompt":
+        return this.#submitTurn(submission.text);
+      case "notice":
+        this.notice = submission.text;
+        return [];
       case "quit":
         return [{ kind: "quit" }];
       case "new_session":
         return [{ kind: "create_session", firstTurn: null }];
       case "list_sessions":
         return this.#applySessionsRequested();
-      case "choose_theme": {
-        const word = words[0];
-        if (word === undefined) {
-          return this.#applyThemeRequested();
-        }
-        const preference = themeValue(word);
-        if (preference === undefined) {
-          this.notice = `unknown theme "${word}"; known themes: ${THEME_PREFERENCES.join(" ")}`;
-          return [];
-        }
-        return this.#applyThemeSelected(preference);
-      }
+      case "theme_picker":
+        return this.#applyThemeRequested();
+      case "theme":
+        return this.#applyThemeSelected(submission.preference);
     }
   }
 
@@ -823,8 +507,8 @@ export class AppState {
    * session's first turn, in one command.
    */
   #submitTurn(content: string): readonly Effect[] {
-    this.error = null;
-    this.#beginTurn();
+    this.#session.error = null;
+    this.#watch.beginTurn();
     if (this.sessionId === null) {
       return [{ kind: "create_session", firstTurn: content }];
     }
@@ -832,119 +516,57 @@ export class AppState {
   }
 
   /**
-   * Opens a turn: the row reads `Waiting…` until a stream names more.
+   * Applies one run-stream frame the client already derived.
    *
-   * The elapsed value the previous turn measured belongs to that turn, so a new
-   * turn starts from zero and the tool watch forgets the call it was watching.
+   * The frame is stale for a subscription this front end no longer holds;
+   * dropping it keeps the committed rows authoritative.
    */
-  #beginTurn(): void {
-    this.phase = "waiting";
-    this.elapsedMillis = 0;
-    this.turnStartedAt = Date.now();
-    this.#toolSince = null;
-    this.#toolWorking = false;
+  #applyFrame(state: SessionStreamState): readonly Effect[] {
+    if (!this.#session.acceptFrame(state)) {
+      return [];
+    }
+    this.#watch.applyPhase(state);
+    return [];
   }
 
-  /** Reads one accepted frame's phase out of what it changed. */
-  #applyPhase(state: SessionStreamState): void {
-    const status = state.status;
-    if (status !== null && runStatusIsTerminal(status)) {
-      this.phase = null;
-      this.#toolSince = null;
-      this.#toolWorking = false;
-      return;
-    }
-    if (state.provisionalText.length > 0) {
-      this.phase = "answering";
-      return;
-    }
-    if (state.provisionalReasoning.length > 0) {
-      this.phase = "thinking";
-      return;
-    }
-    this.phase = this.phase ?? "waiting";
-  }
-
-  /**
-   * Records one elapsed reading and decides whether a tool call is work.
-   *
-   * A call open for longer than the threshold reads as `working`; a shorter one
-   * leaves the phase it found, so a fast tool never flickers the row.
-   */
-  #applyElapsedReported(millis: number): void {
-    this.elapsedMillis = millis;
-    const open = this.activeRun?.open_tool_calls ?? 0;
-    if (open === 0) {
-      this.#toolSince = null;
-      this.#toolWorking = false;
-      return;
-    }
-    if (this.#toolSince === null) {
-      this.#toolSince = millis;
-      return;
-    }
-    this.#toolWorking = millis - this.#toolSince > TOOL_WORKING_AFTER_MILLIS;
-  }
-
-  /**
-   * Reveals one more chunk of one reasoning block.
-   *
-   * A block that names no identity asks for the newest block there is: the live
-   * segment while a step is reasoning, the last committed one after it, so the
-   * gesture reveals what the reader is looking at.
-   */
+  /** Reveals one more chunk of one reasoning block. */
   #applyReasoningExpanded(id: string | null): void {
-    const key = id ?? this.#newestReasoningBlock();
-    if (key === null) {
-      return;
-    }
-    const next = new Map(this.expansions);
-    next.set(key, (this.expansions.get(key) ?? 0) + 1);
-    this.expansions = next;
-  }
-
-  /** Returns the identity of the newest block that has reasoning to reveal. */
-  #newestReasoningBlock(): string | null {
-    if (this.provisionalReasoning.length > 0) {
-      return "live";
-    }
-    for (let index = this.transcript.length - 1; index >= 0; index -= 1) {
-      const message = this.transcript[index];
-      if (
-        message !== undefined &&
-        message.reasoning !== null &&
-        message.reasoning.trim().length > 0
-      ) {
-        return String(message.id);
-      }
-    }
-    return null;
+    this.#reasoning.expand(id, this.transcript, this.provisionalReasoning);
   }
 
   /** Returns the chunks one reasoning block has revealed. */
   expansionOf(id: string): number {
-    return this.expansions.get(id) ?? 0;
+    return this.#reasoning.of(id);
   }
 
-  /** Records a daemon this front end could not reach. */
-  #applyBootstrapFailed(error: ErrorDto): readonly Effect[] {
-    this.connection = "offline";
-    return this.#applyFailure(error);
+  /** Returns the phase the current turn reads as, if one is live. */
+  get phase(): RunPhase | null {
+    return this.#watch.phase;
+  }
+
+  /** Returns the elapsed value this front end measured, if it measured one. */
+  get elapsedMillis(): number | null {
+    return this.#watch.elapsedMillis;
+  }
+
+  /** Returns when the turn in flight began, in Unix milliseconds. */
+  get turnStartedAt(): number | null {
+    return this.#watch.turnStartedAt;
   }
 
   /** Returns the live phase the status row names, if one is live. */
   get runPhase(): RunPhase | null {
-    return this.#toolWorking ? "working" : this.phase;
+    return this.#watch.runPhase;
   }
 
   /** Returns the elapsed value this front end measured, if it measured one. */
   get elapsed(): number | null {
-    return this.elapsedMillis;
+    return this.#watch.elapsedMillis;
   }
 
   /** Returns when the turn in flight began, in Unix milliseconds. */
   get turnStart(): number | null {
-    return this.turnStartedAt;
+    return this.#watch.turnStartedAt;
   }
 
   /** Requests that the live run stop for good. */
@@ -976,8 +598,7 @@ export class AppState {
    */
   #applySessionsRequested(): readonly Effect[] {
     this.surface = "sessions";
-    this.sessions = null;
-    this.sessionsError = null;
+    this.#browser.requested();
     this.selection = 0;
     return [{ kind: "list_sessions" }];
   }
@@ -1040,32 +661,12 @@ export class AppState {
   }
 
   /**
-   * Returns the subscription that makes the open session live, if any.
-   *
-   * A front end follows the session it has open, not one run: the run a turn
-   * starts - its own or another window's - reaches the state as a status frame,
-   * so a stream that is already live needs nothing.
-   */
-  #ensureSessionStream(): readonly Effect[] {
-    if (this.sessionId === null || this.stream === "live") {
-      return [];
-    }
-    return [{ kind: "subscribe", sessionId: this.sessionId }];
-  }
-
-  /**
    * Records one typed failure as the error line.
    *
    * The line is the error type's own one-line form, so a failure reads the same
    * in every front end.
    */
   #applyFailure(error: ErrorDto): readonly Effect[] {
-    this.error = `${error.code}: ${error.message}`;
-    return [];
+    return this.#session.failure(error);
   }
-}
-
-/** Reports whether one run status is terminal. */
-function isTerminal(status: RunStatusDto): boolean {
-  return status === "completed" || status === "failed" || status === "interrupted";
 }
