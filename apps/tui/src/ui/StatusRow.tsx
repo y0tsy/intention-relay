@@ -32,6 +32,7 @@ import {
 import type { ConnectionStatus } from "../app/state";
 import type { AppStore } from "../app/store";
 import type { RunModeDto, RunStatusDto } from "../bindings";
+import { Runs } from "../kit";
 import type { Palette } from "../theme/palette";
 import { SEPARATOR } from "./glyphs";
 import { useRunClock } from "./run-clock";
@@ -175,31 +176,14 @@ export function detailRuns(facts: {
   return [{ text: DEFAULT_HINT, ink: "inkFaint" }];
 }
 
-/** Renders one row of styled runs as one line that clips at the panel's width. */
-function RunLine({ runs, palette }: { runs: readonly StatusRun[]; palette: Palette }) {
-  // A run's own ink and text name it: the same phrase can only repeat next to a
-  // separator, so the pair is a key the row can be diffed on.
-  const seen = new Map<string, number>();
-  const keyed = runs.map((run) => {
-    const base = `${run.ink}:${run.text}`;
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    return { key: count === 0 ? base : `${base}#${count}`, run };
-  });
-  return (
-    <text wrapMode="none">
-      {keyed.map(({ key, run }) => (
-        <span key={key} fg={palette[run.ink]}>
-          {run.text}
-        </span>
-      ))}
-    </text>
-  );
+/** Returns the runs with the palette's own ink resolved. */
+function inked(runs: readonly StatusRun[], palette: Palette) {
+  return runs.map((run) => ({ text: run.text, ink: palette[run.ink] }));
 }
 
 /** Renders the status row from the facts it reads. */
 export function StatusRow({ facts, palette }: { facts: StatusFacts; palette: Palette }) {
-  return <RunLine runs={statusRuns(facts)} palette={palette} />;
+  return <Runs runs={inked(statusRuns(facts), palette)} />;
 }
 
 /** Renders the detail line from the facts it reads. */
@@ -212,7 +196,7 @@ export function DetailLine({
   notice: string | null;
   palette: Palette;
 }) {
-  return <RunLine runs={detailRuns({ error, notice })} palette={palette} />;
+  return <Runs runs={inked(detailRuns({ error, notice }), palette)} />;
 }
 
 /**
