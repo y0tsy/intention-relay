@@ -59,9 +59,58 @@ const FORBIDDEN = [
   "printRoom",
 ] as const;
 
+/** The layout props a surface may not pass: geometry belongs to the bricks. */
+const LAYOUT_PROPS = [
+  "height",
+  "width",
+  "flexDirection",
+  "flexGrow",
+  "flexBasis",
+  "flexShrink",
+  "gap",
+  "padding",
+  "paddingLeft",
+  "paddingRight",
+  "paddingTop",
+  "paddingBottom",
+  "paddingX",
+  "paddingY",
+  "margin",
+  "marginLeft",
+  "marginRight",
+  "marginTop",
+  "marginBottom",
+  "marginX",
+  "marginY",
+  "border",
+  "borderStyle",
+] as const;
+
+/** Returns the raw boxes and layout props one surface spells in JSX. */
+function jsxViolations(source: string): string[] {
+  const found = new Set<string>();
+  for (const tag of source.match(/<[A-Za-z][^<>]*>/g) ?? []) {
+    if (/^<box\b/.test(tag)) {
+      found.add("<box");
+    }
+    if (/^<scrollbox\b/.test(tag)) {
+      found.add("<scrollbox");
+    }
+    for (const prop of LAYOUT_PROPS) {
+      if (new RegExp(`\\s${prop}\\s*=`).test(tag)) {
+        found.add(`layout prop ${prop}`);
+      }
+    }
+  }
+  return [...found];
+}
+
 /** Returns the forbidden tokens one source spells. */
 function violations(path: string, source: string): string[] {
   const found: string[] = FORBIDDEN.filter((token) => source.includes(token));
+  if (path.includes(`${sep}ui${sep}`)) {
+    found.push(...jsxViolations(source));
+  }
   if (source.includes('from "../kit/')) {
     found.push("a deep kernel import");
   }
@@ -119,6 +168,26 @@ test("the guard catches a forbidden line and leaves a clean one alone", () => {
     'import { Pane, Rule } from "../kit";\nconst ready = true;\n<Rule color="red" />;',
   );
   assert.deepEqual(clean, []);
+});
+
+test("a surface draws no box and passes no layout prop", () => {
+  assert.deepEqual(jsxViolations("<box height={2} />"), ["<box", "layout prop height"]);
+  assert.deepEqual(jsxViolations("<scrollbox flexGrow={1} />"), [
+    "<scrollbox",
+    "layout prop flexGrow",
+  ]);
+  assert.deepEqual(jsxViolations('<Line height={1} paddingLeft={2} border="top" />').sort(), [
+    "layout prop border",
+    "layout prop height",
+    "layout prop paddingLeft",
+  ]);
+  assert.deepEqual(
+    jsxViolations(
+      "<Pane fill borderColor={ink}><Spacer rows={1} /><Cell text={text} background={ink} /></Pane>",
+    ),
+    [],
+    "the bricks' own props are the surface's vocabulary",
+  );
 });
 
 test("the kernel imports nothing from the surfaces it serves", () => {

@@ -86,13 +86,22 @@ count rows. `src/kit` owns what needs measurement: display-cell text, table
 columns, pane chrome, the footer plan, the split-footer surface, and printing.
 `src/ui` names content and reads the columns and rows its parent hands down
 through React context. `src/kit/boundaries.test.ts` enforces both directions -
-no renderer field, display width, `Math`, or deep kernel import in a surface; no
-surface import in the kernel - and proves the guard catches a forbidden line.
+no renderer field, display width, `Math`, raw `<box>`, JSX layout prop, or deep
+kernel import in a surface; no surface import in the kernel - and proves the
+guard catches a forbidden line and a forbidden tag.
 
 **A brick provides, it never paints a number.** `Pane` subtracts its border and
 padding and provides the content columns; `Hanging` subtracts a marker; the
 footer plan provides each slot's rows. A child reads a handle, so a wrapped line
 or a hidden column is decided once, where the chrome is known.
+
+**A surface composes bricks, never geometry.** `Slot` takes the rows the footer
+plan gave a region, `Dock` adds the panel's gap and margin, and `Scroll` is the
+one place the live region's `flexGrow` and sticky bottom live. Higher bricks
+follow the same rule: `Band` and `Picker` take rows and columns from the plan,
+and `Markdown` renders tokens with the columns its pane provides. No `<box>` and
+no `height`, `width`, `flex*`, `gap`, `padding*`, `margin*`, or `border` prop
+survives in `src/ui`; the boundary test fails on one.
 
 **Renderer internals live behind one module.** The split surface needs the
 renderer's private offset, its pending native mode, and its external output

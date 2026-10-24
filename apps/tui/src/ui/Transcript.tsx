@@ -16,7 +16,6 @@
 import { selectExpansions, selectProvisionalReasoning, selectProvisionalText } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { TranscriptBlock } from "../app/transcript";
-import type { MessageProjectionDto } from "../bindings";
 import { Stack } from "../kit";
 import type { Palette } from "../theme/palette";
 import { Answer } from "./blocks/Answer";
