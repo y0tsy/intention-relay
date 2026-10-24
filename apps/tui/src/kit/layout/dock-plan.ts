@@ -42,11 +42,7 @@ export interface BrowserLayout {
  * up to half the window, so the footer above it keeps the majority, and it never
  * opens at all when the footer would fall below its own floor.
  */
-export function browserLayout(
-  width: number,
-  height: number,
-  rowCount: number,
-): BrowserLayout | null {
+export function browserPlan(width: number, height: number, rowCount: number): BrowserLayout | null {
   if (width <= 2) {
     return null;
   }

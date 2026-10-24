@@ -1,4 +1,4 @@
-//! Printing the finished transcript into the terminal's own scrollback.
+//! Printing finished blocks into the terminal's own scrollback.
 //!
 //! The window keeps only the live footer; every block that commits is printed
 //! above it once, as rows the terminal owns. Those rows are the window's own
@@ -8,7 +8,7 @@
 //!
 //! A block reaches the terminal through a scrollback surface: a render context
 //! that is not on screen. The block is mounted into that surface from the
-//! application's own tree, so the surface paints the very components the live
+//! application's own tree, so the surface paints the very component the live
 //! tail used and a step does not change appearance when it commits; the rows it
 //! painted are then committed, and the surface forgets them and takes the next
 //! block.
@@ -18,20 +18,34 @@
 //! of a print are the rows the window asked the footer to give back, and a print
 //! taller than the window is committed in chunks that each fit above the footer,
 //! so no single call carries more rows than the terminal can take.
-//!
-//! The rows the app prints carry the canvas, so the screen reads as one app and
-//! never as the terminal behind it; the app never pads a short transcript, so
-//! the history holds only the rows the session actually said.
 
 import { createPortal, useRenderer } from "@opentui/react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { selectExpansions, selectSessionId, selectTranscript } from "../app/select";
-import type { AppStore } from "../app/store";
-import { CONTENT_INDENT, ContentColumns, FOOTER_MARGIN, printRoom, Surface } from "../kit";
-import type { Palette } from "../theme/palette";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ContentColumns } from "../layout/context";
+import { CONTENT_INDENT, FOOTER_MARGIN, printRoom } from "../layout/footer-plan";
+import { Surface } from "../layout/Surface";
 import { chunkRows, type Lead, leadRow } from "./print-plan";
-import { type Block, blocks, CommittedBlock } from "./Transcript";
-import { useStore } from "./use-store";
+import { pinSurface, readOffset, replayWindow, windowSettled } from "./surface";
+
+/** One block the printer can commit: its stable identity. */
+export interface PrintedBlock {
+  readonly key: string;
+}
+
+/** The palette roles the printed page paints. */
+export interface PrintPalette {
+  readonly canvas: string;
+  readonly panel: string;
+  readonly border: string;
+}
 
 /** What one session's print has already put in the terminal. */
 interface Printed {
@@ -45,7 +59,7 @@ interface Printed {
 const NOTHING: ReadonlySet<string> = new Set();
 
 /** One print on its way to the terminal: the blocks it carries, and its rows. */
-interface Job {
+interface Job<Block extends PrintedBlock> {
   /** The session the blocks belong to. */
   readonly session: string | null;
   /** The blocks this print carries, frozen when it was measured. */
@@ -68,69 +82,6 @@ const PAGE_ROWS = 400;
 const MAX_PINS = 8;
 
 /**
- * Puts the split surface back on the window's last row.
- *
- * A commit leaves the surface where its output started, so the region would sit
- * as many rows above the bottom as were just printed and the rows below it stay
- * the terminal's own background. The pinned offset is the one the renderer uses
- * for a frame it presents on its own.
- */
-function pinSurface(renderer: ReturnType<typeof useRenderer>): void {
-  const surface = renderer as unknown as {
-    setRenderOffset?: (offset: number) => void;
-    terminalHeight: number;
-    footerHeight: number;
-  };
-  const offset = Math.max(0, surface.terminalHeight - surface.footerHeight);
-  try {
-    surface.setRenderOffset?.(offset);
-  } catch {
-    // A pin that lands while the terminal is busy dies quietly: the frame it
-    // follows heals the surface on its own repaint.
-  }
-}
-
-/** Returns the surface's row, or null when the renderer keeps it out of reach. */
-function readOffset(renderer: ReturnType<typeof useRenderer>): number | null {
-  const at = (renderer as unknown as { renderOffset?: number }).renderOffset;
-  return typeof at === "number" ? at : null;
-}
-
-/**
- * Reports whether the window has taken the rows a print gave it back.
- *
- * The renderer applies a footer's new rows on a frame of its own, and only when
- * the split output queue has drained: a print written before that frame is
- * written above a footer that still holds the rows, which scrolls the whole
- * screen and leaves a copy of the footer the scroll moved.
- */
-function windowSettled(renderer: ReturnType<typeof useRenderer>): boolean {
-  const at = renderer as unknown as {
-    pendingNativeMode?: unknown;
-    externalOutputQueue?: { size: number };
-  };
-  return (at.pendingNativeMode ?? null) === null && (at.externalOutputQueue?.size ?? 0) === 0;
-}
-
-/**
- * Clears the window without touching the rows above it.
- *
- * `resetSplitFooterForReplay` is the renderer's own way back to a known screen:
- * it homes the cursor, erases what is on screen, and leaves the saved lines
- * alone, which is what a window whose rows have drifted needs.
- */
-function replayWindow(renderer: ReturnType<typeof useRenderer>): void {
-  const surface = renderer as unknown as {
-    resetSplitFooterForReplay?: (options: { clearSavedLines?: boolean }) => void;
-  };
-  try {
-    surface.resetSplitFooterForReplay?.({ clearSavedLines: false });
-  } catch {
-    // A window that cannot be replayed is repainted by the frames that follow.
-  }
-}
-
-/**
  * Prints the committed blocks the window has not printed yet.
  *
  * A print takes the blocks that are waiting, up to the fold, and commits them in
@@ -139,30 +90,32 @@ function replayWindow(renderer: ReturnType<typeof useRenderer>): void {
  * row: a print written into a footer that still holds the rows moves the footer
  * up, and nothing paints the copy the scroll leaves.
  */
-export function Printer({
-  store,
+export function Printer<Block extends PrintedBlock>({
+  session,
+  blocks,
   palette,
+  renderBlock,
   onPrinted,
 }: {
-  store: AppStore;
-  palette: Palette;
+  /** The session the blocks belong to; a switch closes the frame above them. */
+  session: string | null;
+  /** The blocks waiting to print, in transcript order. */
+  blocks: readonly Block[];
+  palette: PrintPalette;
+  renderBlock: (block: Block) => ReactNode;
   /** Called with the rows a print takes, so the footer gives them back first. */
   onPrinted: (rows: number) => void;
 }) {
   const renderer = useRenderer();
-  const session = useStore(store, selectSessionId);
-  const messages = useStore(store, selectTranscript);
-  const expansions = useStore(store, selectExpansions);
   const surface = useMemo(() => renderer.createScrollbackSurface(), [renderer]);
   useEffect(() => () => surface.destroy(), [surface]);
-  const transcript = useMemo(() => blocks(messages), [messages]);
   // The blocks already in the terminal, and the job taking the next one. The
   // book is read while rendering, so it is a ref: a key that lands in it is
   // never handed to a second print in the same frame.
   const book = useRef<Printed>({ session: null, keys: NOTHING });
-  const [currentJob, setCurrentJob] = useState<Job | null>(null);
+  const [currentJob, setCurrentJob] = useState<Job<Block> | null>(null);
   // The frame that advances a print reads the job it is printing.
-  const advancing = useRef<Job | null>(null);
+  const advancing = useRef<Job<Block> | null>(null);
   advancing.current = currentJob;
   // A session switch closes the frame the previous session left open, and that
   // edge belongs to the first print after the switch even when a commit of the
@@ -178,7 +131,7 @@ export function Printer({
    * state, never a ref, so the print moving forward is a render the surface's own
    * frame carries.
    */
-  const settle = useCallback((done: Job): void => {
+  const settle = useCallback((done: Job<Block>): void => {
     if (book.current.session === done.session) {
       book.current = {
         session: done.session,
@@ -200,9 +153,9 @@ export function Printer({
    * never painted again.
    */
   const commitNext = useCallback(
-    (current: Job): void => {
-      const room = printRoom(renderer.terminalHeight, renderer.footerHeight);
-      const to = current.next + chunkRows(current.next, current.rows, room);
+    (current: Job<Block>): void => {
+      const rowsAbove = printRoom(renderer.terminalHeight, renderer.footerHeight);
+      const to = current.next + chunkRows(current.next, current.rows, rowsAbove);
       if (current.next > 0) {
         surface.render();
       }
@@ -276,7 +229,7 @@ export function Printer({
     if (current === null) {
       // One print folds the blocks that are waiting, up to the fold: a burst of
       // commits does not become one surface the window cannot paint.
-      const fold = transcript.filter((block) => !book.current.keys.has(block.key)).slice(0, FOLD);
+      const fold = blocks.filter((block) => !book.current.keys.has(block.key)).slice(0, FOLD);
       if (fold.length === 0) {
         return;
       }
@@ -313,7 +266,7 @@ export function Printer({
     if (windowSettled(renderer)) {
       commitNext(current);
     }
-  }, [renderer, surface, session, transcript, onPrinted, currentJob, settle, commitNext]);
+  }, [renderer, surface, session, blocks, onPrinted, currentJob, settle, commitNext]);
 
   const current = currentJob;
   if (current === null) {
@@ -362,11 +315,7 @@ export function Printer({
             {current.blocks.map((block, index) => (
               <box key={block.key} flexDirection="column">
                 {index === 0 ? null : <box height={1} />}
-                <CommittedBlock
-                  block={block}
-                  palette={palette}
-                  expansion={expansions.get(block.key) ?? 0}
-                />
+                {renderBlock(block)}
               </box>
             ))}
           </ContentColumns>

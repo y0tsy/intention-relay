@@ -33,16 +33,17 @@ import type { AppStore } from "../app/store";
 import {
   bandSlotRows,
   type BrowserLayout,
-  browserLayout,
+  browserPlan,
   browserPanelColumns,
   DOCK_GAP_ROWS,
   FOOTER_MARGIN,
   FooterFrame,
   type FooterMode,
-  footerLayout,
+  footerPlan,
   inputSlotRows,
   SlotRows,
   useSlotRows,
+  useWindow,
 } from "../kit";
 import type { Palette } from "../theme/palette";
 import { HintBand } from "./HintBand";
@@ -144,17 +145,16 @@ function Docked({
 export function Footer({
   store,
   palette,
-  width,
-  terminalHeight,
   printedRows,
 }: {
   store: AppStore;
   palette: Palette;
-  width: number;
-  terminalHeight: number;
   /** The rows the transcript has already printed above the footer. */
   printedRows: number;
 }) {
+  // The renderer's region is the footer, so the window's own size comes from the
+  // terminal; a resize repaints through the hook.
+  const { columns: width, rows: windowHeight } = useWindow();
   const draft = useStore(store, selectDraft);
   const menu = useStore(store, selectCommandMenu);
   const menuHighlight = useStore(store, selectMenuHighlight);
@@ -163,11 +163,11 @@ export function Footer({
   const selection = useStore(store, selectSelection);
   const rows = useStore(store, selectBrowserRows);
   const theme = useStore(store, selectTheme);
-  const browser = surface === "sessions" ? browserLayout(width, terminalHeight, rows.length) : null;
+  const browser = surface === "sessions" ? browserPlan(width, windowHeight, rows.length) : null;
   const mode: FooterMode = empty ? "welcome" : "session";
-  const layout = footerLayout(
+  const layout = footerPlan(
     width,
-    terminalHeight,
+    windowHeight,
     inputSlotRows(draft.text),
     hintRows(menu, surface),
     mode,

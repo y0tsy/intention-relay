@@ -70,7 +70,7 @@ export {
 } from "./layout/menu-band";
 export { browserColumnWidths, type BrowserColumns } from "./layout/browser-columns";
 export {
-  footerLayout,
+  footerPlan,
   printRoom,
   CONTENT_INDENT,
   DETAIL_ROWS,
@@ -83,7 +83,7 @@ export {
   type FooterMode,
 } from "./layout/footer-plan";
 export {
-  browserLayout,
+  browserPlan,
   browserDataRows,
   browserPanelColumns,
   MIN_PANEL_ROWS,
@@ -95,3 +95,9 @@ export {
   type BrowserLayout,
 } from "./layout/dock-plan";
 export { FooterFrame, type FooterPalette } from "./layout/FooterFrame";
+export { Screen } from "./screen/Screen";
+export { Printer, type PrintedBlock, type PrintPalette } from "./screen/Printer";
+export { chunkRows, leadRow, type Lead } from "./screen/print-plan";
+export { createSplitScreen, closeScreen } from "./screen/terminal";
+export { pushScreen, windowRows } from "./screen/startup";
+export { useTerminalTheme } from "./screen/use-terminal-theme";

@@ -11,59 +11,25 @@
 //! moves with the stream: the footer, the input block, the status row, and the
 //! step in flight each subscribe to their own values.
 
-import { useKeyboard, usePaste, useRenderer, useTerminalDimensions } from "@opentui/react";
-import { useCallback, useEffect, useState } from "react";
-import type { ThemePreference } from "../app/action";
+import { useKeyboard, usePaste } from "@opentui/react";
 import { selectCommandMenu, selectSurface, selectTheme } from "../app/select";
 import type { AppStore } from "../app/store";
-import { type Palette, paletteFor } from "../theme/palette";
+import { Screen, useTerminalTheme } from "../kit";
+import { paletteFor } from "../theme/palette";
 import { Footer } from "./Footer";
 import { keyIntent, pastedText } from "./keys";
-import { Printer } from "./scrollback";
+import { Printer } from "./Printer";
 import { useStore } from "./use-store";
-
-/** Resolves the palette the app paints with. */
-function usePalette(preference: ThemePreference): Palette {
-  const renderer = useRenderer();
-  const [terminal, setTerminal] = useState<"light" | "dark" | null>(null);
-  useEffect(() => {
-    if (preference !== "auto") {
-      return;
-    }
-    let alive = true;
-    // The terminal answers an OSC 11 query with its background colour; a terminal
-    // that never answers leaves the dark palette in force.
-    void renderer.waitForThemeMode(400).then((mode) => {
-      if (alive && (mode === "light" || mode === "dark")) {
-        setTerminal(mode);
-      }
-    });
-    return () => {
-      alive = false;
-    };
-  }, [preference, renderer]);
-  const mode = preference === "auto" ? (terminal ?? "dark") : preference;
-  return paletteFor(mode);
-}
 
 /** The application: the printed transcript, then the footer that owns the keys. */
 export function App({ store }: { store: AppStore }) {
   const surface = useStore(store, selectSurface);
   const theme = useStore(store, selectTheme);
   const menu = useStore(store, selectCommandMenu);
-  const palette = usePalette(theme);
-  const renderer = useRenderer();
-  const { width } = useTerminalDimensions();
-  // The render region is the footer, so the window's own height comes from the
-  // terminal itself; a resize repaints through the dimensions hook above.
-  const terminalHeight = renderer.terminalHeight;
-  // The rows the transcript has printed above the footer: the band takes the
-  // window rows the print does not reach, so the empty part of the window sits
-  // between the transcript and the input and no blank row lands in the history.
-  const [printedRows, setPrintedRows] = useState(0);
-  const addPrinted = useCallback((rows: number) => {
-    setPrintedRows((before) => before + rows);
-  }, []);
+  // A terminal that never answers the theme query leaves the dark palette in
+  // force.
+  const terminalTheme = useTerminalTheme(theme === "auto");
+  const palette = paletteFor(theme === "auto" ? (terminalTheme ?? "dark") : theme);
 
   useKeyboard((event) => {
     const intent = keyIntent(event, { surface, menu: menu !== null });
@@ -131,18 +97,10 @@ export function App({ store }: { store: AppStore }) {
   });
 
   return (
-    <box width="100%" height="100%" backgroundColor={palette.canvas}>
-      {/* The footer comes first: it reserves its rows before the printer writes
-          the rows that belong above them, so a block is never committed against
-          a window that has not shrunk for it yet. */}
-      <Footer
-        store={store}
-        palette={palette}
-        width={width}
-        terminalHeight={terminalHeight}
-        printedRows={printedRows}
-      />
-      <Printer store={store} palette={palette} onPrinted={addPrinted} />
-    </box>
+    <Screen
+      background={palette.canvas}
+      footer={(printedRows) => <Footer store={store} palette={palette} printedRows={printedRows} />}
+      printer={(onPrinted) => <Printer store={store} palette={palette} onPrinted={onPrinted} />}
+    />
   );
 }

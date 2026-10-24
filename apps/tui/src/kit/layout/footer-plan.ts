@@ -73,7 +73,7 @@ export interface FooterLayout {
  * `docked` is the rows a surface below the footer takes - the session browser and
  * the gap above it - so the footer leaves those rows to the surface.
  */
-export function footerLayout(
+export function footerPlan(
   width: number,
   terminalHeight: number,
   wantedInputRows: number,

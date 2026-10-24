@@ -16,13 +16,13 @@
 //! and would take the shell's output with it, and `ED 2` (`\x1B[2J`) without the
 //! cursor move leaves the cursor on a row that is about to be cleared.
 
+/** The rows the application assumes when the terminal does not say. */
+const MIN_WINDOW_ROWS = 24;
+
 /** Returns the rows the window takes, never fewer than one. */
 export function windowRows(rows: number | undefined): number {
   return Math.max(1, Math.trunc(rows ?? 0) || MIN_WINDOW_ROWS);
 }
-
-/** The rows the application assumes when the terminal does not say. */
-const MIN_WINDOW_ROWS = 24;
 
 /**
  * Returns the bytes that clear the window and keep the screen's history.

@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summary } from "../testing/fixtures";
-import { browserColumnWidths, browserLayout, SlotRows } from "../kit";
+import { browserColumnWidths, browserPlan, SlotRows } from "../kit";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { SessionBrowser } from "./SessionBrowser";
@@ -15,7 +15,7 @@ async function lines(
   height: number,
   options: { selection?: number; error?: string | null; now?: number; filter?: string } = {},
 ): Promise<string[]> {
-  const layout = browserLayout(width, height, rows.length);
+  const layout = browserPlan(width, height, rows.length);
   assert.ok(layout !== null, "the window holds the docked panel");
   const frame = await painted(
     <box flexDirection="row">
@@ -51,12 +51,12 @@ test("the docked panel is titled, tabbed, and carries its own legend", async () 
 });
 
 test("the panel grows with its rows up to half the window", async () => {
-  const few = browserLayout(80, 40, 2);
-  const many = browserLayout(80, 40, 60);
+  const few = browserPlan(80, 40, 2);
+  const many = browserPlan(80, 40, 60);
   assert.ok(few !== null && many !== null);
   assert.equal(few.rows, 12, "the frame, the chrome, and the two rows it has");
   assert.equal(many.rows, 20, "half the window, never more");
-  assert.equal(browserLayout(80, 12, 3), null, "a window that cannot hold the chat keeps no panel");
+  assert.equal(browserPlan(80, 12, 3), null, "a window that cannot hold the chat keeps no panel");
 });
 
 test("the table's columns are shares of the content width", async () => {

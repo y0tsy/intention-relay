@@ -2,13 +2,12 @@
 
 import { fileURLToPath } from "node:url";
 
-import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { AppStore } from "./app/store";
 import { IntentionClient } from "./client/client";
 import { ProcessDaemonLauncher } from "./client/daemon";
 import { resolveEndpoint } from "./client/endpoint";
-import { pushScreen } from "./startup";
+import { closeScreen, createSplitScreen, pushScreen } from "./kit";
 import { configPath, readThemePreference, writeThemePreference } from "./theme/config";
 import { App } from "./ui/App";
 
@@ -36,16 +35,8 @@ if (process.stdout.isTTY) {
 }
 // The window is a footer: the transcript is printed into the terminal's own
 // scrollback, so the wheel, the scrollbar, and a drag belong to the terminal and
-// the application never asks for the mouse. The terminal's saved lines are never
-// cleared: the rows the app printed are the session's history.
-const renderer = await createCliRenderer({
-  exitOnCtrlC: false,
-  useMouse: false,
-  screenMode: "split-footer",
-  footerHeight: 12,
-  clearOnShutdown: false,
-});
-renderer.footerHeight = renderer.terminalHeight;
+// the application never asks for the mouse.
+const renderer = await createSplitScreen();
 const root = createRoot(renderer);
 
 const theme = await readThemePreference(configPath());
@@ -71,9 +62,7 @@ const store = new AppStore({
  * the saved lines are never dropped.
  */
 async function quit(): Promise<void> {
-  renderer.destroy();
-  await renderer.closed;
-  process.stdout.write("\n");
+  await closeScreen(renderer);
   process.exit(0);
 }
 
