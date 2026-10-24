@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
-import { Markdown } from "./Markdown";
+import { Markdown } from "./markdown";
 
 /** Renders one document at one width and returns its lines. */
 async function lines(source: string, width = 40): Promise<string[]> {

@@ -70,6 +70,13 @@ export {
 } from "./layout/menu-band";
 export { browserColumnWidths, type BrowserColumns } from "./layout/browser-columns";
 export {
+  Markdown,
+  MarkdownBlock,
+  MarkdownBlocks,
+  type MarkdownPalette,
+} from "./markdown";
+export { splitBlocks, type StreamSplit } from "./markdown-split";
+export {
   footerPlan,
   printRoom,
   CONTENT_INDENT,

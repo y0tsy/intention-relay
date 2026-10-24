@@ -14,8 +14,17 @@ import { TextAttributes } from "@opentui/core";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import { memo, type ReactNode, useMemo } from "react";
-import type { Palette } from "../theme/palette";
-import { splitBlocks } from "./markdown-blocks";
+import { splitBlocks } from "./markdown-split";
+
+/** The palette roles a markdown block paints. */
+export interface MarkdownPalette {
+  readonly ink: string;
+  readonly inkMuted: string;
+  readonly inkFaint: string;
+  readonly border: string;
+  readonly markdownCode: string;
+  readonly markdownLink: string;
+}
 
 /** One inline run of text and how it is marked. */
 interface Run {
@@ -61,7 +70,7 @@ function flatten(token: Token): Run[] {
 }
 
 /** Renders one run with the palette's mark for what it is. */
-function runElement(run: Run, palette: Palette, index: number): ReactNode {
+function runElement(run: Run, palette: MarkdownPalette, index: number): ReactNode {
   const color = run.code ? palette.markdownCode : run.link ? palette.markdownLink : undefined;
   const attributes = run.strong
     ? TextAttributes.BOLD
@@ -77,7 +86,7 @@ function runElement(run: Run, palette: Palette, index: number): ReactNode {
 }
 
 /** Renders one inline token tree as spans. */
-function inline(tokens: readonly Token[], palette: Palette): ReactNode[] {
+function inline(tokens: readonly Token[], palette: MarkdownPalette): ReactNode[] {
   return tokens.flatMap(flatten).map((run, index) => runElement(run, palette, index));
 }
 
@@ -92,7 +101,7 @@ function blockKey(index: number, raw: string): string {
 }
 
 /** Renders one markdown block. */
-function block(token: Token, palette: Palette, ink: string, key: string): ReactNode {
+function block(token: Token, palette: MarkdownPalette, ink: string, key: string): ReactNode {
   switch (token.type) {
     case "paragraph": {
       const paragraph = token as Tokens.Paragraph;
@@ -196,7 +205,7 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   ink,
 }: {
   source: string;
-  palette: Palette;
+  palette: MarkdownPalette;
   ink?: string;
 }) {
   const tokens = useMemo(() => marked.lexer(source), [source]);
@@ -215,7 +224,7 @@ export function Markdown({
   ink,
 }: {
   source: string;
-  palette: Palette;
+  palette: MarkdownPalette;
   ink?: string;
 }) {
   return <MarkdownBlock source={source} palette={palette} ink={ink} />;
@@ -235,7 +244,7 @@ export function MarkdownBlocks({
   ink,
 }: {
   source: string;
-  palette: Palette;
+  palette: MarkdownPalette;
   ink?: string;
 }) {
   const { closed, open } = splitBlocks(source);

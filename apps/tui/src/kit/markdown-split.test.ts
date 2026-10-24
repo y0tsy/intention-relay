@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { splitBlocks } from "./markdown-blocks";
+import { splitBlocks } from "./markdown-split";
 
 test("a settled block leaves what follows the last blank line open", () => {
   assert.deepEqual(splitBlocks("one\n\ntwo"), { closed: "one\n\n", open: "two" });

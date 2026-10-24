@@ -7,10 +7,9 @@
 //! A card too narrow for a frame falls back to its bare rows, so a narrow panel
 //! shows the message instead of a broken box.
 
-import { markerText, Pane } from "../../kit";
+import { MarkdownBlocks, markerText, Pane } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { USER_GLYPH, USER_LABEL } from "../glyphs";
-import { MarkdownBlocks } from "../Markdown";
 
 /** Renders one committed user row. */
 export function UserCard({

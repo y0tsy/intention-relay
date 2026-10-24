@@ -5,10 +5,9 @@
 //! the glyph. The block is the same one the step in flight paints, so a live
 //! answer does not jump when it commits.
 
-import { Hanging } from "../../kit";
+import { Hanging, MarkdownBlocks } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { ANSWER_GLYPH } from "../glyphs";
-import { MarkdownBlocks } from "../Markdown";
 
 /** Renders one committed answer block. */
 export function Answer({ text, palette }: { text: string; palette: Palette }) {
