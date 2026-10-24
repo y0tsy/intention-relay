@@ -76,8 +76,6 @@ export function ToolBlock({
       titleColor={palette.toolLabel}
       borderColor={palette.toolBorder}
       background={palette.toolSurface}
-      paddingLeft={1}
-      paddingRight={1}
     >
       {previewable ? (
         <Lines

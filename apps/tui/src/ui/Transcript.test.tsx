@@ -10,7 +10,8 @@ import { row } from "../testing/fixtures";
 import { frameLines, painted } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { DARK } from "../theme/palette";
-import { Committed, Live } from "./Transcript";
+import { ContentColumns, Stack } from "../kit";
+import { blocks, CommittedBlock, Live } from "./Transcript";
 
 /** Renders one transcript at one width and returns its lines. */
 async function lines(
@@ -41,11 +42,25 @@ async function lines(
   // The window prints the committed rows and keeps the step in flight in the
   // footer, so the two views sit in one column the way the screen reads.
   const width = options.width ?? 58;
+  const expansion = options.reasoningExpansion ?? {};
   const frame = await painted(
-    <box flexDirection="column" gap={1}>
-      <Committed store={store} palette={DARK} width={width} />
-      <Live store={store} palette={DARK} width={width} />
-    </box>,
+    <Stack spaced>
+      <ContentColumns columns={width}>
+        <Stack spaced>
+          {blocks(messages).map((block) => (
+            <CommittedBlock
+              key={block.key}
+              block={block}
+              palette={DARK}
+              expansion={expansion[block.key] ?? 0}
+            />
+          ))}
+        </Stack>
+      </ContentColumns>
+      <ContentColumns columns={width}>
+        <Live store={store} palette={DARK} />
+      </ContentColumns>
+    </Stack>,
     options.width ?? 60,
     options.height ?? 30,
   );

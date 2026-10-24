@@ -23,6 +23,10 @@ export {
   usePrintedRows,
 } from "./layout/context";
 export { Stack, Row, Spacer } from "./layout/Stack";
+export { Line } from "./layout/Line";
+export { Slot } from "./layout/Slot";
+export { Scroll } from "./layout/Scroll";
+export { Dock } from "./layout/Dock";
 export { Surface } from "./layout/Surface";
 export { Center } from "./layout/Center";
 export { Rule } from "./layout/Rule";

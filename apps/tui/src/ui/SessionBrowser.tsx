@@ -22,6 +22,7 @@ import {
   Row,
   Rule,
   scrollWindow,
+  Spacer,
   Table,
   type TableCellStyle,
   useContentColumns,
@@ -65,12 +66,10 @@ function TabRow({ tab, palette }: { tab: BrowserTab; palette: Palette }) {
 
 /** Returns the search bar, which shows the filter or its placeholder. */
 function SearchBar({ filter, palette }: { filter: string; palette: Palette }) {
-  const columns = useContentColumns();
   const empty = filter.length === 0;
   return (
     <Cell
       text={empty ? SEARCH_PLACEHOLDER : filter}
-      width={columns}
       ink={empty ? palette.inkFaint : palette.ink}
       background={palette.inputBg}
     />
@@ -163,7 +162,7 @@ function BrowserBody({
   }));
   return (
     <>
-      <box height={1} />
+      <Spacer rows={1} />
       <TabRow tab={tab} palette={palette} />
       <SearchBar filter={filter} palette={palette} />
       <Rule color={palette.inkFaint} background={palette.dividerTint} />
@@ -178,12 +177,11 @@ function BrowserBody({
         })}
       />
       {error === null ? null : (
-        <Cell text={error} width={columns} ink={palette.error} background={palette.stubBg} />
+        <Cell text={error} ink={palette.error} background={palette.stubBg} />
       )}
       {rows.length === 0 && error === null ? (
         <Cell
           text="no sessions yet; send a prompt to create one"
-          width={columns}
           ink={palette.accentDeep}
           background={palette.stubBg}
         />
@@ -200,7 +198,7 @@ function BrowserBody({
           bold: row.selected === true,
         })}
       />
-      <box flexGrow={1} />
+      <Spacer grow />
       <Rule color={palette.inkFaint} background={palette.dividerTint} />
       <BrowserFooter
         first={window.first}
@@ -230,16 +228,14 @@ export function SessionBrowser({
   palette: Palette;
   now: number;
 }) {
-  const height = useSlotRows(0);
   return (
     <Pane
-      height={height}
+      fill
+      wide
       title="Sessions"
       titleColor={palette.accentDeep}
       borderColor={palette.border}
       background={palette.panel}
-      paddingLeft={2}
-      paddingRight={2}
     >
       <BrowserBody
         rows={rows}

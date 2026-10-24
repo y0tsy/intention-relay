@@ -13,15 +13,10 @@
 //! commit arrives: the rows a step shows in the footer are the rows the printed
 //! block paints.
 
-import {
-  selectExpansions,
-  selectProvisionalReasoning,
-  selectProvisionalText,
-  selectTranscript,
-} from "../app/select";
+import { selectExpansions, selectProvisionalReasoning, selectProvisionalText } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { MessageProjectionDto } from "../bindings";
-import { ContentColumns } from "../kit";
+import { Stack } from "../kit";
 import type { Palette } from "../theme/palette";
 import { Answer } from "./blocks/Answer";
 import { Notice } from "./blocks/Notice";
@@ -122,50 +117,13 @@ export function CommittedBlock({
   }
 }
 
-/** Renders the committed rows, one block per message, a blank row between. */
-export function Committed({
-  store,
-  palette,
-  width,
-}: {
-  store: AppStore;
-  palette: Palette;
-  /** The column the blocks read; the parent's content width when omitted. */
-  width?: number;
-}) {
-  const messages = useStore(store, selectTranscript);
-  const expansions = useStore(store, selectExpansions);
-  const column = (
-    <box flexDirection="column" gap={1}>
-      {blocks(messages).map((block) => (
-        <CommittedBlock
-          key={block.key}
-          block={block}
-          palette={palette}
-          expansion={expansions.get(block.key) ?? 0}
-        />
-      ))}
-    </box>
-  );
-  return width === undefined ? column : <ContentColumns columns={width}>{column}</ContentColumns>;
-}
-
 /** Renders the step in flight: its reasoning, then the answer it precedes. */
-export function Live({
-  store,
-  palette,
-  width,
-}: {
-  store: AppStore;
-  palette: Palette;
-  /** The column the blocks read; the parent's content width when omitted. */
-  width?: number;
-}) {
+export function Live({ store, palette }: { store: AppStore; palette: Palette }) {
   const expansions = useStore(store, selectExpansions);
   const reasoning = useStore(store, selectProvisionalReasoning);
   const text = useStore(store, selectProvisionalText);
-  const column = (
-    <box flexDirection="column" gap={1}>
+  return (
+    <Stack spaced>
       {reasoning.length === 0 ? null : (
         <Reasoning
           text={reasoning}
@@ -174,7 +132,6 @@ export function Live({
         />
       )}
       {text.length === 0 ? null : <Answer text={text} palette={palette} />}
-    </box>
+    </Stack>
   );
-  return width === undefined ? column : <ContentColumns columns={width}>{column}</ContentColumns>;
 }

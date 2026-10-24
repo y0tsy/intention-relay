@@ -5,6 +5,7 @@
 //! and a surface with no room draws nothing.
 
 import type { ReactNode } from "react";
+import { SlotRows } from "./context";
 import { heroLayout } from "./hero-plan";
 import { Stack } from "./Stack";
 
@@ -28,7 +29,9 @@ export function Hero({
       {plan.lead > 0 ? <box height={plan.lead} /> : null}
       {plan.hero > 0 ? lockup : null}
       {plan.filler > 0 ? <box height={plan.filler} /> : null}
-      {plan.overview > 0 ? overview(plan.overview) : null}
+      {plan.overview > 0 ? (
+        <SlotRows rows={plan.overview}>{overview(plan.overview)}</SlotRows>
+      ) : null}
     </Stack>
   );
 }

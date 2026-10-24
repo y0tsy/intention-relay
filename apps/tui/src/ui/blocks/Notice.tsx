@@ -5,7 +5,7 @@
 //! body keeps the notice wash and ink, and a notice is never re-classified: the
 //! row carries free text and the block prints exactly that.
 
-import { Hanging } from "../../kit";
+import { Hanging, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { NOTICE_GLYPH } from "../glyphs";
 
@@ -13,11 +13,11 @@ import { NOTICE_GLYPH } from "../glyphs";
 export function Notice({ text, palette }: { text: string; palette: Palette }) {
   return (
     <Hanging glyph={NOTICE_GLYPH} ink={palette.noticeInk}>
-      <box backgroundColor={palette.noticeSurface}>
+      <Stack background={palette.noticeSurface}>
         <text wrapMode="word" fg={palette.noticeInk}>
           {text}
         </text>
-      </box>
+      </Stack>
     </Hanging>
   );
 }

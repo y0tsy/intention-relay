@@ -12,25 +12,13 @@ import type { Palette } from "../../theme/palette";
 import { USER_GLYPH, USER_LABEL } from "../glyphs";
 
 /** Renders one committed user row. */
-export function UserCard({
-  text,
-  palette,
-  width,
-}: {
-  text: string;
-  palette: Palette;
-  /** The card's own outer width; the parent's content width when omitted. */
-  width?: number;
-}) {
+export function UserCard({ text, palette }: { text: string; palette: Palette }) {
   return (
     <Pane
       title={markerText(USER_GLYPH, USER_LABEL)}
       titleColor={palette.userLabel}
       borderColor={palette.userBorder}
       background={palette.userSurface}
-      paddingLeft={1}
-      paddingRight={1}
-      columns={width}
       fallbackBare
     >
       <MarkdownBlocks source={text} palette={palette} ink={palette.ink} />

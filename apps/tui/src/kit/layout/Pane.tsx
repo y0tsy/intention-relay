@@ -6,7 +6,7 @@
 
 import type { BorderSides } from "@opentui/core";
 import type { ReactNode } from "react";
-import { ContentColumns, useContentColumns } from "./context";
+import { ContentColumns, useContentColumns, useSlotRows } from "./context";
 
 /** The columns and rows the pane keeps around its content, on each side. */
 export const PANE_PADDING = 1;
@@ -34,6 +34,8 @@ export function Pane({
   paddingRight = PANE_PADDING,
   columns,
   height,
+  fill = false,
+  wide = false,
   fallbackBare = false,
 }: {
   children?: ReactNode;
@@ -49,12 +51,19 @@ export function Pane({
   /** The pane's own outer width; the parent's content width when omitted. */
   columns?: number;
   height?: number;
+  /** Takes the rows of the footer slot the pane sits in. */
+  fill?: boolean;
+  /** Keeps two blank columns of padding on each side. */
+  wide?: boolean;
   /** Renders the children bare when the pane's own chrome does not fit. */
   fallbackBare?: boolean;
 }) {
   const inherited = useContentColumns();
+  const slot = useSlotRows(0);
   const outer = columns ?? inherited;
-  const chrome = borderStyleColumns(border) + paddingLeft + paddingRight;
+  const left = wide ? 2 : paddingLeft;
+  const right = wide ? 2 : paddingRight;
+  const chrome = borderStyleColumns(border) + left + right;
   if (fallbackBare && outer - chrome < 1) {
     return <>{children}</>;
   }
@@ -64,7 +73,7 @@ export function Pane({
     <box
       flexDirection="column"
       width={columns}
-      height={height}
+      height={fill ? slot : height}
       borderStyle="rounded"
       border={border === true ? true : sides}
       borderColor={borderColor}
@@ -72,8 +81,8 @@ export function Pane({
       title={title}
       titleColor={titleColor}
       titleAlignment={titleAlignment}
-      paddingLeft={paddingLeft}
-      paddingRight={paddingRight}
+      paddingLeft={left}
+      paddingRight={right}
     >
       <ContentColumns columns={content}>{children}</ContentColumns>
     </box>

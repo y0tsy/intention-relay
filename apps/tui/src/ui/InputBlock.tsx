@@ -10,7 +10,7 @@
 
 import { selectDraft, selectSessionMode, selectSessionModel } from "../app/select";
 import type { AppStore } from "../app/store";
-import { Badge, Pane, TextField, useSlotRows } from "../kit";
+import { Badge, Line, Pane, TextField } from "../kit";
 import type { Palette } from "../theme/palette";
 import { StatusLine } from "./StatusRow";
 import { useStore } from "./use-store";
@@ -26,7 +26,7 @@ function Badges({
   palette: Palette;
 }) {
   return (
-    <box flexDirection="row" height={1}>
+    <Line>
       {mode === null ? null : (
         <Badge label={mode} ink={palette.badgeInk} background={palette.badgeBg} />
       )}
@@ -34,7 +34,7 @@ function Badges({
       {model === null ? null : (
         <Badge label={model} ink={palette.badgeInk} background={palette.badgeBg} />
       )}
-    </box>
+    </Line>
   );
 }
 
@@ -43,20 +43,13 @@ export function InputBlock({ store, palette }: { store: AppStore; palette: Palet
   const draft = useStore(store, selectDraft);
   const mode = useStore(store, selectSessionMode);
   const model = useStore(store, selectSessionModel);
-  const rows = useSlotRows();
   return (
-    <Pane
-      height={rows}
-      borderColor={palette.accent}
-      background={palette.panel}
-      paddingLeft={1}
-      paddingRight={1}
-    >
+    <Pane fill borderColor={palette.accent} background={palette.panel}>
       <Badges mode={mode} model={model} palette={palette} />
       <TextField text={draft.text} caret={draft.caret} palette={palette} />
-      <box height={1}>
+      <Line>
         <StatusLine store={store} palette={palette} />
-      </box>
+      </Line>
     </Pane>
   );
 }

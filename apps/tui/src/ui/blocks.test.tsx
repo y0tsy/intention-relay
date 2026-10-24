@@ -14,7 +14,7 @@ async function lines(element: React.ReactNode, width: number): Promise<string[]>
 }
 
 test("a card frames its message on the user wash", async () => {
-  const painted_ = await lines(<UserCard text="hi there" palette={DARK} width={20} />, 20);
+  const painted_ = await lines(<UserCard text="hi there" palette={DARK} />, 20);
   assert.equal(painted_.length, 3, "a three-row card: its top border, its line, its bottom");
   assert.match(painted_[0] ?? "", /^╭─❯ you─+╮$/);
   assert.match(painted_[1] ?? "", /^│ hi there +│$/);
@@ -22,8 +22,9 @@ test("a card frames its message on the user wash", async () => {
 });
 
 test("a card too narrow for a frame falls back to its rows", async () => {
-  const painted_ = await lines(<UserCard text="hi there" palette={DARK} width={3} />, 6);
-  assert.ok(painted_.join(" ").includes("hi there"));
+  const painted_ = await lines(<UserCard text="hi there" palette={DARK} />, 4);
+  assert.ok(painted_.join("").includes("hi"), "the message is painted");
+  assert.ok(!painted_.some((line) => line.includes("╭")), "no frame is drawn around it");
 });
 
 test("a reasoning block shows fifteen rows and the rows it counted", async () => {

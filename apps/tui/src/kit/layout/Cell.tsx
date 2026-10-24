@@ -6,8 +6,9 @@
 
 import { TextAttributes } from "@opentui/core";
 import { cellText, cellTextRight } from "../text";
+import { useContentColumns } from "./context";
 
-/** Renders one cell padded and cut to `width` columns. */
+/** Renders one cell padded and cut to its column. */
 export function Cell({
   text,
   width,
@@ -17,13 +18,16 @@ export function Cell({
   align = "left",
 }: {
   text: string;
-  width: number;
+  /** The cell's own columns; the parent's content width when omitted. */
+  width?: number;
   ink?: string;
   background?: string;
   bold?: boolean;
   align?: "left" | "right";
 }) {
-  const content = align === "right" ? cellTextRight(text, width) : cellText(text, width);
+  const inherited = useContentColumns();
+  const columns = width ?? inherited;
+  const content = align === "right" ? cellTextRight(text, columns) : cellText(text, columns);
   return (
     <text
       wrapMode="none"

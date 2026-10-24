@@ -36,13 +36,14 @@ import {
   browserPlan,
   browserPanelColumns,
   DOCK_GAP_ROWS,
-  FOOTER_MARGIN,
+  Dock,
   FooterFrame,
   type FooterMode,
   footerPlan,
   inputSlotRows,
+  Scroll,
+  Slot,
   SlotRows,
-  useSlotRows,
   useWindow,
 } from "../kit";
 import type { Palette } from "../theme/palette";
@@ -86,15 +87,10 @@ function Hints({
   theme: ThemePreference;
   palette: Palette;
 }) {
-  const rows = useSlotRows();
-  return (
-    <box height={rows}>
-      {surface === "theme" ? (
-        <ThemePicker selection={selection} current={theme} palette={palette} />
-      ) : menu === null ? null : (
-        <HintBand menu={menu} highlight={menuHighlight} palette={palette} />
-      )}
-    </box>
+  return surface === "theme" ? (
+    <ThemePicker selection={selection} current={theme} palette={palette} />
+  ) : menu === null ? null : (
+    <HintBand menu={menu} highlight={menuHighlight} palette={palette} />
   );
 }
 
@@ -103,13 +99,12 @@ function Docked({
   store,
   palette,
   browser,
-  width,
 }: {
   store: AppStore;
   palette: Palette;
   browser: BrowserLayout;
-  width: number;
 }) {
+  const { columns: width } = useWindow();
   const selection = useStore(store, selectSelection);
   const rows = useStore(store, selectBrowserRows);
   const filter = useStore(store, selectBrowserFilter);
@@ -119,25 +114,17 @@ function Docked({
   // is on screen and nowhere else.
   const now = useNow(true);
   return (
-    <>
-      <box height={DOCK_GAP_ROWS} />
-      <box flexDirection="row" height={browser.rows}>
-        <box width={FOOTER_MARGIN} />
-        <box width={browserPanelColumns(width)}>
-          <SlotRows rows={browser.rows}>
-            <SessionBrowser
-              rows={rows}
-              error={error}
-              selection={selection}
-              filter={filter}
-              tab={tab}
-              palette={palette}
-              now={now}
-            />
-          </SlotRows>
-        </box>
-      </box>
-    </>
+    <Dock rows={browser.rows} columns={browserPanelColumns(width)}>
+      <SessionBrowser
+        rows={rows}
+        error={error}
+        selection={selection}
+        filter={filter}
+        tab={tab}
+        palette={palette}
+        now={now}
+      />
+    </Dock>
   );
 }
 
@@ -180,24 +167,20 @@ export function Footer({
       layout={layout}
       welcome={welcome}
       palette={palette}
-      below={
-        browser === null ? null : (
-          <Docked store={store} palette={palette} browser={browser} width={width} />
-        )
-      }
+      below={browser === null ? null : <Docked store={store} palette={palette} browser={browser} />}
     >
       {layout.liveRows === 0 ? null : (
-        <box height={layout.liveRows} flexDirection="column">
-          {welcome ? (
-            <SlotRows rows={layout.liveRows}>
+        <SlotRows rows={layout.liveRows}>
+          <Slot>
+            {welcome ? (
               <Welcome palette={palette} />
-            </SlotRows>
-          ) : (
-            <scrollbox flexGrow={1} flexBasis={0} stickyScroll stickyStart="bottom">
-              <Live store={store} palette={palette} />
-            </scrollbox>
-          )}
-        </box>
+            ) : (
+              <Scroll>
+                <Live store={store} palette={palette} />
+              </Scroll>
+            )}
+          </Slot>
+        </SlotRows>
       )}
       {layout.hintRows === 0 ? null : (
         <SlotRows rows={layout.hintRows}>
@@ -215,9 +198,9 @@ export function Footer({
         <InputBlock store={store} palette={palette} />
       </SlotRows>
       <SlotRows rows={layout.detailRows}>
-        <box height={layout.detailRows}>
+        <Slot>
           <Detail store={store} palette={palette} />
-        </box>
+        </Slot>
       </SlotRows>
     </FooterFrame>
   );

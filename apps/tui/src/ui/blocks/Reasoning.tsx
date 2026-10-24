@@ -7,7 +7,7 @@
 //! `Ctrl+E` reveals one chunk at a time. The rows the affordance counts are the
 //! rows this block measured, so the number it prints is the number it hid.
 
-import { Lines, markerText, Rule } from "../../kit";
+import { Lines, markerText, Rule, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { REASONING_EXPAND, REASONING_GLYPH, REASONING_LABEL } from "../glyphs";
 
@@ -26,7 +26,7 @@ export function Reasoning({
   expansion: number;
 }) {
   return (
-    <box flexDirection="column">
+    <Stack>
       <text fg={palette.reasoningHeader}>{markerText(REASONING_GLYPH, REASONING_LABEL)}</text>
       <Lines
         text={text}
@@ -44,6 +44,6 @@ export function Reasoning({
         )}
       />
       <Rule color={palette.accent} />
-    </box>
+    </Stack>
   );
 }

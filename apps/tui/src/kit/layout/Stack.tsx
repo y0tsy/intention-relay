@@ -16,9 +16,12 @@ export function Stack({
   shrink = 1,
   background,
   padding = 0,
+  spaced = false,
 }: {
   children?: ReactNode;
   gap?: number;
+  /** Keeps one blank row between two children. */
+  spaced?: boolean;
   height?: number;
   width?: number;
   grow?: number;
@@ -29,7 +32,7 @@ export function Stack({
   return (
     <box
       flexDirection="column"
-      gap={gap}
+      gap={spaced ? Math.max(1, gap) : gap}
       height={height}
       width={width}
       flexGrow={grow}

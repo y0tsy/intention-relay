@@ -12,7 +12,7 @@
 //! pane measures nothing.
 
 import { TextAttributes } from "@opentui/core";
-import { Badge, Hero, Pane, Row, useSlotRows } from "../kit";
+import { Badge, Center, Hero, Line, Pane, Spacer, useSlotRows } from "../kit";
 import type { Palette } from "../theme/palette";
 
 /** The product word of the lockup. */
@@ -35,28 +35,23 @@ function tracked(word: string): string {
 /** Renders the lockup: the product word, the gap, and the tracked trailing word. */
 function Lockup({ palette }: { palette: Palette }) {
   return (
-    <Row height={1} justify="center" gap={LOGO_GAP}>
+    <Center>
       <text fg={palette.accentDeep} attributes={TextAttributes.BOLD}>
         {PRODUCT}
       </text>
+      <Spacer columns={LOGO_GAP} />
       <text fg={palette.inkMuted}>{tracked(TRAILING)}</text>
-    </Row>
+    </Center>
   );
 }
 
 /** Renders the framed overview: one row of the sub-blocks the core can fill. */
-function Overview({ rows, palette }: { rows: number; palette: Palette }) {
+function Overview({ palette }: { palette: Palette }) {
   return (
-    <Pane
-      height={rows}
-      borderColor={palette.border}
-      background={palette.panel}
-      paddingLeft={1}
-      paddingRight={1}
-    >
-      <Row height={1}>
+    <Pane fill borderColor={palette.border} background={palette.panel}>
+      <Line>
         <Badge label={`Version ${VERSION}`} ink={palette.badgeInk} background={palette.badgeBg} />
-      </Row>
+      </Line>
     </Pane>
   );
 }
@@ -68,7 +63,7 @@ export function Welcome({ palette }: { palette: Palette }) {
     <Hero
       rows={rows}
       lockup={<Lockup palette={palette} />}
-      overview={(rows) => <Overview rows={rows} palette={palette} />}
+      overview={() => <Overview palette={palette} />}
     />
   );
 }
