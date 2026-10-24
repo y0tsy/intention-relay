@@ -105,6 +105,11 @@ function runPhrase(facts: StatusFacts): StatusRun[] | null {
   }
 }
 
+/** Returns one token count in thousands, as the surfaces print it. */
+export function tokenCount(count: number): string {
+  return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
+}
+
 /** Returns the usage segment one run reads as, when its projection carries one. */
 function usageRun(facts: StatusFacts): StatusRun | null {
   if (facts.usage === null) {
@@ -112,7 +117,10 @@ function usageRun(facts: StatusFacts): StatusRun | null {
   }
   return facts.usage === "not_reported"
     ? { text: "ctx not reported", ink: "inkMuted" }
-    : { text: `ctx in ${facts.usage.input} out ${facts.usage.output}`, ink: "inkMuted" };
+    : {
+        text: `ctx ${tokenCount(facts.usage.input)} in / ${tokenCount(facts.usage.output)} out`,
+        ink: "inkMuted",
+      };
 }
 
 /** One fact the status row can keep or give up as the window narrows. */

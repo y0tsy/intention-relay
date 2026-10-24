@@ -13,9 +13,10 @@ import {
   inputSlotRows,
   LIVE_BAND_ROWS,
   MIN_BLOCK_ROWS,
-  FOOTER_MARGIN,
   printRoom,
   SESSION_CHROME_ROWS,
+  SESSION_MARGIN,
+  TRANSCRIPT_INDENT,
   WELCOME_CHROME_ROWS,
   heroLayout,
 } from "./index";
@@ -174,10 +175,21 @@ test("every window spends its body exactly and never overflows", () => {
 });
 
 test("the printed transcript starts at the footer's content column", () => {
-  assert.equal(CONTENT_INDENT, 3);
-  const layout = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0);
-  assert.equal(layout.contentColumns, 80 - CONTENT_INDENT * 2);
-  assert.equal(layout.columns, 80 - FOOTER_MARGIN * 2);
+  assert.equal(CONTENT_INDENT, 3, "the welcome page keeps its own margin");
+  assert.equal(TRANSCRIPT_INDENT, 5);
+  const session = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0);
+  assert.equal(
+    session.contentColumns,
+    80 - TRANSCRIPT_INDENT * 2,
+    "a printed row and the live band share one column",
+  );
+  assert.equal(
+    session.columns,
+    80 - SESSION_MARGIN * 2,
+    "the tray's rail is the transcript's rule",
+  );
+  const welcome = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "welcome", 0);
+  assert.equal(welcome.contentColumns, 80 - CONTENT_INDENT * 2);
 });
 
 test("a print chunk fits the rows above the footer", () => {

@@ -11,7 +11,16 @@
 import { PANE_PADDING } from "./Pane";
 import { INPUT_CHROME_ROWS } from "./TextField";
 
+/** The columns the page keeps on each side of the window. */
 export const FOOTER_MARGIN = 1;
+
+/**
+ * The columns a session's frame takes on each side.
+ *
+ * The frame's rail is the column the transcript's rule runs down, so the tray
+ * and the printed page above it meet on one vertical line.
+ */
+export const SESSION_MARGIN = 3;
 
 /** The columns the footer needs to say anything at all. */
 export const FOOTER_MIN_COLUMNS = 8;
@@ -111,9 +120,12 @@ export function footerPlan(
   // a short session never pads its own history with blank rows.
   const reached = Math.min(printedRows, terminalHeight);
   const slack = Math.max(0, terminalHeight - reached - natural);
+  const margin = mode === "welcome" ? FOOTER_MARGIN : SESSION_MARGIN;
+  const indent =
+    mode === "welcome" ? CONTENT_INDENT : CONTENT_INDENT + (SESSION_MARGIN - FOOTER_MARGIN);
   return {
     windowColumns: width,
-    columns: Math.max(0, width - FOOTER_MARGIN * 2),
+    columns: Math.max(0, width - margin * 2),
     rows: natural + slack,
     body: body + slack,
     chromeRows,
@@ -121,7 +133,7 @@ export function footerPlan(
     hintRows,
     inputRows,
     detailRows,
-    contentColumns: Math.max(0, width - CONTENT_INDENT * 2),
+    contentColumns: Math.max(0, width - indent * 2),
     dockedRows: docked,
   };
 }

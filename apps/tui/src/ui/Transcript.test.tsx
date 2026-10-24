@@ -75,13 +75,13 @@ test("a committed turn reads as its label, its reasoning, and its answer", async
     { ...row(2, "assistant", "It relays intentions."), reasoning: "they asked" },
   ]);
   assert.ok(
-    painted_.some((line) => line === "❯ you"),
+    painted_.some((line) => line === "you"),
     "the reader's turn opens with its label",
   );
   assert.ok(painted_.some((line) => line.includes("explain this repository")));
   assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
   assert.ok(
-    painted_.some((line) => line === "∷ assistant"),
+    painted_.some((line) => line === "assistant"),
     "the answer carries its label",
   );
   assert.ok(painted_.some((line) => line === "It relays intentions."));
@@ -102,7 +102,7 @@ test("a long reasoning collapses after fifteen rows and reveals more on a gestur
 test("the step in flight reads as the reasoning and the answer it becomes", async () => {
   const painted_ = await lines([], { reasoning: "...", answer: "hold on" });
   assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
-  assert.ok(painted_.some((line) => line === "∷ assistant"));
+  assert.ok(painted_.some((line) => line === "assistant"));
   assert.ok(painted_.some((line) => line === "hold on"));
 });
 
@@ -160,8 +160,8 @@ test("a notice stays a plain line, never prose", async () => {
 
 test("the blocks of one turn are separated by exactly one blank row", async () => {
   const painted_ = await lines([row(1, "user", "hi"), row(2, "assistant", "hello")]);
-  const user = painted_.indexOf("❯ you");
-  const answer = painted_.indexOf("∷ assistant");
+  const user = painted_.indexOf("you");
+  const answer = painted_.indexOf("assistant");
   assert.ok(user >= 0 && answer > user, "the reader's turn opens and the answer follows");
   assert.deepEqual(
     painted_.slice(user, answer).filter((line) => line.trim().length === 0),

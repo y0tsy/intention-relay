@@ -61,7 +61,7 @@ function withoutComposer(lines: readonly string[]): string[] {
  * what two answers of the same text are compared without.
  */
 function answerRows(lines: readonly string[]): string[] {
-  return lines.filter((line) => !line.startsWith("∷"));
+  return lines.filter((line) => line !== "assistant");
 }
 
 /**
@@ -198,7 +198,7 @@ test("an appended row prints once and repaints nothing else", async (t) => {
   assert.deepEqual(seen, ["a later answer"], "the appended row is the only row parsed");
   assert.deepEqual(
     printedLines(rows),
-    ["∷ assistant", "a later answer"],
+    ["assistant", "a later answer"],
     "the row is printed once, under its label",
   );
   // The footer gives the printed rows back: the window paints exactly the rows

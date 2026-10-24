@@ -72,7 +72,7 @@ export function ToolBlock({
   const previewable = result !== null && identity !== EXECUTE && printed.trim().length > 0;
   return (
     <Pane
-      title={markerText(TOOL_GLYPH, identity)}
+      title={markerText(TOOL_GLYPH, status === null ? identity : `${identity}   ${status}`)}
       titleColor={palette.toolLabel}
       borderColor={palette.toolBorder}
       background={palette.toolSurface}

@@ -23,6 +23,7 @@ export interface MarkdownPalette {
   readonly inkMuted: string;
   readonly inkFaint: string;
   readonly border: string;
+  readonly panel: string;
   readonly markdownHeading: string;
   readonly markdownCode: string;
   readonly markdownLink: string;
@@ -148,14 +149,18 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
     }
     case "code": {
       const code = token as Tokens.Code;
+      // A fence is one block of the answer, not a quote of it: the panel is the
+      // same frame the tool blocks wear, filled with the page's raised wash.
       return (
         <box
           key={key}
           flexDirection="column"
-          paddingLeft={1}
-          borderStyle="single"
-          border={["left"]}
+          paddingLeft={2}
+          paddingRight={2}
+          borderStyle="rounded"
+          border
           borderColor={palette.border}
+          backgroundColor={palette.panel}
         >
           <text wrapMode="word" fg={palette.markdownCode}>
             {code.text}

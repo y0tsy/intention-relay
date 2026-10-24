@@ -50,14 +50,14 @@ export function CommittedBlock({
       return <UserCard text={message.text} palette={palette} />;
     case "assistant":
       return (
-        <>
+        <Stack spaced>
           {message.reasoning === null || message.reasoning.trim().length === 0 ? null : (
             <Reasoning text={message.reasoning} palette={palette} expansion={expansion} />
           )}
           {message.text.trim().length === 0 ? null : (
             <Answer text={message.text} palette={palette} />
           )}
-        </>
+        </Stack>
       );
     case "notice":
       return <Notice text={message.text} palette={palette} />;

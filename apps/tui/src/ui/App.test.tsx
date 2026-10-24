@@ -184,7 +184,7 @@ test("the transcript prints the rows the daemon sent, once, above the footer", a
     // A printed row carries the page between its glyphs, so its blanks are the
     // page's own and read as ordinary spaces here.
     const text = visible(shown.printed).join("\n");
-    assert.match(text, /❯ you/);
+    assert.match(text, /│ you/);
     assert.match(text, /explain this repository/);
     assert.match(text, /It relays intentions\./);
     assert.equal(

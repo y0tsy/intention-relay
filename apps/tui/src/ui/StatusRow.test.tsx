@@ -80,7 +80,7 @@ test("a completed run reads its committed duration in whole seconds", async () =
       finishedAt: 1013,
       usage: { input: 1200, output: 300 },
     }),
-    "Ready · session abcdef01 · build · Answered in 13s · ctx in 1200 out 300",
+    "Ready · session abcdef01 · build · Answered in 13s · ctx 1.2k in / 300 out",
   );
 });
 

@@ -18,6 +18,7 @@ import {
   FOOTER_MARGIN,
   FOOTER_MIN_COLUMNS,
   type FooterLayout,
+  SESSION_MARGIN,
 } from "./footer-plan";
 import { Surface } from "./Surface";
 
@@ -109,7 +110,7 @@ export function FooterFrame({
         <Surface rows={rows} columns={layout.windowColumns} color={palette.canvas} />
       </box>
       <box flexDirection="row" height={frameRows}>
-        <box width={FOOTER_MARGIN} />
+        <box width={SESSION_MARGIN} />
         <box
           width={layout.columns}
           height={frameRows}

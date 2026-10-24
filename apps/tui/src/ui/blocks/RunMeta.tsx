@@ -10,6 +10,7 @@ import type { RunProjectionDto } from "../../bindings";
 import { markerText, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { RUN_GLYPH } from "../glyphs";
+import { tokenCount } from "../status-phrases";
 
 /** Returns the words a terminal status prints. */
 function outcome(status: RunProjectionDto["status"]): string {
@@ -23,11 +24,6 @@ function outcome(status: RunProjectionDto["status"]): string {
   }
 }
 
-/** Returns one token count in thousands, as the row prints it. */
-function tokens(count: number): string {
-  return count < 1000 ? String(count) : `${(count / 1000).toFixed(1)}k`;
-}
-
 /** Returns the row a finished run closes with. */
 export function runMetaText(run: RunProjectionDto): string {
   const parts = [outcome(run.status)];
@@ -37,7 +33,7 @@ export function runMetaText(run: RunProjectionDto): string {
   }
   const usage = run.usage;
   if (usage !== null && usage !== undefined && usage.state === "reported") {
-    parts.push(`${tokens(usage.input_tokens)} in / ${tokens(usage.output_tokens)} out`);
+    parts.push(`${tokenCount(usage.input_tokens)} in / ${tokenCount(usage.output_tokens)} out`);
   }
   return parts.join(" · ");
 }

@@ -5,15 +5,15 @@
 //! does. A code fence, a list, or a bold run renders inside the turn exactly as
 //! it would in the answer it asked for.
 
-import { MarkdownBlocks, markerText, Stack } from "../../kit";
+import { MarkdownBlocks, Stack } from "../../kit";
 import type { Palette } from "../../theme/palette";
-import { USER_GLYPH, USER_LABEL } from "../glyphs";
+import { USER_LABEL } from "../glyphs";
 
 /** Renders one committed user row. */
 export function UserCard({ text, palette }: { text: string; palette: Palette }) {
   return (
     <Stack>
-      <text fg={palette.userLabel}>{markerText(USER_GLYPH, USER_LABEL)}</text>
+      <text fg={palette.accentDeep}>{USER_LABEL}</text>
       <MarkdownBlocks source={text} palette={palette} ink={palette.ink} />
     </Stack>
   );

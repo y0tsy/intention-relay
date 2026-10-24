@@ -5,22 +5,10 @@
 //! presentation, so no terminal paints a marker in a colour of its own. A surface
 //! that needs a marker reads it from here; nothing spells one of these again.
 
-/** The glyph a committed user message's card opens with. */
-export const USER_GLYPH = "❯";
-
-/** The label the user card's marker introduces. */
+/** The label a committed user message opens with. */
 export const USER_LABEL = "you";
 
-/**
- * The glyph that opens a committed answer block.
- *
- * U+2237 PROPORTION: a member of the reasoning header's family (U+2234
- * THEREFORE) that is visibly distinct from it, rare, monochrome, and free of any
- * emoji presentation.
- */
-export const ANSWER_GLYPH = "∷";
-
-/** The label a committed answer's marker introduces. */
+/** The label a committed answer opens with. */
 export const ASSISTANT_LABEL = "assistant";
 
 /** The glyph that opens the row a finished run closes with. */
