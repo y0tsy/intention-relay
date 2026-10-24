@@ -209,6 +209,10 @@ test("the docked browser shows the rows its panel has above its chrome", () => {
 test("the welcome keeps the overview before the lockup", () => {
   const reserved = heroLayout(10, 5);
   assert.deepEqual(reserved, { lead: 1, hero: 1, filler: 3, overview: 5 });
+  const wordmark = heroLayout(10, 5, 2);
+  assert.deepEqual(wordmark, { lead: 1, hero: 2, filler: 2, overview: 5 });
+  const snug = heroLayout(6, 4, 2);
+  assert.deepEqual(snug, { lead: 0, hero: 2, filler: 0, overview: 4 });
   const roomy = heroLayout(10);
   assert.deepEqual(roomy, { lead: 1, hero: 1, filler: 5, overview: 3 });
   const tight = heroLayout(4);

@@ -20,7 +20,7 @@ async function lines(columns: number, rows: number): Promise<string[]> {
   );
 }
 
-test("the lockup centres in the region it was given", async () => {
+test("the lockup stacks the fullwidth words and stars RELAY", async () => {
   const frame = await painted(
     <SlotRows rows={12}>
       <Welcome palette={DARK} />
@@ -29,9 +29,21 @@ test("the lockup centres in the region it was given", async () => {
     12,
   );
   const painted_ = frame.split("\n");
-  assert.equal(painted_[1]?.trim(), "INTENTION  R E L A Y", "the pair is whole");
-  assert.equal(painted_[1]?.indexOf("I"), 10, "and centred in the region");
-  assert.match(painted_[2] ?? "", /^\s*$/);
+  const top = painted_[1] ?? "";
+  const bottom = painted_[2] ?? "";
+  assert.equal(top.trim(), "Ｉ Ｎ Ｔ Ｅ Ｎ Ｔ Ｉ Ｏ Ｎ", "the product word is whole");
+  assert.equal(bottom.trim(), "✦ Ｒ Ｅ Ｌ Ａ Ｙ ✦", "the trailing word carries its stars");
+  assert.equal(
+    top.length - top.trimStart().length,
+    top.length - top.trimEnd().length,
+    "the product word is centred",
+  );
+  assert.equal(
+    bottom.length - bottom.trimStart().length,
+    bottom.length - bottom.trimEnd().length,
+    "the trailing word is centred",
+  );
+  assert.match(painted_[3] ?? "", /^\s*$/, "the overview follows the wordmark");
 });
 
 test("the overview is pinned to the last rows and names the version", async () => {

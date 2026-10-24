@@ -41,6 +41,9 @@ export const TOOL_LIST_GLYPH = "‣";
 /** The separator between two runs of one sentence. */
 export const SEPARATOR = " · ";
 
+/** The star that flanks the product's trailing word. */
+export const LOGO_STAR = "✦";
+
 /** The marker a list's cursor row starts with. */
 export const CURSOR_MARKER = "> ";
 

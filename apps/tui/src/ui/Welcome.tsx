@@ -6,10 +6,11 @@
 //! directly above the input block. A region too short for both drops the lockup
 //! first, and a region with room for nothing draws nothing.
 //!
-//! A terminal has no font sizes, so the lockup approximates one: the product word
-//! is bold in the accent ink and the trailing word is tracked out one column per
-//! letter in the muted ink. The pair is centred by the layout engine, so the
-//! pane measures nothing. The overview says what the product is and which three
+//! A terminal has no font sizes, so the lockup approximates one: both words are
+//! fullwidth Latin, tracked out one column per letter, with the product word
+//! bold in the accent ink and the trailing word centred below it in the muted
+//! ink between two stars. Every row is centred by the layout engine, so the pane
+//! measures nothing. The overview says what the product is and which three
 //! commands open the first session; a narrow region keeps the orientation and
 //! drops the version before it clips an instruction.
 
@@ -22,21 +23,23 @@ import {
   Pane,
   type Run,
   Runs,
-  Spacer,
   useContentColumns,
   useSlotRows,
 } from "../kit";
 import type { Palette } from "../theme/palette";
-import { SEPARATOR } from "./glyphs";
+import { LOGO_STAR, SEPARATOR } from "./glyphs";
 
 /** The product word of the lockup. */
-const PRODUCT = "INTENTION";
+const PRODUCT = "ＩＮＴＥＮＴＩＯＮ";
 
 /** The trailing word of the lockup. */
-const TRAILING = "RELAY";
+const TRAILING = "ＲＥＬＡＹ";
 
-/** The columns the lockup keeps between its two words. */
-const LOGO_GAP = 2;
+/** The rows the wordmark occupies: the product word over the trailing one. */
+const LOCKUP_ROWS = 2;
+
+/** The most rows the overview keeps before the wordmark takes the rest. */
+const MAX_OVERVIEW_ROWS = 5;
 
 /** The one-line promise above the commands. */
 const TAGLINE = "A local agent for the long run.";
@@ -49,17 +52,36 @@ function tracked(word: string): string {
   return [...word].join(" ");
 }
 
-/** Renders the lockup: the product word, the gap, and the tracked trailing word. */
+/** Renders the lockup: the product word over the starred trailing word. */
 function Lockup({ palette }: { palette: Palette }) {
+  const trailing: Run[] = [
+    { text: `${LOGO_STAR} `, ink: palette.accent },
+    { text: tracked(TRAILING), ink: palette.inkMuted },
+    { text: ` ${LOGO_STAR}`, ink: palette.accent },
+  ];
   return (
-    <Center>
-      <text fg={palette.accentDeep} attributes={TextAttributes.BOLD}>
-        {PRODUCT}
-      </text>
-      <Spacer columns={LOGO_GAP} />
-      <text fg={palette.inkMuted}>{tracked(TRAILING)}</text>
-    </Center>
+    <>
+      <Center>
+        <text fg={palette.accentDeep} attributes={TextAttributes.BOLD} wrapMode="none">
+          {tracked(PRODUCT)}
+        </text>
+      </Center>
+      <Center>
+        <Runs runs={trailing} />
+      </Center>
+    </>
   );
+}
+
+/**
+ * Returns the overview rows the welcome keeps before the wordmark takes the rest.
+ *
+ * Once a small window has room for the wordmark and four overview rows, the
+ * wordmark is painted; below that the region spends itself on orientation alone.
+ */
+function overviewReserve(rows: number): number {
+  const wanted = rows >= LOCKUP_ROWS + 4 ? rows - LOCKUP_ROWS : rows;
+  return wanted > MAX_OVERVIEW_ROWS ? MAX_OVERVIEW_ROWS : wanted;
 }
 
 /** Returns the commands the overview offers at one content width. */
@@ -121,7 +143,8 @@ export function Welcome({ palette }: { palette: Palette }) {
   return (
     <Hero
       rows={rows}
-      reserve={5}
+      reserve={overviewReserve(rows)}
+      lockupRows={LOCKUP_ROWS}
       lockup={<Lockup palette={palette} />}
       overview={(overviewRows) => <Overview rows={overviewRows} palette={palette} />}
     />

@@ -23,14 +23,21 @@ export interface HeroPlan {
   readonly overview: number;
 }
 
-/** Returns how `rows` rows carry the lockup over the pinned overview. */
-export function heroLayout(rows: number, reserve = 3): HeroPlan {
+/**
+ * Returns how `rows` rows carry a `lockupRows`-row lockup over the pinned overview.
+ *
+ * The lead is a preference, not a requirement: a window with room for the
+ * lockup but not its blank row paints the lockup on the first row it has.
+ */
+export function heroLayout(rows: number, reserve = 3, lockupRows = HERO_ROWS): HeroPlan {
   const overview = Math.min(rows, reserve);
   const above = rows - overview;
-  const hero = Math.min(above, HERO_LEAD_ROWS + HERO_ROWS);
+  const wanted = HERO_LEAD_ROWS + lockupRows;
+  const hero = Math.min(above, wanted);
+  const lead = hero >= wanted ? HERO_LEAD_ROWS : 0;
   return {
-    lead: hero >= HERO_LEAD_ROWS + HERO_ROWS ? HERO_LEAD_ROWS : 0,
-    hero: hero > 0 ? hero - (hero >= HERO_LEAD_ROWS + HERO_ROWS ? HERO_LEAD_ROWS : 0) : 0,
+    lead,
+    hero: Math.max(0, hero - lead),
     filler: above - hero,
     overview,
   };

@@ -89,9 +89,10 @@ test("every row the footer owns carries the page, blank rows included", async ()
 
 test("an app with nothing open paints the welcome, the input block, and the status row", async () => {
   const store = offlineStore();
-  const painted_ = await lines(store, 60, 16);
+  const painted_ = await lines(store, 60, 18);
   const text = painted_.join("\n");
-  assert.match(text, /INTENTION {2}R E L A Y/);
+  assert.match(text, /Ｉ Ｎ Ｔ Ｅ Ｎ Ｔ Ｉ Ｏ Ｎ/);
+  assert.match(text, /✦ Ｒ Ｅ Ｌ Ａ Ｙ ✦/);
   assert.match(text, /Version 0\.0\.0/);
   assert.match(text, /> █/);
   assert.match(text, /Connecting… · no session/);

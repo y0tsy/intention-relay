@@ -6,7 +6,7 @@
 
 import type { ReactNode } from "react";
 import { SlotRows } from "./context";
-import { heroLayout } from "./hero-plan";
+import { HERO_ROWS, heroLayout } from "./hero-plan";
 import { Stack } from "./Stack";
 
 /** Renders the lockup over the overview pinned to the last rows. */
@@ -15,6 +15,7 @@ export function Hero({
   lockup,
   overview,
   reserve = 3,
+  lockupRows = HERO_ROWS,
 }: {
   rows: number;
   lockup: ReactNode;
@@ -22,11 +23,13 @@ export function Hero({
   overview: (rows: number) => ReactNode;
   /** The rows the overview may keep before the lockup takes the rest. */
   reserve?: number;
+  /** The rows the lockup itself occupies. */
+  lockupRows?: number;
 }) {
   if (rows < 1) {
     return null;
   }
-  const plan = heroLayout(rows, reserve);
+  const plan = heroLayout(rows, reserve, lockupRows);
   return (
     <Stack height={rows}>
       {plan.lead > 0 ? <box height={plan.lead} /> : null}
