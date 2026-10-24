@@ -83,6 +83,25 @@ test("a completed run reads its committed duration in whole seconds", async () =
   );
 });
 
+test("a narrow window keeps the live state and gives up the session first", () => {
+  assert.equal(
+    textOf(
+      statusRuns(
+        {
+          ...IDLE,
+          sessionId: "abcdef0123456789",
+          mode: "build",
+          phase: "answering",
+          runStatus: "running",
+          elapsed: 4123,
+        },
+        34,
+      ),
+    ),
+    "Ready · Answering… 4.1s",
+  );
+});
+
 test("a run that reported no usage says so, and one that committed none says nothing", () => {
   assert.equal(
     textOf(statusRuns({ ...IDLE, runStatus: "completed", usage: "not_reported" })),

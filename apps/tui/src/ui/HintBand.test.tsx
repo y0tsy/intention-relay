@@ -38,8 +38,8 @@ test("a bare slash ranks the whole registry, which the band windows", async () =
     "the whole list is not painted",
   );
   assert.ok(
-    painted_.some((line) => /… and 1 more commands/.test(line)),
-    "the noun is the band's own word, never a count-agreeing one",
+    painted_.some((line) => /… and 1 more command/.test(line)),
+    "the noun agrees with the count it reports",
   );
 });
 
@@ -58,7 +58,7 @@ test("the window follows the row the reader is on", async () => {
     last.some((line) => /^│\s+> \/quit/.test(line)),
     "the cursor's own row is painted",
   );
-  assert.ok(last.some((line) => /… and 1 more commands/.test(line)));
+  assert.ok(last.some((line) => /… and 1 more command/.test(line)));
 });
 
 test("a prompt is not a command: the caret's word opens no band", async () => {
@@ -96,7 +96,7 @@ test("the band spends two frame rows around the rows it shows", async () => {
 test("the band paints the rows with the first one cursored", async () => {
   const painted_ = await lines("/s", 72);
   const text = painted_.join("\n");
-  assert.match(text, /commands/);
+  assert.match(text, /Commands/);
   assert.match(text, /> \/sessions/);
   assert.match(text, /browse the sessions on this machine/);
   assert.match(text, /Navigation/);

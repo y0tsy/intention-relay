@@ -52,8 +52,8 @@ function BrowserBody({
       )}
       {rows.length === 0 && error === null ? (
         <Cell
-          text="no sessions yet; send a prompt to create one"
-          ink={palette.accentDeep}
+          text="No sessions yet. Send a prompt to start one."
+          ink={palette.inkMuted}
           background={palette.stubBg}
         />
       ) : null}

@@ -83,7 +83,7 @@ export function Picker({
           </text>
         );
       })}
-      <text wrapMode="none" fg={palette.inkFaint} bg={palette.headerBg}>
+      <text wrapMode="none" fg={palette.inkMuted} bg={palette.headerBg}>
         {legend}
       </text>
     </Pane>

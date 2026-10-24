@@ -19,7 +19,7 @@ export interface BrowserTable {
   readonly start: number;
   readonly first: number;
   readonly last: number;
-  readonly columns: readonly { key: string; width: number }[];
+  readonly columns: readonly { key: string; width: number; align?: "left" | "right" }[];
 }
 
 /** Returns the window of sessions the browser shows for one selection. */
@@ -39,7 +39,7 @@ export function useBrowserTable(
     columns: [
       { key: "modified", width: widths.modified },
       { key: "created", width: widths.created },
-      { key: "size", width: widths.size },
+      { key: "size", width: widths.size, align: "right" },
       { key: "title", width: widths.title },
       { key: "path", width: widths.path },
     ],

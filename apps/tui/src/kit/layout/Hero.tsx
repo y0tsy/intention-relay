@@ -14,16 +14,19 @@ export function Hero({
   rows,
   lockup,
   overview,
+  reserve = 3,
 }: {
   rows: number;
   lockup: ReactNode;
   /** Renders the overview in the rows the pane pins to its bottom. */
   overview: (rows: number) => ReactNode;
+  /** The rows the overview may keep before the lockup takes the rest. */
+  reserve?: number;
 }) {
   if (rows < 1) {
     return null;
   }
-  const plan = heroLayout(rows);
+  const plan = heroLayout(rows, reserve);
   return (
     <Stack height={rows}>
       {plan.lead > 0 ? <box height={plan.lead} /> : null}

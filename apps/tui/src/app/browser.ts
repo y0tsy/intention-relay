@@ -16,7 +16,7 @@ export const BROWSER_TABS: readonly BrowserTab[] = ["folder", "all"];
 
 /** Returns the label the radio row shows for one tab. */
 export function tabLabel(tab: BrowserTab): string {
-  return tab === "folder" ? "Current Folder" : "All";
+  return tab === "folder" ? "This workspace" : "All sessions";
 }
 
 /**

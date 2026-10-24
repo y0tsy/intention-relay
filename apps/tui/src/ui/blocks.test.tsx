@@ -31,7 +31,7 @@ test("a reasoning block shows fifteen rows and the rows it counted", async () =>
   const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
   const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
   assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1 + 1);
-  assert.ok(painted_.some((line) => /… 5 more reasoning lines hidden/.test(line)));
+  assert.ok(painted_.some((line) => /… 5 more · click or Ctrl\+E/.test(line)));
 });
 
 test("a tool block previews twelve rows and names the rows it hid", async () => {

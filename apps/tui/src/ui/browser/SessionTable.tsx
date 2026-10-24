@@ -24,17 +24,22 @@ export function SessionTable({
     cells: {
       modified: "Modified",
       created: "Created",
-      size: "Size",
-      title: "Title",
+      size: "Msgs",
+      title: "Session",
       path: "Path",
     },
   };
   const painted = table.shown.map((session, index) => {
-    const selected = table.start + index === selection;
+    const position = table.start + index;
+    const selected = position === selection;
     return {
       key: session.session_id,
       selected,
-      background: selected ? palette.rowSelectedBg : palette.panel,
+      background: selected
+        ? palette.rowSelectedBg
+        : position % 2 === 1
+          ? palette.rowAltBg
+          : palette.panel,
       cells: {
         modified: relativeTime(session.updated_at, now),
         created: relativeTime(session.created_at, now),

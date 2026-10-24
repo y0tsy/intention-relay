@@ -34,10 +34,10 @@ test("the picker names every preference and cursors the highlighted one", async 
   assert.match(text, /dark/);
   assert.match(text, /> light/);
   assert.match(text, /Theme/);
-  assert.match(text, /enter apply \| esc revert/);
+  assert.match(text, /enter apply · esc cancel/);
 });
 
 test("the picker marks the preference in force", async () => {
   const painted_ = await lines(1, "light");
-  assert.match(painted_.join("\n"), /for a light terminal\s+current/);
+  assert.match(painted_.join("\n"), /use the light palette\s+current/);
 });

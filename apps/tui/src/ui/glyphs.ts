@@ -54,4 +54,4 @@ export const ACTIVE_TAB = "⦿";
 export const INACTIVE_TAB = "◦";
 
 /** The placeholder the browser's search bar shows while the filter is empty. */
-export const SEARCH_PLACEHOLDER = "Type to filter sessions...";
+export const SEARCH_PLACEHOLDER = "Filter by id or path";

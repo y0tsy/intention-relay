@@ -12,7 +12,7 @@ import type { Palette } from "../theme/palette";
 import { SEPARATOR } from "./glyphs";
 
 /** The detail line this front end shows while no error or notice claims it. */
-export const DEFAULT_HINT = "enter sends | /new session | /sessions switch";
+export const DEFAULT_HINT = "enter sends · /new · /sessions";
 
 /** The word for a daemon this front end has not reached yet. */
 const CONNECTING = "Connecting…";
@@ -112,27 +112,85 @@ function usageRun(facts: StatusFacts): StatusRun | null {
     : { text: `ctx in ${facts.usage.input} out ${facts.usage.output}`, ink: "inkMuted" };
 }
 
-/** Returns every styled run of the status row, in reading order. */
-export function statusRuns(facts: StatusFacts): StatusRun[] {
-  const runs: StatusRun[] = [connectionRun(facts.connection), { text: SEPARATOR, ink: "inkFaint" }];
-  runs.push(
-    facts.sessionId === null
-      ? { text: "no session", ink: "inkFaint" }
-      : { text: `session ${shortIdentifier(facts.sessionId)}`, ink: "inkMuted" },
+/** One fact the status row can keep or give up as the window narrows. */
+interface StatusPiece {
+  readonly runs: StatusRun[];
+  /** Whether the piece may be dropped to fit; the connection never is. */
+  readonly optional: boolean;
+  /** The order in which optional pieces are dropped: lower goes first. */
+  readonly rank: number;
+}
+
+/**
+ * Returns the width of the pieces as one row, separators included.
+ *
+ * A status fact is renderer-safe - one cell per character - so a length is the
+ * width: connection words, identifiers, modes, phases, and numbers, with only
+ * one-cell `·` and `…` among them.
+ */
+function piecesWidth(pieces: readonly StatusPiece[]): number {
+  const text = pieces.reduce(
+    (total, piece) => total + piece.runs.reduce((runTotal, run) => runTotal + run.text.length, 0),
+    0,
   );
+  const separators = pieces.length > 1 ? pieces.length - 1 : 0;
+  return text + separators * SEPARATOR.length;
+}
+
+/** Drops the least important facts until the row fits the columns it was given. */
+function fitted(pieces: readonly StatusPiece[], columns: number): StatusPiece[] {
+  let kept = [...pieces];
+  if (piecesWidth(kept) <= columns) {
+    return kept;
+  }
+  const droppable = kept.filter((piece) => piece.optional).sort((a, b) => a.rank - b.rank);
+  for (const piece of droppable) {
+    if (piecesWidth(kept) <= columns) {
+      break;
+    }
+    kept = kept.filter((candidate) => candidate !== piece);
+  }
+  return kept;
+}
+
+/** Returns the pieces as one row of runs, separated where they meet. */
+function joinPieces(pieces: readonly StatusPiece[]): StatusRun[] {
+  return pieces.flatMap((piece, index) =>
+    index === 0 ? piece.runs : [{ text: SEPARATOR, ink: "inkFaint" }, ...piece.runs],
+  );
+}
+
+/**
+ * Returns every styled run of the status row, in reading order.
+ *
+ * A narrow window gives up the usage, the mode, the session identity, and then
+ * the run phrase, in that order: the connection and the live state are what a
+ * reader acts on, so they are the last pieces to leave the row.
+ */
+export function statusRuns(facts: StatusFacts, columns = Number.POSITIVE_INFINITY): StatusRun[] {
+  const pieces: StatusPiece[] = [
+    { runs: [connectionRun(facts.connection)], optional: false, rank: 0 },
+    {
+      runs:
+        facts.sessionId === null
+          ? [{ text: "no session", ink: "inkFaint" }]
+          : [{ text: `session ${shortIdentifier(facts.sessionId)}`, ink: "inkMuted" }],
+      optional: true,
+      rank: 2,
+    },
+  ];
   if (facts.mode !== null) {
-    runs.push({ text: SEPARATOR, ink: "inkFaint" });
-    runs.push({ text: facts.mode, ink: "inkMuted" });
+    pieces.push({ runs: [{ text: facts.mode, ink: "inkMuted" }], optional: true, rank: 1 });
   }
   const phrase = runPhrase(facts);
   if (phrase !== null) {
-    runs.push({ text: SEPARATOR, ink: "inkFaint" }, ...phrase);
+    pieces.push({ runs: phrase, optional: true, rank: 3 });
   }
   const usage = usageRun(facts);
   if (usage !== null) {
-    runs.push({ text: SEPARATOR, ink: "inkFaint" }, usage);
+    pieces.push({ runs: [usage], optional: true, rank: 0 });
   }
-  return runs;
+  return joinPieces(fitted(pieces, columns));
 }
 
 /** Returns the text the detail line prints, and the role it paints. */
@@ -146,5 +204,5 @@ export function detailRuns(facts: {
   if (facts.notice !== null) {
     return [{ text: facts.notice, ink: "inkMuted" }];
   }
-  return [{ text: DEFAULT_HINT, ink: "inkFaint" }];
+  return [{ text: DEFAULT_HINT, ink: "inkMuted" }];
 }

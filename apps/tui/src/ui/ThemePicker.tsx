@@ -34,7 +34,7 @@ export function ThemePicker({
       }))}
       selected={selection}
       title="Theme"
-      legend="enter apply | esc revert"
+      legend="enter apply · esc cancel"
       marker={CURSOR_MARKER}
       rowMarker={ROW_MARKER}
       palette={palette}

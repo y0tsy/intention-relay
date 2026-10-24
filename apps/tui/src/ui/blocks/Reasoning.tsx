@@ -36,10 +36,7 @@ export function Reasoning({
         background={palette.panel}
         overflow={(hidden) => (
           <text wrapMode="none" fg={palette.reasoningMarker}>
-            {markerText(
-              REASONING_EXPAND,
-              `… ${hidden} more reasoning lines hidden — click or Ctrl+E to reveal more`,
-            )}
+            {markerText(REASONING_EXPAND, `… ${hidden} more · click or Ctrl+E`)}
           </text>
         )}
       />

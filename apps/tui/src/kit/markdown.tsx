@@ -14,6 +14,7 @@ import { TextAttributes } from "@opentui/core";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import { memo, type ReactNode, useMemo } from "react";
+import { Rule } from "./layout/Rule";
 import { splitBlocks } from "./markdown-split";
 
 /** The palette roles a markdown block paints. */
@@ -22,6 +23,7 @@ export interface MarkdownPalette {
   readonly inkMuted: string;
   readonly inkFaint: string;
   readonly border: string;
+  readonly markdownHeading: string;
   readonly markdownCode: string;
   readonly markdownLink: string;
 }
@@ -77,7 +79,9 @@ function runElement(run: Run, palette: MarkdownPalette, index: number): ReactNod
     : run.emphasis
       ? TextAttributes.ITALIC
       : undefined;
-  const content = run.code ? ` ${run.text} ` : run.text;
+  // Inline code carries its own mark, never padding: the source's punctuation
+  // stays against the word it belongs to.
+  const content = run.text;
   return (
     <span key={index} fg={color} attributes={attributes}>
       {content}
@@ -114,7 +118,12 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
     case "heading": {
       const heading = token as Tokens.Heading;
       return (
-        <text key={key} wrapMode="word" fg={palette.ink} attributes={TextAttributes.BOLD}>
+        <text
+          key={key}
+          wrapMode="word"
+          fg={palette.markdownHeading}
+          attributes={TextAttributes.BOLD}
+        >
           {inline(heading.tokens, palette)}
         </text>
       );
@@ -126,7 +135,7 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
         <box key={key} flexDirection="column">
           {list.items.map((item, index) => (
             <box key={blockKey(index, item.raw)} flexDirection="row">
-              <text fg={palette.inkMuted}>{list.ordered ? `${start + index}. ` : "- "}</text>
+              <text fg={palette.inkMuted}>{list.ordered ? `${start + index}. ` : "• "}</text>
               <box flexDirection="column" flexGrow={1}>
                 {item.tokens.map((inner, innerIndex) =>
                   block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
@@ -174,11 +183,7 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
     case "space":
       return <box key={key} height={1} />;
     case "hr":
-      return (
-        <text key={key} fg={palette.inkFaint}>
-          {"───"}
-        </text>
-      );
+      return <Rule key={key} color={palette.inkFaint} />;
     case "html":
       return null;
     default: {

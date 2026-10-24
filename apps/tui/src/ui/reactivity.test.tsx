@@ -254,7 +254,7 @@ test("the streaming tail paints the rows the printed block will have", async () 
   const state = openSession(store, { run: run("running") });
   const setup = await mount(store);
 
-  const source = "- one\n- two\n\nafter the list";
+  const source = "• one\n• two\n\nafter the list";
   state.applyFrame({ kind: "text_delta", data: delta(1, "answer", source) });
   store.dispatch({ kind: "frame_received", state });
   // The first delta opens the band, so the footer takes its rows on this frame
@@ -268,7 +268,7 @@ test("the streaming tail paints the rows the printed block will have", async () 
   store.dispatch({ kind: "frame_received", state });
   const committed = printedLines(await printed(setup));
 
-  assert.deepEqual(answerRows(tail), ["- one", "- two", "", "after the list"]);
+  assert.deepEqual(answerRows(tail), ["• one", "• two", "", "after the list"]);
   assert.deepEqual(
     answerRows(committed),
     answerRows(tail),
@@ -318,7 +318,7 @@ test("a block taller than the window prints in chunks and keeps every row", asyn
   const store = offlineStore();
   const items = Array.from(
     { length: 96 },
-    (_, index) => `- item ${String(index + 1).padStart(3, "0")}`,
+    (_, index) => `• item ${String(index + 1).padStart(3, "0")}`,
   );
   openSession(store, {
     messages: [row(1, "assistant", items.join("\n"))],

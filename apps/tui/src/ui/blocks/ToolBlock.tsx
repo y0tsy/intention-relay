@@ -22,16 +22,16 @@ import { TOOL_GLYPH, TOOL_LIST_GLYPH } from "../glyphs";
 export const TOOL_PREVIEW_ROWS = 12;
 
 /** The note a call without a committed result row shows. */
-const NOTE_NO_RESULT = "no tool_result row is committed";
+const NOTE_NO_RESULT = "no result was recorded";
 
 /** The note a result without a committed call row shows. */
-const NOTE_NO_CALL = "the call row for this result is not committed, so its arguments are unknown";
+const NOTE_NO_CALL = "the call was not recorded, so its arguments are unknown";
 
 /** The note a failed result shows. */
 const NOTE_FAILED = "the tool reported a failure";
 
 /** The note a partial result shows. */
-const NOTE_PARTIAL = "the tool stopped before a final result; the output above is partial";
+const NOTE_PARTIAL = "partial output: the tool stopped early";
 
 /** The tool whose output is never printed. */
 const EXECUTE = "execute";
@@ -84,12 +84,12 @@ export function ToolBlock({
           ink={palette.toolPreview}
           rail={TOOL_LIST_GLYPH}
           overflow={(hidden) => (
-            <text wrapMode="none" fg={palette.inkFaint}>{`… ${hidden} more rows`}</text>
+            <text wrapMode="none" fg={palette.inkMuted}>{`… ${hidden} more rows`}</text>
           )}
         />
       ) : null}
       {notes.map((note) => (
-        <text key={note} wrapMode="word" fg={palette.inkFaint}>
+        <text key={note} wrapMode="word" fg={palette.toolPreview}>
           {note}
         </text>
       ))}

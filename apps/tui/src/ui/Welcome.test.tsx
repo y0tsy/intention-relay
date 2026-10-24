@@ -41,11 +41,18 @@ test("the overview is pinned to the last rows and names the version", async () =
   assert.match(painted_.at(-1) ?? "", /╰/, "the overview's bottom edge is the last row");
 });
 
-test("a region too short for the lockup keeps the overview", async () => {
+test("a region too short for the lockup keeps the orientation", async () => {
   const painted_ = await lines(40, 3);
   assert.equal(painted_.length, 3);
-  assert.match(painted_.join("\n"), /Version 0\.0\.0/);
+  assert.match(painted_.join("\n"), /A local agent for the long run\./);
   assert.doesNotMatch(painted_.join("\n"), /INTENTION/);
+});
+
+test("a welcome with room for the overview names the commands and the version", async () => {
+  const text = (await lines(80, 16)).join("\n");
+  assert.match(text, /A local agent for the long run\./);
+  assert.match(text, /\/new start · \/sessions browse · \/theme palette/);
+  assert.match(text, /Version 0\.0\.0/);
 });
 
 test("a region with no rows draws nothing", async () => {

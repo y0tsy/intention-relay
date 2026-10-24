@@ -53,7 +53,7 @@ export function Band({
   /** Every trailing cell the registry ranks, for the column's own width. */
   trailing: readonly string[];
   title: string;
-  /** The noun the overflow row names: `commands` or `values`. */
+  /** The singular noun the overflow row names: `command` or `value`. */
   noun: string;
   /** The rows the band shows at once. */
   limit: number;
@@ -65,12 +65,11 @@ export function Band({
   const window = scrollWindow({ count: items.length, visible: limit, selected: highlight });
   const shown = items.slice(window.start, window.end);
   const hidden = items.length - shown.length;
+  const hiddenNoun = hidden === 1 ? noun : `${noun}s`;
   const widths = bandColumnWidths(paneContentColumns(useContentColumns(), 2), labels, trailing);
   const columns = [
-    { key: "label", width: widths.label, truncate: false },
-    ...(widths.description > 0
-      ? [{ key: "description", width: widths.description, truncate: false }]
-      : []),
+    { key: "label", width: widths.label },
+    ...(widths.description > 0 ? [{ key: "description", width: widths.description }] : []),
     ...(widths.trailing > 0 ? [{ key: "trailing", width: widths.trailing }] : []),
   ];
   return (
@@ -107,7 +106,7 @@ export function Band({
       {hidden > 0 ? (
         <text wrapMode="none" bg={palette.headerBg}>
           <span fg={palette.headerBg}>{rowMarker}</span>
-          <span fg={palette.inkMuted}>{`… and ${hidden} more ${noun}`}</span>
+          <span fg={palette.inkMuted}>{`… and ${hidden} more ${hiddenNoun}`}</span>
         </text>
       ) : null}
     </Pane>

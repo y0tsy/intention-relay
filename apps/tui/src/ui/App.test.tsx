@@ -95,7 +95,9 @@ test("an app with nothing open paints the welcome, the input block, and the stat
   assert.match(text, /Version 0\.0\.0/);
   assert.match(text, /> █/);
   assert.match(text, /Connecting… · no session/);
-  assert.match(text, /enter sends \| \/new session \| \/sessions switch/);
+  assert.match(text, /enter sends · \/new · \/sessions/);
+  assert.match(text, /A local agent for the long run\./);
+  assert.match(text, /\/new start · \/sessions browse · \/theme palette/);
   store.dispose();
 });
 
@@ -106,9 +108,9 @@ test("the theme picker takes the panel when it is asked for", async () => {
   const text = painted_.join("\n");
   assert.match(text, /Theme/, "the picker's panel is titled");
   assert.match(text, /> light/, "the highlighted preference is the one the store holds");
-  assert.match(text, /> light\s+for a light terminal/);
-  assert.match(text, /for a light terminal\s+current/);
-  assert.match(text, /enter apply \| esc revert/, "the panel carries its own legend");
+  assert.match(text, /> light\s+use the light palette/);
+  assert.match(text, /use the light palette\s+current/);
+  assert.match(text, /enter apply · esc cancel/, "the panel carries its own legend");
   store.dispose();
 });
 
@@ -143,8 +145,8 @@ test("the browser takes the panel and lists what the daemon sent", async () => {
     const painted_ = await lines(store, 90, 34);
     const text = painted_.join("\n");
     assert.match(text, /Sessions/, "the browser is docked under the footer");
-    assert.match(text, /⦿ All/);
-    assert.match(text, /Enter select {2}Tab switch tab {2}Esc close/);
+    assert.match(text, /⦿ All sessions/);
+    assert.match(text, /Enter open · Tab switch list · Esc close/);
     assert.match(text, /\/home\/user/, "the workspace the session is bound to");
     store.dispose();
   });

@@ -18,7 +18,7 @@ import {
   selectUsage,
 } from "../app/select";
 import type { AppStore } from "../app/store";
-import { Runs } from "../kit";
+import { Runs, useContentColumns } from "../kit";
 import type { Palette } from "../theme/palette";
 import { useRunClock } from "./run-clock";
 import { detailRuns, type StatusFacts, type StatusRun, statusRuns } from "./status-phrases";
@@ -33,8 +33,17 @@ function inked(runs: readonly StatusRun[], palette: Palette) {
 }
 
 /** Renders the status row from the facts it reads. */
-export function StatusRow({ facts, palette }: { facts: StatusFacts; palette: Palette }) {
-  return <Runs runs={inked(statusRuns(facts), palette)} />;
+export function StatusRow({
+  facts,
+  palette,
+  columns,
+}: {
+  facts: StatusFacts;
+  palette: Palette;
+  /** The row's own columns; the inherited content width when omitted. */
+  columns?: number;
+}) {
+  return <Runs runs={inked(statusRuns(facts, columns), palette)} />;
 }
 
 /** Renders the detail line from the facts it reads. */
@@ -67,9 +76,11 @@ export function StatusLine({ store, palette }: { store: AppStore; palette: Palet
   const startedAt = useStore(store, selectStartedAt);
   const finishedAt = useStore(store, selectFinishedAt);
   const turnStartedAt = useStore(store, selectTurnStartedAt);
+  const columns = useContentColumns();
   useRunClock(store, turnStartedAt, phase !== null);
   return (
     <StatusRow
+      columns={columns}
       facts={{
         connection,
         sessionId,

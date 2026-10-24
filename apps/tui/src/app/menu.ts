@@ -65,9 +65,9 @@ export function menuTrailing(menu: CommandMenu): readonly string[] {
 
 /** What the picker and the theme values say about each preference. */
 export const THEME_DETAILS: Record<ThemePreference, string> = {
-  auto: "follow the terminal background",
-  dark: "for a dark terminal",
-  light: "for a light terminal",
+  auto: "follow the terminal",
+  dark: "use the dark palette",
+  light: "use the light palette",
 };
 
 /**

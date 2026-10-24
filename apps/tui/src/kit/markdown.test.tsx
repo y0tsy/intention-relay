@@ -26,13 +26,25 @@ test("a paragraph wraps by word and never past the panel", async () => {
 
 test("a list keeps its markers and its items whole", async () => {
   const painted_ = await lines("- first item\n- second item\n\n1. one\n2. two\n");
-  assert.deepEqual(painted_, ["- first item", "- second item", "", "1. one", "2. two"]);
+  assert.deepEqual(painted_, ["• first item", "• second item", "", "1. one", "2. two"]);
 });
 
 test("a heading reads as a heading and not as literal hashes", async () => {
   const painted_ = await lines("## What it does\n\nIt relays.\n");
   assert.equal(painted_[0], "What it does");
   assert.equal(painted_[2], "It relays.");
+});
+
+test("inline code stays against its punctuation", async () => {
+  const painted_ = await lines("Use `widgets` here, then stop.");
+  const text = painted_.join(" ");
+  assert.match(text, /Use widgets here, then stop\./);
+  assert.ok(!text.includes("widgets ,"), "no gap is left before the comma");
+});
+
+test("a rule spans the region, not three cells", async () => {
+  const painted_ = await lines("above\n\n---\n\nbelow", 20);
+  assert.ok(painted_.includes("─".repeat(20)), "the divider is the full width");
 });
 
 test("a fenced block keeps its own lines", async () => {

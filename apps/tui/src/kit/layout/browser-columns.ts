@@ -38,10 +38,10 @@ const MIN_PATH = 4;
 export function browserColumnWidths(width: number): BrowserColumns {
   const flexible = Math.max(0, width - (MARKER_WIDTH + COLUMN_GAP * 4));
   const share = (percent: number): number => Math.floor((flexible * percent) / 100);
-  const modified = Math.max(share(18), MIN_MODIFIED);
-  const created = Math.max(share(12), MIN_CREATED);
-  const size = Math.max(share(8), MIN_SIZE);
-  const path = Math.max(share(16), MIN_PATH);
+  const modified = Math.max(share(16), MIN_MODIFIED);
+  const created = Math.max(share(10), MIN_CREATED);
+  const size = Math.max(share(7), MIN_SIZE);
+  const path = Math.max(share(24), MIN_PATH);
   return {
     modified,
     created,

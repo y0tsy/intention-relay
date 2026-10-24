@@ -34,8 +34,8 @@ export function HintBand({
       highlight={highlight}
       labels={menuLabels(menu)}
       trailing={menuTrailing(menu)}
-      title={menu.kind === "command" ? "commands" : "arguments"}
-      noun={menu.kind === "command" ? "commands" : "values"}
+      title={menu.kind === "command" ? "Commands" : "Arguments"}
+      noun={menu.kind === "command" ? "command" : "value"}
       limit={MAX_COMMAND_ROWS}
       marker={CURSOR_MARKER}
       rowMarker={ROW_MARKER}

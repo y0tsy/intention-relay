@@ -44,10 +44,10 @@ test("the docked panel is titled, tabbed, and carries its own legend", async () 
   const painted_ = await lines([summary()], 80, 30);
   const text = painted_.join("\n");
   assert.match(painted_[0] ?? "", /^╭─Sessions─+╮$/);
-  assert.match(text, /⦿ All/);
-  assert.match(text, /Type to filter sessions\.\.\./);
+  assert.match(text, /⦿ All sessions/);
+  assert.match(text, /Filter by id or path/);
   assert.match(text, /Modified/);
-  assert.match(text, /Enter select {2}Tab switch tab {2}Esc close/);
+  assert.match(text, /Enter open · Tab switch list · Esc close/);
 });
 
 test("the panel grows with its rows up to half the window", async () => {

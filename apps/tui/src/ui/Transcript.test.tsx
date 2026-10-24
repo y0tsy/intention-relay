@@ -83,13 +83,13 @@ test("a committed turn reads as its card, its reasoning, and its answer", async 
 test("a long reasoning collapses after fifteen rows and reveals more on a gesture", async () => {
   const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
   const bounded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }]);
-  assert.ok(bounded.some((line) => /… 5 more reasoning lines hidden/.test(line)));
+  assert.ok(bounded.some((line) => /… 5 more · click or Ctrl\+E/.test(line)));
   const expanded = await lines([{ ...row(2, "assistant", "an answer"), reasoning }], {
     reasoningExpansion: { "2": 5 },
     height: 60,
   });
   assert.ok(expanded.some((line) => line.trim() === "thought 16"));
-  assert.ok(!expanded.some((line) => /more reasoning lines hidden/.test(line)));
+  assert.ok(!expanded.some((line) => /more · click or Ctrl\+E/.test(line)));
 });
 
 test("the step in flight reads as the reasoning and the answer it becomes", async () => {

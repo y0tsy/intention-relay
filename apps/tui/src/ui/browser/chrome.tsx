@@ -7,12 +7,12 @@ import { TextAttributes } from "@opentui/core";
 import { BROWSER_TABS, type BrowserTab, tabLabel } from "../../app/browser";
 import { Cell, Row } from "../../kit";
 import type { Palette } from "../../theme/palette";
-import { ACTIVE_TAB, INACTIVE_TAB, SEARCH_PLACEHOLDER } from "../glyphs";
+import { ACTIVE_TAB, INACTIVE_TAB, SEPARATOR, SEARCH_PLACEHOLDER } from "../glyphs";
 
 /** The keys the browser offers, as the legend spells them. */
 export const BROWSER_HINTS = [
-  { keys: "Enter", action: "select" },
-  { keys: "Tab", action: "switch tab" },
+  { keys: "Enter", action: "open" },
+  { keys: "Tab", action: "switch list" },
   { keys: "Esc", action: "close" },
 ];
 
@@ -25,7 +25,7 @@ export function TabRow({ tab, palette }: { tab: BrowserTab; palette: Palette }) 
         const active = entry === tab;
         return (
           <span key={entry}>
-            {entry === BROWSER_TABS[0] ? null : <span fg={palette.inkFaint}>{"  |  "}</span>}
+            {entry === BROWSER_TABS[0] ? null : <span fg={palette.inkFaint}>{"   "}</span>}
             <span fg={active ? palette.accent : palette.inkFaint}>
               {`${active ? ACTIVE_TAB : INACTIVE_TAB} `}
             </span>
@@ -48,7 +48,7 @@ export function SearchBar({ filter, palette }: { filter: string; palette: Palett
   return (
     <Cell
       text={empty ? SEARCH_PLACEHOLDER : filter}
-      ink={empty ? palette.inkFaint : palette.ink}
+      ink={empty ? palette.inkMuted : palette.ink}
       background={palette.inputBg}
     />
   );
@@ -72,13 +72,15 @@ export function BrowserFooter({
       <Row grow={1}>
         {BROWSER_HINTS.map((hint, index) => (
           <text key={hint.keys} wrapMode="none">
-            {index === 0 ? null : <span fg={palette.inkFaint}>{"  "}</span>}
-            <span fg={palette.inkMuted}>{hint.keys}</span>
-            <span fg={palette.inkFaint}>{` ${hint.action}`}</span>
+            {index === 0 ? null : <span fg={palette.inkFaint}>{SEPARATOR}</span>}
+            <span fg={palette.ink} attributes={TextAttributes.BOLD}>
+              {hint.keys}
+            </span>
+            <span fg={palette.inkMuted}>{` ${hint.action}`}</span>
           </text>
         ))}
       </Row>
-      <text wrapMode="none" fg={palette.inkFaint}>
+      <text wrapMode="none" fg={palette.inkMuted}>
         {counter}
       </text>
     </Row>
