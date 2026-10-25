@@ -30,6 +30,7 @@ async function lines(
             tab="all"
             palette={DARK}
             now={options.now ?? 1_700_000_060}
+            compact={layout.compact}
           />
         </SlotRows>
       </box>
@@ -56,7 +57,28 @@ test("the panel grows with its rows up to half the window", async () => {
   assert.ok(few !== null && many !== null);
   assert.equal(few.rows, 12, "the frame, the chrome, and the two rows it has");
   assert.equal(many.rows, 20, "half the window, never more");
-  assert.equal(browserPlan(80, 12, 3), null, "a window that cannot hold the chat keeps no panel");
+  assert.equal(few.compact, false, "a tall window keeps the filter and the headings");
+});
+
+test("a panel the footer leaves short keeps its tabs and its rows", async () => {
+  // The panel is a page of its own: it takes the rows the tray had and drops
+  // the filter row and the column headings rather than the sessions.
+  const short = browserPlan(80, 12, 3, 12);
+  assert.ok(short !== null);
+  assert.equal(short.compact, true, "a short page drops the filter and the headings");
+  assert.equal(short.dataRows, 1, "it still shows a session row");
+  assert.equal(short.rows, 6, "the tabs, that row, and the panel's own frame and legend");
+
+  const page = await lines([summary()], 60, 12);
+  const text = page.join("\n");
+  assert.match(page[0] ?? "", /^╭─Sessions─+╮$/, "the panel keeps its title");
+  assert.match(text, /⦿ All sessions/, "and its tabs");
+  assert.doesNotMatch(text, /Filter by id or path/, "the filter waits for a taller window");
+  assert.doesNotMatch(text, /Modified/, "so do the column headings");
+});
+
+test("a window too short for the panel opens none", async () => {
+  assert.equal(browserPlan(80, 6, 3, 6), null, "six rows hold no panel and no transcript");
 });
 
 test("the table's columns are shares of the content width", async () => {
@@ -87,6 +109,15 @@ test("the footer counts the rows the window shows", async () => {
   const rows = [summary(), summary({ session_id: "second" })];
   const painted_ = await lines(rows, 80, 30);
   assert.match(painted_.join("\n"), /1-2 of 2/);
+});
+
+test("a narrow panel keeps its counter whole", async () => {
+  // The legend needs more columns than a narrow panel has: it gives way to the
+  // counter of the rows the reader is on, rather than being painted over it.
+  const painted_ = await lines([], 46, 14);
+  const counter = painted_.find((line) => line.includes("of 0")) ?? "";
+  assert.match(counter, /0 of 0\s*│$/u, "the counter closes the panel's last row");
+  assert.doesNotMatch(counter, /Esc clo0/u, "and the legend never runs through it");
 });
 
 test("a failure replaces the table with its own line", async () => {

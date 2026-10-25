@@ -38,7 +38,6 @@ const ROLES: ReadonlyArray<keyof Omit<Palette, "error" | "scarlet">> = [
   "markdownLink",
   "reasoningBody",
   "reasoningHeader",
-  "reasoningMarker",
   "timerInk",
   "ink",
   "inkMuted",

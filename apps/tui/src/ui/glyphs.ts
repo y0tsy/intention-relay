@@ -20,9 +20,6 @@ export const REASONING_GLYPH = "∴";
 /** The label the reasoning block's marker introduces. */
 export const REASONING_LABEL = "reasoning";
 
-/** The affordance a collapsed reasoning block's marker opens with. */
-export const REASONING_EXPAND = "▸";
-
 /** The glyph that opens a committed daemon notice. */
 export const NOTICE_GLYPH = "※";
 

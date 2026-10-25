@@ -19,6 +19,13 @@ export const DOCK_GAP_ROWS = 1;
 /** The browser body rows that are not session rows. */
 export const BROWSER_CHROME_ROWS = 6;
 
+/**
+ * The body rows a compact browser keeps: its tab row and the rows the panel
+ * closes with. A panel with no room for the filter and the column headings
+ * shows the sessions themselves instead.
+ */
+export const COMPACT_BROWSER_ROWS = 3;
+
 /** The rows the browser's footer occupies: its separator row, then the legend. */
 export const BROWSER_FOOTER_ROWS = 2;
 
@@ -33,28 +40,52 @@ export interface BrowserLayout {
   readonly dataRows: number;
   /** The columns the browser's own content has. */
   readonly contentColumns: number;
+  /** Whether the panel drops its filter row and its column headings. */
+  readonly compact: boolean;
 }
 
 /**
- * Returns the geometry the docked browser takes, or `null` while it does not fit.
+ * Returns the geometry the browser panel takes, or `null` while it does not fit.
  *
- * The panel is a layout row at the bottom of the window: it grows with the result
- * up to half the window, so the footer above it keeps the majority, and it never
- * opens at all when the footer would fall below its own floor.
+ * The panel is a page of its own: a blank row above it and the window's bottom
+ * margin under it are the whole chrome around it, and it may take the footer's
+ * rows while it is open, because the panel owns the keyboard and the composer
+ * waits for it to close. `preferRows` is the room the footer has now; the panel
+ * plans inside it and takes more only to reach its own floor, because a row it
+ * grows over is a printed row on screen. A page with the whole window to itself
+ * keeps half of it for the window it was opened from.
  */
-export function browserPlan(width: number, height: number, rowCount: number): BrowserLayout | null {
+export function browserPlan(
+  width: number,
+  height: number,
+  rowCount: number,
+  preferRows = height,
+): BrowserLayout | null {
   if (width <= 2) {
     return null;
   }
-  const chrome = 2 + BROWSER_CHROME_ROWS + BROWSER_FOOTER_ROWS;
-  const cap = Math.max(MIN_PANEL_ROWS, Math.floor(height / 2));
-  const dataCap = Math.max(1, cap - chrome);
-  const dataRows = Math.min(Math.max(rowCount, 1), dataCap);
-  const rows = Math.min(Math.max(chrome + dataRows, MIN_PANEL_ROWS), cap);
-  if (height < rows + DOCK_GAP_ROWS + MIN_CHAT_ROWS) {
+  const fullChrome = 2 + BROWSER_CHROME_ROWS + BROWSER_FOOTER_ROWS;
+  const compactChrome = 2 + COMPACT_BROWSER_ROWS;
+  // The panel's own rows, without the row it stands under and the margin it
+  // closes above.
+  const room = Math.min(height, preferRows) - DOCK_GAP_ROWS - FOOTER_MARGIN;
+  const compact = room < fullChrome + 2;
+  const chrome = compact ? compactChrome : fullChrome;
+  const floor = Math.max(compact ? 0 : MIN_PANEL_ROWS, chrome + 1);
+  const fits = Math.max(room, Math.min(floor, height - DOCK_GAP_ROWS - FOOTER_MARGIN));
+  if (fits < floor) {
     return null;
   }
-  return { rows, dataRows, contentColumns: width - BROWSER_CHROME_COLUMNS };
+  // Half the page keeps the row a taller window left for the tray it was opened
+  // over, and the floor keeps the panel's own chrome and one session row.
+  const cap = Math.max(floor, Math.min(fits, Math.floor((fits + 2) / 2)));
+  const dataCap = Math.max(1, cap - chrome);
+  const dataRows = Math.min(Math.max(rowCount, 1), dataCap);
+  const rows = Math.min(Math.max(chrome + dataRows, floor), cap);
+  if (height < rows + DOCK_GAP_ROWS + FOOTER_MARGIN) {
+    return null;
+  }
+  return { rows, dataRows, contentColumns: width - BROWSER_CHROME_COLUMNS, compact };
 }
 
 /**

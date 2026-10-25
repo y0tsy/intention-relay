@@ -47,6 +47,39 @@ test("a rule spans the region, not three cells", async () => {
   assert.ok(painted_.includes("─".repeat(20)), "the divider is the full width");
 });
 
+test("a list item that wraps keeps every row its text needs", async () => {
+  // The item's text wraps in a column of its own, so a row the wrap needs is a
+  // row the page carries: an item that wrapped into the panel's width instead
+  // put its second row under the next item and lost it.
+  const painted_ = await lines(
+    "- the tune, kept whole for the retry\n- the scrape, reduced to the aggregate",
+    30,
+  );
+  assert.deepEqual(painted_, [
+    "• the tune, kept whole for the",
+    "retry",
+    "• the scrape, reduced to the",
+    "aggregate",
+  ]);
+});
+
+test("a table reads as columns, not as the pipes that wrote it", async () => {
+  const painted_ = await lines(
+    "| coil | use |\n| ---- | --- |\n| answer | the run's text |\n| reasoning | the run's thinking |\n",
+    40,
+  );
+  // The columns are shares of the page, so they do not widen while rows arrive.
+  assert.deepEqual(painted_.slice(0, 3), [
+    "coil                use",
+    "answer              the run's text",
+    "reasoning           the run's thinking",
+  ]);
+  for (const line of painted_) {
+    assert.ok(!line.includes("|"), `"${line}" is not a pipe row`);
+    assert.ok(!line.includes("----"), `"${line}" is not the rule row`);
+  }
+});
+
 test("a fenced block keeps its own lines", async () => {
   const painted_ = await lines("```\nmake quick\nmake verify\n```\n");
   const text = painted_.join("\n");

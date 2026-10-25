@@ -5,7 +5,7 @@
 
 import { TextAttributes } from "@opentui/core";
 import { BROWSER_TABS, type BrowserTab, tabLabel } from "../../app/browser";
-import { Cell, Row } from "../../kit";
+import { browserLegendColumns, Cell, Row, useContentColumns } from "../../kit";
 import type { Palette } from "../../theme/palette";
 import { ACTIVE_TAB, INACTIVE_TAB, SEPARATOR, SEARCH_PLACEHOLDER } from "../glyphs";
 
@@ -66,19 +66,32 @@ export function BrowserFooter({
   total: number;
   palette: Palette;
 }) {
+  const columns = useContentColumns();
   const counter = total === 0 ? "0 of 0" : `${first}-${last} of ${total}`;
+  const full = BROWSER_HINTS.map((hint) => `${hint.keys} ${hint.action}`).join(SEPARATOR);
+  const keys = BROWSER_HINTS.map((hint) => hint.keys).join(SEPARATOR);
+  // A narrow panel keeps the counter of the rows the reader is on whole: the
+  // legend names its keys alone, or waits for a wider window.
+  const whole = browserLegendColumns(columns, full, counter);
+  const shortened = whole.fits ? null : browserLegendColumns(columns, keys, counter);
   return (
     <Row background={palette.panel}>
       <Row grow={1}>
-        {BROWSER_HINTS.map((hint, index) => (
-          <text key={hint.keys} wrapMode="none">
-            {index === 0 ? null : <span fg={palette.inkFaint}>{SEPARATOR}</span>}
-            <span fg={palette.ink} attributes={TextAttributes.BOLD}>
-              {hint.keys}
-            </span>
-            <span fg={palette.inkMuted}>{` ${hint.action}`}</span>
+        {whole.fits ? (
+          BROWSER_HINTS.map((hint, index) => (
+            <text key={hint.keys} wrapMode="none">
+              {index === 0 ? null : <span fg={palette.inkFaint}>{SEPARATOR}</span>}
+              <span fg={palette.ink} attributes={TextAttributes.BOLD}>
+                {hint.keys}
+              </span>
+              <span fg={palette.inkMuted}>{` ${hint.action}`}</span>
+            </text>
+          ))
+        ) : shortened === null || !shortened.fits ? null : (
+          <text wrapMode="none" fg={palette.ink} attributes={TextAttributes.BOLD}>
+            {keys}
           </text>
-        ))}
+        )}
       </Row>
       <text wrapMode="none" fg={palette.inkMuted}>
         {counter}

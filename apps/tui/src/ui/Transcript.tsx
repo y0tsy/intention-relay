@@ -7,13 +7,13 @@
 //! after a blank row. A tool exchange is one block drawn at the call's position,
 //! so the result row it pairs with contributes no block of its own.
 //!
-//! The live tail is the step's two blocks before they commit - its reasoning,
-//! then the answer it precedes - laid out by the very components the committed
-//! row will use, so no live row looks provisional and none changes when the
-//! commit arrives: the rows a step shows in the footer are the rows the printed
-//! block paints.
+//! The transcript is printed into the terminal's own scrollback, so these
+//! components paint rows, not a region: the printer paints them into the page
+//! once and the terminal keeps them. The step in flight paints the very
+//! components the committed row uses, at the columns the printed rows have, so
+//! the rows a step streams are the rows it keeps.
 
-import { selectExpansions, selectProvisionalReasoning, selectProvisionalText } from "../app/select";
+import { selectProvisionalReasoning, selectProvisionalText } from "../app/select";
 import type { AppStore } from "../app/store";
 import type { TranscriptBlock } from "../app/transcript";
 import { Stack } from "../kit";
@@ -25,19 +25,8 @@ import { ToolBlock } from "./blocks/ToolBlock";
 import { UserCard } from "./blocks/UserCard";
 import { useStore } from "./use-store";
 
-/** The identity a live segment's expansion is kept under. */
-export const LIVE_REASONING = "live";
-
 /** Renders one committed block. */
-export function CommittedBlock({
-  block,
-  palette,
-  expansion,
-}: {
-  block: TranscriptBlock;
-  palette: Palette;
-  expansion: number;
-}) {
+export function CommittedBlock({ block, palette }: { block: TranscriptBlock; palette: Palette }) {
   if (block.call !== null) {
     return <ToolBlock call={block.call} result={block.result} palette={palette} />;
   }
@@ -52,7 +41,7 @@ export function CommittedBlock({
       return (
         <Stack spaced>
           {message.reasoning === null || message.reasoning.trim().length === 0 ? null : (
-            <Reasoning text={message.reasoning} palette={palette} expansion={expansion} printed />
+            <Reasoning text={message.reasoning} palette={palette} />
           )}
           {message.text.trim().length === 0 ? null : (
             <Answer text={message.text} palette={palette} />
@@ -74,20 +63,28 @@ export function CommittedBlock({
 }
 
 /** Renders the step in flight: its reasoning, then the answer it precedes. */
-export function Live({ store, palette }: { store: AppStore; palette: Palette }) {
-  const expansions = useStore(store, selectExpansions);
-  const reasoning = useStore(store, selectProvisionalReasoning);
-  const text = useStore(store, selectProvisionalText);
+export function Live({
+  reasoning,
+  text,
+  palette,
+}: {
+  /** The reasoning the step has streamed. */
+  reasoning: string;
+  /** The answer the step has streamed. */
+  text: string;
+  palette: Palette;
+}) {
   return (
     <Stack spaced>
-      {reasoning.length === 0 ? null : (
-        <Reasoning
-          text={reasoning}
-          palette={palette}
-          expansion={expansions.get(LIVE_REASONING) ?? 0}
-        />
-      )}
+      {reasoning.length === 0 ? null : <Reasoning text={reasoning} palette={palette} />}
       {text.length === 0 ? null : <Answer text={text} palette={palette} />}
     </Stack>
   );
+}
+
+/** Paints the step in flight from the transcript's own transient text. */
+export function LiveTail({ store, palette }: { store: AppStore; palette: Palette }) {
+  const reasoning = useStore(store, selectProvisionalReasoning);
+  const text = useStore(store, selectProvisionalText);
+  return <Live reasoning={reasoning} text={text} palette={palette} />;
 }

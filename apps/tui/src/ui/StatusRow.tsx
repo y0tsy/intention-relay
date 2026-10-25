@@ -101,9 +101,18 @@ export function StatusLine({ store, palette }: { store: AppStore; palette: Palet
 }
 
 /** Renders the detail line from the store. */
-export function Detail({ store, palette }: { store: AppStore; palette: Palette }) {
+export function Detail({
+  store,
+  palette,
+  notice: said,
+}: {
+  store: AppStore;
+  palette: Palette;
+  /** The row's own words when the store has none: a surface that could not open. */
+  notice?: string;
+}) {
   const error = useStore(store, selectError);
   const notice = useStore(store, selectNotice);
   const columns = useContentColumns();
-  return <DetailLine error={error} notice={notice} palette={palette} columns={columns} />;
+  return <DetailLine error={error} notice={said ?? notice} palette={palette} columns={columns} />;
 }

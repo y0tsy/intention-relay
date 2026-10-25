@@ -29,7 +29,6 @@ import { type CommandMenu, menuCompletesNothing } from "./menu";
 import { Composer } from "./composer";
 import { resolveSubmission } from "./submit";
 import type { RunPhase } from "./run";
-import { ReasoningExpansions } from "./reasoning";
 import { Session, type ConnectionStatus, type StreamStatus } from "./session";
 import { RunWatch } from "./run-watch";
 import { BrowserState } from "./browser-state";
@@ -63,8 +62,6 @@ export class AppState {
   notice: string | null = null;
   /** The phase, start, and elapsed reading of the turn in flight. */
   readonly #watch = new RunWatch();
-  /** The chunks each reasoning block has revealed. */
-  readonly #reasoning = new ReasoningExpansions();
 
   /**
    * Creates the state a front end starts from.
@@ -117,9 +114,6 @@ export class AppState {
         return this.#applyFailure(action.error);
       case "elapsed_reported":
         this.#watch.reportElapsed(action.millis, this.activeRun?.open_tool_calls ?? 0);
-        return [];
-      case "reasoning_expanded":
-        this.#applyReasoningExpanded(action.id);
         return [];
       case "run_cancel_accepted":
         return [];
@@ -353,11 +347,6 @@ export class AppState {
     return this.#session.liveRun;
   }
 
-  /** Returns the chunks each reasoning block has revealed. */
-  get expansions(): ReadonlyMap<string, number> {
-    return this.#reasoning.expansions;
-  }
-
   /** Returns the line the composer shows. */
   get draft(): Draft {
     return this.#composer.draft;
@@ -527,16 +516,6 @@ export class AppState {
     }
     this.#watch.applyPhase(state);
     return [];
-  }
-
-  /** Reveals one more chunk of one reasoning block. */
-  #applyReasoningExpanded(id: string | null): void {
-    this.#reasoning.expand(id, this.transcript, this.provisionalReasoning);
-  }
-
-  /** Returns the chunks one reasoning block has revealed. */
-  expansionOf(id: string): number {
-    return this.#reasoning.of(id);
   }
 
   /** Returns the phase the current turn reads as, if one is live. */

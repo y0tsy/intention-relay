@@ -186,7 +186,6 @@ test("each intent becomes the one action the store expects", () => {
     ],
     [{ kind: "commit_selection" }, { kind: "selection_committed" }],
     [{ kind: "close_surface" }, { kind: "surface_closed" }],
-    [{ kind: "expand_reasoning" }, { kind: "reasoning_expanded", id: null }],
     [
       { kind: "filter_typed", text: "a" },
       { kind: "browser_filter_typed", text: "a" },

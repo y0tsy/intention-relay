@@ -19,6 +19,7 @@ export {
   SlotRows,
   PrintedRows,
   useContentColumns,
+  useFooterRows,
   useSlotRows,
   usePrintedRows,
 } from "./layout/context";
@@ -84,7 +85,12 @@ export {
   MAX_BAND_ROWS,
   type BandColumnWidths,
 } from "./layout/menu-band";
-export { browserColumnWidths, type BrowserColumns } from "./layout/browser-columns";
+export {
+  browserColumnWidths,
+  browserLegendColumns,
+  type BrowserColumns,
+  type BrowserLegend,
+} from "./layout/browser-columns";
 export {
   Markdown,
   MarkdownBlock,
@@ -94,10 +100,16 @@ export {
 export { splitBlocks, type StreamSplit } from "./markdown-split";
 export {
   footerPlan,
+  pagePlan,
   printRoom,
+  transcriptColumns,
+  EDGE_ROWS,
+  RULE_COLUMNS,
+  RULE_GAP,
+  RIGHT_MARGIN,
+  TRANSCRIPT_INDENT,
   CONTENT_INDENT,
   DETAIL_ROWS,
-  LIVE_BAND_ROWS,
   FOOTER_MARGIN,
   SESSION_MARGIN,
   FOOTER_MIN_COLUMNS,
@@ -115,14 +127,19 @@ export {
   DOCK_GAP_ROWS,
   BROWSER_CHROME_ROWS,
   BROWSER_FOOTER_ROWS,
+  COMPACT_BROWSER_ROWS,
   BROWSER_CHROME_COLUMNS,
   type BrowserLayout,
 } from "./layout/dock-plan";
 export { FooterFrame, type FooterPalette } from "./layout/FooterFrame";
 export { Screen } from "./screen/Screen";
-export { Printer, type PrintedBlock, type PrintPalette } from "./screen/Printer";
-export { transcriptColumns, TRANSCRIPT_INDENT } from "./screen/PrintPage";
-export { chunkRows, leadRow, type Lead } from "./screen/print-plan";
+export {
+  Printer,
+  type PrintedBlock,
+  type PrintPalette,
+  type StepPrint,
+} from "./screen/Printer";
+export { chunkRows, continues, leadRow, sealedRows, type Lead } from "./screen/print-plan";
 export { createSplitScreen, closeScreen } from "./screen/terminal";
 export { pushScreen, windowRows } from "./screen/startup";
 export { useTerminalTheme } from "./screen/use-terminal-theme";

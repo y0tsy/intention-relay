@@ -89,6 +89,7 @@ export function Docked({
         tab={tab}
         palette={palette}
         now={now}
+        compact={browser.compact}
       />
     </Dock>
   );

@@ -1,7 +1,12 @@
-//! The session table's column widths inside one content width.
+//! The session table's column widths, and the columns its legend has, inside one
+//! content width.
 //!
 //! The purpose columns take a share of the flexible width each, so the table
-//! stretches with the panel; the title column takes what they leave.
+//! stretches with the panel; the title column takes what they leave. The legend
+//! and its counter share one row, and the counter keeps its own columns whatever
+//! the legend needs.
+
+import { displayWidth } from "../text";
 
 /** The columns the browser's table paints, in order. */
 export interface BrowserColumns {
@@ -17,8 +22,19 @@ export interface BrowserColumns {
   readonly path: number;
 }
 
+/** The columns the browser's legend and its counter share, and what fits there. */
+export interface BrowserLegend {
+  /** The columns the legend's own row has, left of the counter. */
+  readonly columns: number;
+  /** Whether the text the legend was given fits in those columns. */
+  readonly fits: boolean;
+}
+
 /** The columns one session row's marker occupies. */
 const MARKER_WIDTH = 2;
+
+/** The one column between the legend and the counter. */
+const LEGEND_GAP = 1;
 
 /** The one column between two table columns. */
 const COLUMN_GAP = 1;
@@ -49,4 +65,21 @@ export function browserColumnWidths(width: number): BrowserColumns {
     path,
     title: Math.max(0, flexible - (modified + created + size + path)),
   };
+}
+
+/**
+ * Returns the columns the browser's legend has beside its counter, and whether
+ * the legend's own text fits.
+ *
+ * The legend names the keys a reader can press and the counter says where they
+ * are: a panel too narrow for both keeps the counter whole and cuts the legend
+ * down to what fits, rather than painting one over the other.
+ */
+export function browserLegendColumns(
+  columns: number,
+  legend: string,
+  counter: string,
+): BrowserLegend {
+  const left = Math.max(0, columns - displayWidth(counter) - LEGEND_GAP);
+  return { columns: left, fits: displayWidth(legend) <= left };
 }

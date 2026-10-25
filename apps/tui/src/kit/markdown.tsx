@@ -14,8 +14,11 @@ import { TextAttributes } from "@opentui/core";
 import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import { memo, type ReactNode, useMemo } from "react";
+import { useStaticColumns } from "./layout/context";
 import { Rule } from "./layout/Rule";
+import { Table, type TableColumn } from "./layout/Table";
 import { splitBlocks } from "./markdown-split";
+import { displayWidth } from "./text";
 
 /** The palette roles a markdown block paints. */
 export interface MarkdownPalette {
@@ -103,13 +106,29 @@ function listStart(list: Tokens.List): number {
   return typeof list.start === "number" && list.start > 0 ? list.start : 1;
 }
 
+/**
+ * Returns one markdown table row as the cells the table brick reads.
+ *
+ * The columns are keyed by position: a markdown table has no names of its own,
+ * and the same key has to reach the header row and every body row.
+ */
+function tableCells(cells: readonly Tokens.TableCell[]): Record<string, string> {
+  return Object.fromEntries(cells.map((cell, index) => [`c${index}`, cell.text]));
+}
+
 /** Returns a stable identity for one markdown block. */
 function blockKey(index: number, raw: string): string {
   return `${index}:${raw.slice(0, 32)}`;
 }
 
-/** Renders one markdown block. */
-function block(token: Token, palette: MarkdownPalette, ink: string, key: string): ReactNode {
+/** Renders one markdown block at the columns its page has. */
+function block(
+  token: Token,
+  palette: MarkdownPalette,
+  ink: string,
+  key: string,
+  columns: number,
+): ReactNode {
   switch (token.type) {
     case "paragraph": {
       const paragraph = token as Tokens.Paragraph;
@@ -137,16 +156,22 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
       const start = listStart(list);
       return (
         <box key={key} flexDirection="column">
-          {list.items.map((item, index) => (
-            <box key={blockKey(index, item.raw)} flexDirection="row">
-              <text fg={palette.accent}>{list.ordered ? `${start + index}. ` : "• "}</text>
-              <box flexDirection="column" flexGrow={1}>
-                {item.tokens.map((inner, innerIndex) =>
-                  block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
-                )}
+          {list.items.map((item, index) => {
+            const marker = list.ordered ? `${start + index}. ` : "• ";
+            return (
+              <box key={blockKey(index, item.raw)} flexDirection="row">
+                <text fg={palette.accent}>{marker}</text>
+                {/* The item's own columns: a box that takes what the marker
+                    leaves wraps its text at that width, and a box that grows
+                    into the row wraps at the panel's. */}
+                <box flexDirection="column" width={Math.max(1, columns - displayWidth(marker))}>
+                  {item.tokens.map((inner, innerIndex) =>
+                    block(inner, palette, ink, blockKey(innerIndex, inner.raw), columns),
+                  )}
+                </box>
               </box>
-            </box>
-          ))}
+            );
+          })}
         </box>
       );
     }
@@ -183,9 +208,42 @@ function block(token: Token, palette: MarkdownPalette, ink: string, key: string)
           borderColor={palette.border}
         >
           {quote.tokens.map((inner, innerIndex) =>
-            block(inner, palette, ink, blockKey(innerIndex, inner.raw)),
+            block(inner, palette, ink, blockKey(innerIndex, inner.raw), columns),
           )}
         </box>
+      );
+    }
+    case "table": {
+      // A table is a table, not the pipes a reader would have to count. The
+      // brick owns the widths, so the header and the body line up on the same
+      // columns and a narrow page drops a column whole instead of squeezing it.
+      const table = token as Tokens.Table;
+      // A column's width comes from the page, not from the cells the table has
+      // so far: a table that streamed in row by row would otherwise widen under
+      // the rows already printed above it.
+      const share = Math.max(
+        3,
+        Math.floor((columns - (table.header.length - 1)) / table.header.length),
+      );
+      const tableColumns: TableColumn[] = table.header.map((_cell, index) => ({
+        key: `c${index}`,
+        width: share,
+        align: table.align[index] === "right" ? "right" : "left",
+        hideOrder: index === 0 ? 0 : table.header.length - index,
+      }));
+      const rows = [
+        { key: "head", cells: tableCells(table.header) },
+        ...table.rows.map((cells, index) => ({ key: `row${index}`, cells: tableCells(cells) })),
+      ];
+      return (
+        <Table
+          key={key}
+          columns={tableColumns}
+          rows={rows}
+          renderCell={(_column, _cell, row) =>
+            row.key === "head" ? { ink: palette.markdownHeading, bold: true } : { ink }
+          }
+        />
       );
     }
     case "space":
@@ -222,10 +280,13 @@ export const MarkdownBlock = memo(function MarkdownBlock({
   ink?: string;
 }) {
   const tokens = useMemo(() => marked.lexer(source), [source]);
+  const columns = useStaticColumns();
   const body = ink ?? palette.ink;
   return (
     <box flexDirection="column">
-      {tokens.map((token, index) => block(token, palette, body, blockKey(index, token.raw)))}
+      {tokens.map((token, index) =>
+        block(token, palette, body, blockKey(index, token.raw), columns),
+      )}
     </box>
   );
 });

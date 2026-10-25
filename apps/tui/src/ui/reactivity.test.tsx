@@ -85,8 +85,8 @@ function transcriptLines(lines: readonly string[]): string[] {
       break;
     }
   }
-  // The band above the input block is the step in flight; its rows are painted
-  // on the panel inside the window's frame, so the margin, the frame's side, and
+  // The edge above the input block is the step in flight; its rows are painted
+  // on the page inside the window's frame, so the margin, the frame's side, and
   // the panel's own padding come off before the block's leading spaces.
   const body = lines.slice(0, inputTop).map((line) => {
     const text = visible(line);
@@ -201,14 +201,74 @@ test("an appended row prints once and repaints nothing else", async (t) => {
     ["assistant", "a later answer"],
     "the row is printed once, under its label",
   );
-  // The footer gives the printed rows back: the window paints exactly the rows
-  // the print did not take, and no other row of it moves.
+  // The printed rows come out of the window above the footer: the footer paints
+  // exactly the rows the print did not take, and no other row of it moves.
   const paintedRows = (frame: string): number => frame.replace(/\n$/, "").split("\n").length;
   assert.equal(
     paintedRows(setup.captureCharFrame()),
     paintedRows(before) - rows.length,
     "the footer keeps every row the print did not take",
   );
+
+  store.dispose();
+  await setup.dispose();
+});
+
+test("an open panel takes no row the printed page wrote", async () => {
+  const store = offlineStore();
+  openSession(store, {
+    messages: [row(1, "user", "explain this repository"), row(2, "assistant", "It relays.")],
+    run: run("completed"),
+  });
+  const setup = await mount(store, 60, 16);
+  await printed(setup);
+  const before = setup.renderer.footerHeight;
+  const transcript = setup.captureCharFrame();
+
+  store.dispatch({ kind: "theme_requested" });
+  await setup.renderOnce();
+  await setup.renderOnce();
+
+  // The renderer grows a footer by scrolling its region, and a row that scroll
+  // leaves the scrollback for good: the picker opens into the rows the footer
+  // has and gives the printed page none of them back.
+  assert.equal(
+    setup.renderer.footerHeight,
+    before,
+    "the panel takes the rows the footer already has",
+  );
+  assert.deepEqual(printedRows(setup), [], "the panel prints nothing above the tray");
+  assert.notDeepEqual(setup.captureCharFrame(), transcript, "the picker paints the window");
+
+  store.dispose();
+  await setup.dispose();
+});
+
+test("the session browser is a page that takes the tray's rows", async () => {
+  const store = offlineStore();
+  openSession(store, {
+    messages: [row(1, "user", "explain this repository"), row(2, "assistant", "It relays.")],
+    run: run("completed"),
+  });
+  const setup = await mount(store, 60, 16);
+  await printed(setup);
+  const before = setup.renderer.footerHeight;
+
+  // The browser owns the footer while it is open: the composer waits, the
+  // panel takes the rows the tray had, and the page above it keeps every row a
+  // print wrote.
+  store.dispatch({ kind: "sessions_requested" });
+  await setup.renderOnce();
+  await setup.renderOnce();
+
+  const frame = setup.captureCharFrame();
+  assert.match(frame, /Sessions/, "the browser's panel is painted");
+  assert.doesNotMatch(frame, /prompt/, "the composer waits for the panel to close");
+  assert.ok(
+    setup.renderer.footerHeight <= Math.max(before, 16),
+    "the panel stays inside the window it was opened in",
+  );
+  assert.deepEqual(printedRows(setup), [], "the panel prints no row");
 
   store.dispose();
   await setup.dispose();
@@ -230,46 +290,64 @@ test("the provisional tail is laid out per frame and never cached", async (t) =>
     await setup.renderOnce();
   }
 
+  // The page prints the rows that are final and the edge paints the last rows
+  // that may still change, so a frame lays the text out for both and no frame
+  // reuses the layout it made before.
   assert.deepEqual(
-    seen,
+    [...new Set(seen)].sort(),
     ["one ", "one two ", "one two three"],
     "every frame parses the block still being written",
   );
   const stream = transcriptLines(frameLines(setup.captureCharFrame()));
-  assert.deepEqual(answerRows(stream), ["one two three"], "the tail is the answer the row becomes");
+  assert.deepEqual(answerRows(stream), ["one two three"], "the edge is the answer's last rows");
 
   store.dispose();
   await setup.dispose();
 });
 
-test("the streaming tail paints the rows the printed block will have", async () => {
-  const store = offlineStore();
-  const state = openSession(store, { run: run("running") });
-  const setup = await mount(store);
-
+test("a streamed answer prints once, in the rows its block has", async () => {
   const source = "• one\n• two\n\nafter the list";
-  state.applyFrame({ kind: "text_delta", data: delta(1, "answer", source) });
-  store.dispatch({ kind: "frame_received", state });
-  // The first delta opens the band, so the footer takes its rows on this frame
-  // and paints them on the next.
-  await setup.renderOnce();
-  await setup.flush();
-  await setup.renderOnce();
-  const tail = transcriptLines(frameLines(setup.captureCharFrame()));
 
-  state.applyFrame({ kind: "content", data: row(1, "assistant", source) });
-  store.dispatch({ kind: "frame_received", state });
-  const committed = printedLines(await printed(setup));
+  /** Streams one answer chunk by chunk and returns every row the terminal took. */
+  async function streamed(): Promise<string[]> {
+    const store = offlineStore();
+    const state = openSession(store, { run: run("running") });
+    const setup = await mount(store);
+    const rows: string[] = [];
+    for (const chunk of ["• one\n", "• two\n", "\n", "after the list"]) {
+      state.applyFrame({ kind: "text_delta", data: delta(1, "answer", chunk) });
+      store.dispatch({ kind: "frame_received", state });
+      rows.push(...(await printed(setup)));
+    }
+    state.applyFrame({ kind: "content", data: row(1, "assistant", source) });
+    store.dispatch({ kind: "frame_received", state });
+    rows.push(...(await printed(setup)));
+    store.dispose();
+    await setup.dispose();
+    return printedLines(rows);
+  }
 
-  assert.deepEqual(answerRows(tail), ["• one", "• two", "", "after the list"]);
-  assert.deepEqual(
-    answerRows(committed),
-    answerRows(tail),
-    "the row lands exactly where the tail stood",
+  /** Prints the committed answer and returns every row the terminal took. */
+  async function committed(): Promise<string[]> {
+    const store = offlineStore();
+    openSession(store, {
+      messages: [row(1, "assistant", source)],
+      run: run("running"),
+    });
+    const setup = await mount(store);
+    const rows = await printed(setup);
+    store.dispose();
+    await setup.dispose();
+    return printedLines(rows);
+  }
+
+  const rows = await streamed();
+  assert.equal(
+    rows.filter((line) => line.includes("after the list")).length,
+    1,
+    "the answer is written once",
   );
-
-  store.dispose();
-  await setup.dispose();
+  assert.deepEqual(rows, await committed(), "the streamed rows are the rows its block has");
 });
 
 test("a burst of rows prints every block once, in the order it committed", async () => {
@@ -334,6 +412,72 @@ test("a block taller than the window prints in chunks and keeps every row", asyn
     const seen = printed.filter((line) => line.includes(item)).length;
     assert.equal(seen, 1, `"${item}" is printed once, not ${seen} times`);
   }
+  store.dispose();
+  await setup.dispose();
+});
+
+test("a streamed row reaches the terminal once, however the page grew", async (t) => {
+  const store = offlineStore();
+  const state = openSession(store, {
+    messages: [row(1, "user", "ask")],
+    run: run("running"),
+  });
+  const setup = await mount(store, 60, 20);
+  t.after(() => mock.restoreAll());
+  const answer =
+    "## Relay types\n\nThe relay carries three kinds of value, and each one has a writer.";
+  const rows: string[] = [];
+  for (let at = 0; at < answer.length; at += 4) {
+    state.applyFrame({ kind: "text_delta", data: delta(1, "answer", answer.slice(at, at + 4)) });
+    store.dispatch({ kind: "frame_received", state });
+    await setup.renderOnce();
+    rows.push(...printedRows(setup));
+  }
+  // The step is over: its page is frozen and the rows it held are its last rows.
+  state.applyFrame({ kind: "content", data: row(2, "assistant", answer) });
+  store.dispatch({ kind: "frame_received", state });
+  for (let frame = 0; frame < 12; frame += 1) {
+    rows.push(...printedRows(setup));
+    await setup.renderOnce();
+  }
+  rows.push(...printedRows(setup));
+  const lines = printedLines(rows);
+  assert.equal(
+    lines.filter((line) => line === "Relay types").length,
+    1,
+    "the heading is printed once, not once per page the stream re-read",
+  );
+  assert.equal(
+    lines.filter((line) => line.includes("The relay carries three kinds")).length,
+    1,
+    "the paragraph is printed once",
+  );
+
+  store.dispose();
+  await setup.dispose();
+});
+
+test("a page of many blocks adds no resize listener per block", async () => {
+  const store = offlineStore();
+  const answer = Array.from(
+    { length: 12 },
+    (_, index) =>
+      `## Part ${index + 1}\n\nA paragraph that wraps at the panel's own width, ${index}.`,
+  ).join("\n\n");
+  openSession(store, { messages: [row(1, "assistant", answer)], run: run("completed") });
+  const setup = await mount(store, 80, 24);
+  const before = setup.renderer.listenerCount("resize");
+  for (let frame = 0; frame < 10; frame += 1) {
+    printedRows(setup);
+    await setup.renderOnce();
+  }
+  const after = setup.renderer.listenerCount("resize");
+  // The renderer warns above ten listeners, and its warning is written to the
+  // terminal the transcript owns: it lands between two printed rows and the
+  // window never finds its place again.
+  assert.equal(after, before, "a printed block listens to no resize of its own");
+  assert.ok(after < 10, `the renderer holds ${after} resize listeners`);
+
   store.dispose();
   await setup.dispose();
 });

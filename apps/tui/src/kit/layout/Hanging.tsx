@@ -35,7 +35,10 @@ export function Hanging({
       <box width={marker}>
         <text fg={ink}>{`${glyph}${" ".repeat(gap)}`}</text>
       </box>
-      <box flexGrow={1} flexShrink={1} flexDirection="column">
+      {/* The body keeps the columns the marker leaves. A body that only grows
+          into the row wraps its text at the panel's width, and the row a wrap
+          needs lands under the row after it instead of in the block. */}
+      <box width={Math.max(1, columns - marker)} flexDirection="column">
         <ContentColumns columns={Math.max(1, columns - marker)}>{children}</ContentColumns>
       </box>
     </box>

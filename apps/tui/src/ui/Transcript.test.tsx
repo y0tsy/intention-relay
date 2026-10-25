@@ -1,8 +1,8 @@
 //! The transcript: one committed block per row, the step in flight after them.
 //!
 //! A committed block is printed into the terminal's scrollback and the step in
-//! flight stays in the footer; both are built from the same components, so the
-//! test paints them in the column the screen shows.
+//! flight is printed as it streams; both are built from the same components, so
+//! the test paints them in the column the page shows.
 
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -20,7 +20,6 @@ async function lines(
   options: {
     reasoning?: string;
     answer?: string;
-    reasoningExpansion?: Record<string, number>;
     width?: number;
     height?: number;
   } = {},
@@ -31,39 +30,28 @@ async function lines(
     answer: options.answer,
     reasoning: options.reasoning,
   });
-  if (options.reasoningExpansion !== undefined) {
-    // A reader reveals a block through the same gesture, wherever it sits.
-    for (const [key, chunks] of Object.entries(options.reasoningExpansion)) {
-      for (let chunk = 0; chunk < chunks; chunk += 1) {
-        const id = key === "live" ? null : key;
-        store.dispatch({ kind: "reasoning_expanded", id });
-      }
-    }
-  }
-  // The window prints the committed rows and keeps the step in flight in the
-  // footer, so the two views sit in one column the way the screen reads.
+  // The page prints the committed rows and the step in flight, so the two views
+  // sit in one column the way the terminal reads.
   const width = options.width ?? 58;
-  const expansion = options.reasoningExpansion ?? {};
   const frame = await painted(
     <Stack spaced>
       <ContentColumns columns={width}>
         <Stack spaced>
           {transcriptBlocks(messages).map((block) => (
-            <CommittedBlock
-              key={block.key}
-              block={block}
-              palette={DARK}
-              expansion={expansion[block.key] ?? 0}
-            />
+            <CommittedBlock key={block.key} block={block} palette={DARK} />
           ))}
         </Stack>
       </ContentColumns>
       <ContentColumns columns={width}>
-        <Live store={store} palette={DARK} />
+        <Live
+          reasoning={store.state.provisionalReasoning}
+          text={store.state.provisionalText}
+          palette={DARK}
+        />
       </ContentColumns>
     </Stack>,
     options.width ?? 60,
-    options.height ?? 30,
+    options.height ?? 40,
   );
   store.dispose();
   return frameLines(frame);
@@ -94,10 +82,11 @@ test("a committed reasoning prints every row it was given", async () => {
   assert.ok(!printed.some((line) => /more · click or Ctrl\+E/.test(line)));
 });
 
-test("the step in flight bounds its reasoning and names what it hid", async () => {
+test("the step in flight prints every row it streamed", async () => {
   const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
-  const bounded = await lines([], { reasoning, answer: "hold on", height: 30 });
-  assert.ok(bounded.some((line) => /… \d+ more · click or Ctrl\+E/.test(line)));
+  const streamed = await lines([], { reasoning, answer: "hold on", height: 40 });
+  assert.ok(streamed.some((line) => line.trim() === "thought 20"));
+  assert.ok(!streamed.some((line) => /more · click or Ctrl\+E/.test(line)));
 });
 
 test("the step in flight reads as the reasoning and the answer it becomes", async () => {
@@ -105,16 +94,6 @@ test("the step in flight reads as the reasoning and the answer it becomes", asyn
   assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
   assert.ok(painted_.some((line) => line === "assistant"));
   assert.ok(painted_.some((line) => line === "hold on"));
-});
-
-test("the step in flight borrows the expansion of the row it becomes", async () => {
-  const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
-  const painted_ = await lines([], {
-    reasoning,
-    answer: "hold on",
-    reasoningExpansion: { live: 2 },
-  });
-  assert.ok(painted_.some((line) => line.trim() === "thought 2"));
 });
 
 test("a call and its result are one block drawn at the call", async () => {

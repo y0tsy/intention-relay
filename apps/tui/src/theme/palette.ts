@@ -89,8 +89,6 @@ export interface Palette {
   readonly reasoningBody: string;
   /** The ink of the reasoning block's glyph and header. */
   readonly reasoningHeader: string;
-  /** The ink of the expand affordance a collapsed reasoning block shows. */
-  readonly reasoningMarker: string;
   /** The ink of the elapsed value the front end measured. */
   readonly timerInk: string;
   /** Body ink: the ordinary text of every row. */
@@ -143,7 +141,6 @@ export const LIGHT: Palette = {
   markdownLink: hex(0x1d, 0x4e, 0xd8),
   reasoningBody: hex(0x7e, 0x6e, 0x5a),
   reasoningHeader: hex(0x6d, 0x5a, 0x44),
-  reasoningMarker: hex(0x8a, 0x5a, 0x2b),
   timerInk: hex(0xa1, 0x62, 0x07),
   ink: hex(0x2a, 0x21, 0x1a),
   inkMuted: hex(0x7a, 0x6a, 0x58),
@@ -189,7 +186,6 @@ export const DARK: Palette = {
   markdownLink: hex(0xaa, 0xaa, 0xac),
   reasoningBody: hex(0x7e, 0x7e, 0x80),
   reasoningHeader: hex(0x98, 0x98, 0x9a),
-  reasoningMarker: hex(0xb4, 0xb4, 0xb6),
   timerInk: hex(0x9a, 0x9a, 0x9c),
   ink: hex(0xda, 0xda, 0xdc),
   inkMuted: hex(0xa6, 0xa6, 0xa8),

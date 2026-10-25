@@ -4,8 +4,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chunkRows,
+  continues,
+  EDGE_ROWS,
   leadRow,
   pushScreen,
+  sealedRows,
   transcriptColumns,
   TRANSCRIPT_INDENT,
   windowRows,
@@ -53,6 +56,32 @@ test("the first print of a session leads with nothing", () => {
 test("a later print of the same session is separated from the block above it", () => {
   const lead = leadRow(12);
   assert.equal(lead.separator, true, "two blocks are one blank row apart");
+});
+
+test("a stream seals every row a later row has superseded", () => {
+  assert.equal(sealedRows(0, EDGE_ROWS), 0, "an unmeasured page seals nothing");
+  assert.equal(sealedRows(1, EDGE_ROWS), 0, "a page of one row is all edge");
+  assert.equal(sealedRows(EDGE_ROWS, EDGE_ROWS), 0, "a page the edge fills seals nothing");
+  assert.equal(sealedRows(EDGE_ROWS + 1, EDGE_ROWS), 1, "the row above the edge is final");
+  assert.equal(sealedRows(12, EDGE_ROWS), 10);
+  assert.equal(sealedRows(12, 0), 12, "a page with no edge is final as it stands");
+});
+
+test("a step only grows: a text that no longer starts with it is another step", () => {
+  const first = { reasoning: "think", text: "" };
+  assert.equal(continues(first, { reasoning: "thinking", text: "" }), true, "the stream appends");
+  assert.equal(continues(first, { reasoning: "think", text: "an " }), true, "the answer opens");
+  assert.equal(
+    continues(first, { reasoning: "", text: "another step" }),
+    false,
+    "a step that starts over is another step",
+  );
+  const writing = { reasoning: "think", text: "an " };
+  assert.equal(
+    continues(writing, { reasoning: "think", text: "another" }),
+    false,
+    "a text that rewrote itself is another step",
+  );
 });
 
 test("a chunk never runs past the print", () => {

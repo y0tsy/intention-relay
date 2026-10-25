@@ -5,7 +5,9 @@ import test from "node:test";
 import { frameLines, painted } from "../testing/render";
 import { run } from "../testing/fixtures";
 import { DARK } from "../theme/palette";
-import { REASONING_VISIBLE_ROWS, Reasoning } from "./blocks/Reasoning";
+import { ContentColumns } from "../kit";
+import { Notice } from "./blocks/Notice";
+import { Reasoning } from "./blocks/Reasoning";
 import { runMetaText } from "./blocks/RunMeta";
 import { TOOL_PREVIEW_ROWS, ToolBlock } from "./blocks/ToolBlock";
 import { UserCard } from "./blocks/UserCard";
@@ -26,22 +28,31 @@ test("a user row wraps its message in a narrow column", async () => {
   assert.ok(!painted_.some((line) => line.includes("╭")), "no frame is drawn around it");
 });
 
-test("a reasoning block in flight counts the rows it hid", async () => {
-  const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
-  const painted_ = await lines(<Reasoning text={text} palette={DARK} expansion={0} />, 40);
-  assert.equal(painted_.length, 1 + REASONING_VISIBLE_ROWS + 1);
-  const hidden = 20 - REASONING_VISIBLE_ROWS;
-  assert.ok(painted_.some((line) => line.includes(`… ${hidden} more · click or Ctrl+E`)));
+test("a notice keeps every row its body wraps into", async () => {
+  // The body hangs in the columns the marker leaves. A body that only grew into
+  // the row wrapped at the panel's width and put its last row under the row
+  // after it, which is the row the next block painted.
+  const text = "the daemon stopped answering and the run ended without a reply";
+  const frame = await painted(
+    <ContentColumns columns={30}>
+      <Notice text={text} palette={DARK} />
+    </ContentColumns>,
+    40,
+    12,
+  );
+  assert.deepEqual(frameLines(frame), [
+    "※ the daemon stopped answering",
+    "and the run ended without a",
+    "reply",
+  ]);
 });
 
-test("a printed reasoning keeps every row under its header", async () => {
+test("a reasoning block keeps every row under its header", async () => {
   const text = Array.from({ length: 20 }, (_, index) => `line ${index + 1}`).join("\n");
-  const painted_ = frameLines(
-    await painted(<Reasoning text={text} palette={DARK} printed />, 40, 30),
-  );
+  const painted_ = frameLines(await painted(<Reasoning text={text} palette={DARK} />, 40, 30));
   assert.equal(painted_[0], "∴ reasoning");
   assert.equal(painted_.length, 21);
-  assert.ok(!painted_.some((line) => line.includes("more ·")));
+  assert.ok(painted_.includes("line 20"));
 });
 
 test("a finished run closes with its status, its seconds, and its tokens", () => {

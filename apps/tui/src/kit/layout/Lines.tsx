@@ -1,8 +1,8 @@
-//! One bounded run of text: the rows a block paints and the rows it hid.
+//! One run of text: the rows a block paints and the rows it hid.
 //!
-//! A reasoning block and a tool preview both show a bounded number of display
-//! rows and name the rows they hid. The wrap, the bound, and the count are one
-//! primitive, so a block never measures its own text.
+//! A tool preview shows a bounded number of display rows and names the rows it
+//! hid; a reasoning block prints every row it was given. The wrap, the bound,
+//! and the count are one primitive, so a block never measures its own text.
 
 import type { ReactNode } from "react";
 import { displayWidth, takeRows } from "../text";
@@ -25,7 +25,8 @@ export function Lines({
   overflow,
 }: {
   text: string;
-  rows: number;
+  /** The rows the run is bounded to; every row of it when omitted. */
+  rows?: number;
   ink?: string;
   /** A one-column run every row opens with, its own gap included. */
   rail?: string;
@@ -42,7 +43,7 @@ export function Lines({
   const bodyColumns = Math.max(1, columns);
   const railWidth = rail === undefined ? 0 : displayWidth(rail) + 1;
   const width = Math.max(1, bodyColumns - railWidth);
-  const { shown, hidden } = takeRows(text, width, rows);
+  const { shown, hidden } = takeRows(text, width, rows ?? Number.POSITIVE_INFINITY);
   const body = (
     <box flexDirection="column">
       {shown.map((row, index) => (

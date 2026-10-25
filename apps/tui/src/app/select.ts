@@ -52,9 +52,18 @@ export function selectActiveRun(state: AppState): RunProjectionDto | null {
   return state.activeRun;
 }
 
-/** Returns whether the transcript has nothing to show yet. */
+/**
+ * Returns whether the transcript has nothing to show yet.
+ *
+ * The step in flight is a block of the transcript, so its reasoning opens the
+ * page as soon as the model has thought anything at all.
+ */
 export function selectEmpty(state: AppState): boolean {
-  return state.transcript.length === 0 && state.provisionalText.length === 0;
+  return (
+    state.transcript.length === 0 &&
+    state.provisionalText.length === 0 &&
+    state.provisionalReasoning.length === 0
+  );
 }
 
 /** Returns the surface that owns the keyboard. */
@@ -156,11 +165,6 @@ export function selectRunPhase(state: AppState): RunPhase | null {
 /** Returns the elapsed time this front end measured for the current turn. */
 export function selectElapsed(state: AppState): number | null {
   return state.elapsed;
-}
-
-/** Returns the chunks each reasoning block has revealed, keyed by block identity. */
-export function selectExpansions(state: AppState): ReadonlyMap<string, number> {
-  return state.expansions;
 }
 
 /** Returns when the turn in flight began, in Unix milliseconds. */

@@ -50,13 +50,6 @@ export type Action =
    * the state stays a pure function of what it was told.
    */
   | { readonly kind: "elapsed_reported"; readonly millis: number }
-  /**
-   * The reader asked to see more of one reasoning block.
-   *
-   * `id` names the block; `null` asks for the newest one, which is the live
-   * segment while a step is reasoning and the last committed row after it.
-   */
-  | { readonly kind: "reasoning_expanded"; readonly id: string | null }
   /** The daemon accepted one stop request. */
   | { readonly kind: "run_cancel_accepted" }
   /** Stopping the active run failed. */

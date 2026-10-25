@@ -5,6 +5,7 @@
 //! never how many columns or rows it was given: the width is a handle, and the
 //! brick that owns the chrome is the one that computes it.
 
+import { useRenderer } from "@opentui/react";
 import { createContext, type ReactNode, useContext } from "react";
 import { useWindow } from "../window";
 
@@ -42,6 +43,31 @@ export function useContentColumns(): number {
   const inherited = useContext(ColumnsContext);
   const { columns } = useWindow();
   return inherited ?? columns;
+}
+
+/**
+ * Returns the columns the current content has without listening for a resize.
+ *
+ * A row of a printed block is painted once and keeps the width it was written
+ * at, so it has no reason to follow the window; a block that did would add a
+ * resize listener of its own for every block on the page.
+ */
+export function useStaticColumns(): number {
+  const inherited = useContext(ColumnsContext);
+  const renderer = useRenderer();
+  return inherited ?? renderer.width;
+}
+
+/**
+ * Returns the rows the footer takes now.
+ *
+ * The renderer's own height for the footer is the one the last frame asked for,
+ * which is the ceiling the next frame plans against: a page that has printed a
+ * row cannot grow its footer without scrolling that row out of the scrollback.
+ */
+export function useFooterRows(): number {
+  const renderer = useRenderer();
+  return renderer.footerHeight > 0 ? renderer.footerHeight : renderer.height;
 }
 
 /** Returns the rows of the footer slot the component sits in. */

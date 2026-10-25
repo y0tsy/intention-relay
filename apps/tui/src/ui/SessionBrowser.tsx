@@ -30,6 +30,7 @@ function BrowserBody({
   tab,
   palette,
   now,
+  compact,
 }: {
   rows: readonly SessionSummaryDto[];
   error: string | null;
@@ -38,15 +39,27 @@ function BrowserBody({
   tab: BrowserTab;
   palette: Palette;
   now: number;
+  /** A panel without room for the filter and the column headings. */
+  compact: boolean;
 }) {
   const table = useBrowserTable(rows, selection);
   return (
     <>
-      <Spacer rows={1} />
+      {compact ? null : <Spacer rows={1} />}
       <TabRow tab={tab} palette={palette} />
-      <SearchBar filter={filter} palette={palette} />
-      <Rule color={palette.inkFaint} background={palette.dividerTint} />
-      <SessionTable table={table} selection={selection} palette={palette} now={now} />
+      {compact ? null : (
+        <>
+          <SearchBar filter={filter} palette={palette} />
+          <Rule color={palette.inkFaint} background={palette.dividerTint} />
+        </>
+      )}
+      <SessionTable
+        table={table}
+        selection={selection}
+        palette={palette}
+        now={now}
+        headings={!compact}
+      />
       {error === null ? null : (
         <Cell text={error} ink={palette.error} background={palette.stubBg} />
       )}
@@ -73,6 +86,7 @@ export function SessionBrowser({
   tab,
   palette,
   now,
+  compact = false,
 }: {
   rows: readonly SessionSummaryDto[];
   error: string | null;
@@ -81,6 +95,8 @@ export function SessionBrowser({
   tab: BrowserTab;
   palette: Palette;
   now: number;
+  /** A panel without room for the filter and the column headings. */
+  compact?: boolean;
 }) {
   return (
     <Pane
@@ -99,6 +115,7 @@ export function SessionBrowser({
         tab={tab}
         palette={palette}
         now={now}
+        compact={compact}
       />
     </Pane>
   );

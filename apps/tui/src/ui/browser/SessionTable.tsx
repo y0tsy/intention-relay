@@ -12,11 +12,14 @@ export function SessionTable({
   selection,
   palette,
   now,
+  headings = true,
 }: {
   table: BrowserTable;
   selection: number;
   palette: Palette;
   now: number;
+  /** Whether the panel has a row for the column headings. */
+  headings?: boolean;
 }) {
   const header = {
     key: "__header",
@@ -51,16 +54,18 @@ export function SessionTable({
   });
   return (
     <>
-      <Table
-        columns={table.columns}
-        marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
-        rows={[header]}
-        renderCell={(): TableCellStyle => headerStyle(true, palette)}
-        renderMarker={(row) => ({
-          ink: palette.inkMuted,
-          bold: row.key === "__header",
-        })}
-      />
+      {headings ? (
+        <Table
+          columns={table.columns}
+          marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}
+          rows={[header]}
+          renderCell={(): TableCellStyle => headerStyle(true, palette)}
+          renderMarker={(row) => ({
+            ink: palette.inkMuted,
+            bold: row.key === "__header",
+          })}
+        />
+      ) : null}
       <Table
         columns={table.columns}
         marker={{ selected: CURSOR_MARKER, row: ROW_MARKER }}

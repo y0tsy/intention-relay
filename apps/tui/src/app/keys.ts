@@ -48,8 +48,6 @@ export type KeyIntent =
   | { readonly kind: "commit_selection" }
   /** Dismiss the open surface. */
   | { readonly kind: "close_surface" }
-  /** Reveals one more chunk of the newest reasoning block. */
-  | { readonly kind: "expand_reasoning" }
   /** Types one character into the session browser's filter. */
   | { readonly kind: "filter_typed"; readonly text: string }
   /** Deletes the last character of the session browser's filter. */
@@ -99,11 +97,6 @@ export function keyIntent(event: KeyEvent, context: KeyContext): KeyIntent {
   // clear, and exit arms of the state.
   if (event.ctrl && event.name === "c") {
     return { kind: "interrupt" };
-  }
-  // Ctrl+E reveals more of the newest reasoning block on the chat surface; on a
-  // surface that owns the keyboard it stays a key that surface may claim.
-  if (event.ctrl && event.name === "e" && context.surface === "chat") {
-    return { kind: "expand_reasoning" };
   }
   if (context.surface === "sessions") {
     // The browser's own keys: arrows and enter walk the table, tab switches the
@@ -202,8 +195,6 @@ export function intentAction(intent: KeyIntent): Action | null {
       return { kind: "selection_committed" };
     case "close_surface":
       return { kind: "surface_closed" };
-    case "expand_reasoning":
-      return { kind: "reasoning_expanded", id: null };
     case "filter_typed":
       return { kind: "browser_filter_typed", text: intent.text };
     case "filter_backspace":

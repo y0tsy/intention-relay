@@ -8,10 +8,10 @@ import {
   composerSlotRows,
   CONTENT_INDENT,
   DETAIL_ROWS,
+  EDGE_ROWS,
   footerPlan,
   INPUT_CHROME_ROWS,
   inputSlotRows,
-  LIVE_BAND_ROWS,
   MIN_BLOCK_ROWS,
   printRoom,
   SESSION_CHROME_ROWS,
@@ -24,13 +24,13 @@ import {
 /** The rows the theme picker's panel asks for. */
 const PICKER_ROWS = 5;
 
-test("an open session keeps a band for the step in flight above the input", () => {
+test("an open session keeps an edge for the step in flight above the input", () => {
   // A full window: the frame keeps its own working rows and takes no slack.
   const one = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0, 24);
   assert.equal(one.detailRows, DETAIL_ROWS);
   assert.equal(one.chromeRows, SESSION_CHROME_ROWS, "the footer closes the frame and its margin");
   assert.equal(one.hintRows, 0, "a closed band takes no row");
-  assert.equal(one.liveRows, LIVE_BAND_ROWS, "the step's band is the window's, not the run's");
+  assert.equal(one.liveRows, EDGE_ROWS, "the step's edge is the window's, not the run's");
   assert.equal(one.inputRows, MIN_BLOCK_ROWS, "a one-line buffer keeps its rows");
   assert.equal(one.rows, one.body, "the footer is the body it spends");
 
@@ -49,29 +49,48 @@ test("an open session keeps a band for the step in flight above the input", () =
   );
 });
 
-test("the footer takes the rows it needs, whatever has been printed", () => {
-  // Streaming never moves the region's own rows: the band keeps its working
+test("the footer keeps its own rows, whatever has been printed", () => {
+  // Streaming never moves the window's own rows: the edge keeps its working
   // rows, and the page above the tray is the terminal's.
   const footer = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 30);
-  assert.equal(footer.liveRows, LIVE_BAND_ROWS, "the step's band is never the print's");
+  assert.equal(footer.liveRows, EDGE_ROWS, "the step's edge is never the print's");
   assert.equal(footer.rows, footer.body, "a full window leaves the footer its body");
   assert.equal(footer.slackRows, 0);
 });
 
 test("a short print leaves the window above the footer to the page", () => {
   const empty = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 0);
-  assert.equal(empty.rows, 30, "the region still reaches the window's last row");
-  assert.equal(empty.liveRows, LIVE_BAND_ROWS, "the band is the step's, never the slack's");
+  assert.equal(empty.rows, 30, "the window still reaches the terminal's last row");
+  assert.equal(empty.liveRows, EDGE_ROWS, "the edge is the step's, never the slack's");
   assert.equal(empty.slackRows, 30 - empty.body, "the frame keeps only the rows it spends");
 
   const half = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 12);
-  assert.equal(half.rows, 18, "the region ends where the print begins");
+  assert.equal(half.rows, 18, "the window ends where the print begins");
   assert.equal(half.slackRows, 18 - half.body);
 });
 
-test("a step in flight keeps the band it was given", () => {
+test("a panel takes no row a print wrote", () => {
+  // Growing the footer scrolls its region, and the rows that scroll leave the
+  // scrollback for good. A panel opens into the rows a print left, or shows as
+  // much of itself as the footer already has.
+  const session = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 30);
+  const band = footerPlan(80, 30, MIN_BLOCK_ROWS, PICKER_ROWS, "session", 0, 30, session.rows);
+  assert.equal(band.rows, session.rows, "the band opens inside the rows the footer has");
+  assert.equal(band.hintRows, PICKER_ROWS, "the band still takes its rows out of the body");
+  assert.equal(band.slackRows, 0, "a printed window hands no slack back");
+
+  const docked = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 12, 30, session.rows);
+  assert.equal(docked.rows, session.rows, "a docked surface takes no row either");
+  assert.equal(docked.dockedRows, 12, "the plan still reports the rows the surface wants");
+
+  const free = footerPlan(80, 30, MIN_BLOCK_ROWS, PICKER_ROWS, "session", 0, 0, 30);
+  assert.equal(free.rows, 30, "a page with nothing above it still takes the window");
+  assert.equal(free.slackRows, 30 - free.body, "the band comes out of the page's slack");
+});
+
+test("a step in flight keeps the edge it was given", () => {
   const live = footerPlan(80, 40, MIN_BLOCK_ROWS, 0, "session", 0, 40);
-  assert.equal(live.liveRows, LIVE_BAND_ROWS, "the live region is the band, no more");
+  assert.equal(live.liveRows, EDGE_ROWS, "the edge is the rows the printer withholds");
   assert.equal(live.inputRows, MIN_BLOCK_ROWS, "the input keeps its rows");
   assert.equal(
     live.rows,
@@ -80,7 +99,7 @@ test("a step in flight keeps the band it was given", () => {
   );
 
   const small = footerPlan(80, 12, MIN_BLOCK_ROWS, 0, "session", 0, 12);
-  assert.ok(small.liveRows > 0 && small.liveRows <= LIVE_BAND_ROWS + 12);
+  assert.ok(small.liveRows <= EDGE_ROWS, "a short window never grows the edge");
   assert.ok(small.rows <= 12);
 });
 
@@ -112,7 +131,7 @@ test("the band is the live region's loss, never the input's", () => {
 });
 
 test("a body too short for the band keeps the input and shows no band", () => {
-  const cramped = footerPlan(80, 10, MIN_BLOCK_ROWS + 1, 4, "session", 0);
+  const cramped = footerPlan(80, 10, MIN_BLOCK_ROWS + 1, 4, "session");
   assert.equal(cramped.hintRows, 0, "the band yields to the input block");
   assert.equal(cramped.inputRows, MIN_BLOCK_ROWS + 1, "the input keeps every row it asked for");
   assert.equal(
@@ -124,7 +143,7 @@ test("a body too short for the band keeps the input and shows no band", () => {
       cramped.liveRows,
   );
 
-  const taller = footerPlan(80, 10, MIN_BLOCK_ROWS, PICKER_ROWS, "session", 0);
+  const taller = footerPlan(80, 10, MIN_BLOCK_ROWS, PICKER_ROWS, "session");
   assert.equal(taller.hintRows, 0, "the picker yields too");
   assert.equal(taller.inputRows, MIN_BLOCK_ROWS);
 });
@@ -134,8 +153,8 @@ test("every window spends its body exactly and never overflows", () => {
     for (const wanted of [0, 1, MIN_BLOCK_ROWS, MIN_BLOCK_ROWS + 2, 100]) {
       for (const band of [0, 1, 5, 8]) {
         for (const mode of ["session", "welcome"] as const) {
-          // The print stays the page's: the region and the frame inside it do not
-          // answer how much the terminal has shown.
+          // A print takes its rows above the footer, one row of the window per
+          // row of the page.
           for (const docked of [0, 1, 2, 12]) {
             for (const printed of [0, 1, 7, height, 1000]) {
               const layout = footerPlan(80, height, wanted, band, mode, docked, printed);
@@ -151,7 +170,7 @@ test("every window spends its body exactly and never overflows", () => {
               assert.ok(layout.rows <= height, "the footer never asks for more than the window");
               assert.ok(layout.liveRows >= 0);
               assert.ok(layout.inputRows >= 0);
-              // The region ends where the print begins, and the frame inside it
+              // The window ends where the print begins, and the frame inside it
               // keeps only the rows it spends.
               const reached = Math.min(printed, height);
               if (reached + layout.rows <= height) {
@@ -172,11 +191,11 @@ test("every window spends its body exactly and never overflows", () => {
 test("the printed transcript starts at the footer's content column", () => {
   assert.equal(CONTENT_INDENT, 3, "the welcome page keeps its own margin");
   assert.equal(TRANSCRIPT_INDENT, 5);
-  const session = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session");
+  const session = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0, 24);
   assert.equal(
     session.contentColumns,
     80 - TRANSCRIPT_INDENT * 2,
-    "a printed row and the live band share one column",
+    "a printed row and the edge share one column",
   );
   assert.equal(
     session.columns,
@@ -214,6 +233,68 @@ test("the band gives its label and trailing cell their registry width", () => {
 test("the docked browser shows the rows its panel has above its chrome", () => {
   assert.equal(browserDataRows(12), 2);
   assert.equal(browserDataRows(6), 1, "a panel at its floor still shows one row");
+});
+
+test("a window too short for the frame's edge spends no slot", () => {
+  // The frame needs its bottom edge and the margin under it before it can hold a
+  // row: two rows keep the region on the window's last row and paint no box.
+  const two = footerPlan(40, 2, MIN_BLOCK_ROWS, 0, "session", 0, 0, 2);
+  assert.equal(
+    two.liveRows + two.hintRows + two.inputRows + two.detailRows,
+    0,
+    "two rows hold the frame's edge and no slot",
+  );
+  assert.equal(two.body, two.chromeRows, "the frame spends only its own chrome");
+  assert.equal(two.rows, 2, "the region still reaches the window's last row");
+
+  const one = footerPlan(40, 1, MIN_BLOCK_ROWS, 0, "session", 0, 0, 1);
+  assert.equal(one.body, 0, "one row holds nothing at all");
+  assert.equal(one.rows, 1);
+
+  const welcome = footerPlan(40, 2, MIN_BLOCK_ROWS, 0, "welcome", 0, 0, 2);
+  assert.equal(welcome.body, 0, "the welcome's bar needs its own row and the margin's");
+});
+
+test("no window, print, or ceiling makes the plan paint past its region", () => {
+  // The frame, the slots, the docked surface, and the margin are the rows the
+  // region spends, and every combination of a short window, a long print, a low
+  // ceiling, and a panel has to leave them inside it.
+  for (const height of [2, 4, 8, 12, 24, 40]) {
+    for (const printed of [0, 3, 12, 24, 60]) {
+      for (const maxRows of [height, Math.floor(height / 2), 3]) {
+        for (const docked of [0, 1, 5]) {
+          for (const hints of [0, PICKER_ROWS, 12]) {
+            const plan = footerPlan(
+              80,
+              height,
+              MIN_BLOCK_ROWS + 2,
+              hints,
+              "session",
+              docked,
+              printed,
+              maxRows,
+            );
+            const at = `height=${height} printed=${printed} maxRows=${maxRows} docked=${docked} hints=${hints}`;
+            assert.ok(
+              plan.rows <= Math.min(maxRows, height),
+              `the region fits its ceiling (${at})`,
+            );
+            assert.ok(plan.body <= plan.rows, `the frame fits the region (${at})`);
+            assert.ok(plan.liveRows <= EDGE_ROWS, `the edge never grows (${at})`);
+            assert.ok(
+              plan.hintRows === 0 || plan.hintRows === hints,
+              `the band is all or none (${at})`,
+            );
+            assert.equal(
+              plan.slackRows,
+              Math.max(0, plan.rows - plan.body - docked),
+              `the slack is what the frame and the surface leave (${at})`,
+            );
+          }
+        }
+      }
+    }
+  }
 });
 
 test("the welcome keeps the overview before the lockup", () => {
