@@ -110,10 +110,19 @@ queue. Those casts are in `src/kit/screen/surface.ts`; the printer asks
 field. `Screen` keeps the printed-row count, and `FooterFrame` reports the
 footer height, so the application has no geometry and no renderer handshake.
 
-**The printer takes blocks, not selectors.** It receives a session key, the
-blocks to print, a palette, and a render prop. The app adapter (`src/ui/Printer.tsx`)
-maps store blocks to that shape, which is what lets the fold, the chunking, and
-the scrollback portal live in the kernel without importing app state.
+**The printer takes blocks and a step, not selectors.** It receives a session
+key, the blocks to print, the step in flight as text, a palette, and two render
+props. The app adapter (`src/ui/Printer.tsx`) maps store blocks to that shape and
+adopts the answer block a streamed step became, which is what lets the fold, the
+sealing, the chunking, and the scrollback portal live in the kernel without
+importing app state.
+
+**A stream is printed as it grows.** The page paints the text the step has
+streamed so far; the printer seals every row a later row has superseded, writes
+it into the terminal, and the edge keeps the last two rows, which a table's
+delimiter or a setext underline can still reinterpret. The footer gives the rows
+back before the print takes them, so a sealed row is written where the edge
+stood and no row of the page moves when the step commits.
 
 ## Test run time
 

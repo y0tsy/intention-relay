@@ -42,7 +42,18 @@ the value it paints:
   transient delta moves without moving it.
 - A streamed answer is parsed in two parts. `splitBlocks` cuts the source at the
   last closed block and each parse is memoized on its source, so a frame
-  re-parses the paragraph still being written and nothing before it.
+  re-parses the paragraph still being written and nothing before it. A markdown
+  table renders as columns whose widths come from the page, never from the cells
+  that have arrived, so a table streaming in row by row cannot widen under the
+  rows already printed above it.
+- A printed row reads its columns without a resize subscription. One listener
+  per block crosses the renderer's own limit, and the warning it then writes to
+  the terminal lands between two printed rows: the window loses its place above
+  the transcript and prints a block a second time.
+- The transcript is written once, into the terminal's own history. `Printer`
+  seals every row a later row has superseded, the footer's edge paints the last
+  rows a stream may still rewrite, and no printed row is painted again; the
+  block a streamed step became is adopted, not printed twice.
 - The composer, the status row, and the hint band hold their own subscriptions,
   so a keystroke or a clock tick repaints the row it belongs to.
 - Every gesture is routed through `src/app/keys.ts`: one event becomes one
@@ -56,6 +67,14 @@ the value it paints:
 - The footer reports its own height through `FooterFrame`, and `Screen` keeps
   the printed-row count, so the application composes a screen and never reserves
   rows itself.
+- A band, a longer draft, and a notice keep to the rows the footer has. The
+  renderer grows a footer by scrolling its region, and the rows such a scroll
+  passes leave the scrollback for good, so `footerPlan` takes its ceiling from
+  the height the footer last reported and gives the band its rows before the
+  composer's. The session browser is a page of its own: it replaces the tray
+  while it is open, plans inside the rows the tray had, drops its filter and its
+  column headings rather than its session rows when that is short, and opens
+  nothing at all when not even its frame and one row fit.
 
 `src/ui/reactivity.test.tsx` measures these rules: a parse spy records which
 source each frame parsed, and the painted frame records what was laid out.
