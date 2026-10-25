@@ -159,10 +159,22 @@ export function FooterFrame({
           </box>
         </box>
       )}
-      {/* The page's empty middle: a blank row with no rail, because no printed
-          row stands beside it. It sits under the edge, so the edge's first line
-          is always the line the next print writes to. */}
-      <box height={layout.slackRows} />
+      {/* The page's empty middle carries the same rail as the rows it stands
+          between: the rule runs from the first printed row into the tray without
+          a break, and a row a print left empty is a row of the page, not a hole
+          through it. It sits under the edge, so the edge's first line is always
+          the line the next print writes to. */}
+      {layout.slackRows < 1 ? null : (
+        <box flexDirection="row" height={layout.slackRows}>
+          <box width={SESSION_MARGIN} />
+          <box
+            width={RULE_GAP}
+            height={layout.slackRows}
+            border={["right"]}
+            borderColor={palette.border}
+          />
+        </box>
+      )}
       <box flexDirection="row" height={frameRows}>
         <box width={SESSION_MARGIN} />
         <box

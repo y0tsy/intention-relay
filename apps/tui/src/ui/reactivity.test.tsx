@@ -15,7 +15,7 @@ import type { TestRendererSetup } from "@opentui/core/testing";
 import { marked } from "marked";
 import type { AppStore } from "../app/store";
 import { delta, row, run } from "../testing/fixtures";
-import { frameLines, mountApp, printedRows } from "../testing/render";
+import { frameLines, mountApp, paintedLines, printedRows } from "../testing/render";
 import { offlineStore, openSession } from "../testing/store";
 import { App } from "./App";
 import { TRANSCRIPT_INDENT } from "../kit";
@@ -269,6 +269,56 @@ test("the session browser is a page that takes the tray's rows", async () => {
     "the panel stays inside the window it was opened in",
   );
   assert.deepEqual(printedRows(setup), [], "the panel prints no row");
+
+  store.dispose();
+  await setup.dispose();
+});
+
+test("every printed row carries the transcript's rule", async () => {
+  const store = offlineStore();
+  const state = openSession(store, {
+    messages: [row(1, "user", "ask")],
+    run: run("running"),
+  });
+  const setup = await mount(store, 60, 16);
+  const answer = "First paragraph.\n\nSecond paragraph.";
+  for (const chunk of ["First paragraph.", "\n\nSecond"]) {
+    state.applyFrame({ kind: "text_delta", data: delta(1, "answer", chunk) });
+    store.dispatch({ kind: "frame_received", state });
+    await setup.renderOnce();
+  }
+  // The step commits: the page seals, the block it became is adopted, and the
+  // run line closes the page.
+  state.applyFrame({ kind: "content", data: row(2, "assistant", answer) });
+  store.dispatch({ kind: "frame_received", state });
+  state.applyFrame({ kind: "status", data: run("completed") });
+  store.dispatch({ kind: "frame_received", state });
+  const rows = await printed(setup);
+
+  // A row the page did not write is a row of the canvas the print carried with
+  // it: it lands in the scrollback as a blank line without the rule, and the
+  // reader sees the transcript's rule break after the row it closed with.
+  const bare = rows.filter((line) => !/^\s*│/u.test(line));
+  assert.deepEqual(bare, [], "no printed row is blank without the rule");
+  assert.ok(
+    rows.some((line) => line.includes("run complete")),
+    "the run line is printed",
+  );
+
+  // The window is the other half of the page: the rows it holds above the tray
+  // stand between the transcript's rule and the tray's, so a row of the window
+  // without the rule is a hole the reader sees through.
+  const lines = paintedLines(setup);
+  console.log(lines.map((l, i) => `${i} |${l}|`).join("\n"));
+  const tray = lines.findIndex((line) => line.includes("╭"));
+  assert.ok(tray > 0, "the tray is painted");
+  const above = lines.slice(0, tray).filter((line) => line.trim() !== "");
+  assert.ok(above.length > 0, "the window holds rows above the tray");
+  assert.deepEqual(
+    above.filter((line) => !line.includes("│")),
+    [],
+    "every row the window holds above the tray carries the rule",
+  );
 
   store.dispose();
   await setup.dispose();
