@@ -681,6 +681,24 @@ test("a page of many blocks adds no resize listener per block", async () => {
   await setup.dispose();
 });
 
+test("a welcome page reads the window through one resize listener", async () => {
+  const store = offlineStore();
+  const setup = await mount(store, 80, 24);
+  const before = setup.renderer.listenerCount("resize");
+  for (let frame = 0; frame < 5; frame += 1) {
+    await setup.renderOnce();
+  }
+  const after = setup.renderer.listenerCount("resize");
+  // The welcome page asks for its columns from many components. A window hook
+  // that subscribed for each of them would spend the renderer's listener budget
+  // and print its warning over the page.
+  assert.equal(after, before, "the welcome page adds no listener per reader");
+  assert.ok(after <= 1, `the renderer holds ${after} resize listeners`);
+
+  store.dispose();
+  await setup.dispose();
+});
+
 test("a streamed delta leaves the committed rows the value they were", () => {
   const store = offlineStore();
   const state = openSession(store, {
