@@ -4,6 +4,8 @@
 //! a surface names the choices and the one the reader is on.
 
 import { TextAttributes } from "@opentui/core";
+import { displayWidth, truncate } from "../text";
+import { useContentColumns } from "./context";
 import { Pane, paneSlotRows } from "./Pane";
 
 /** One choice the picker shows. */
@@ -64,28 +66,73 @@ export function Picker({
       paddingRight={1}
       height={pickerRows(items.length)}
     >
-      {items.map((item, index) => {
-        const highlighted = index === selected;
-        return (
-          <text
-            key={item.key}
-            wrapMode="none"
-            bg={highlighted ? palette.rowSelectedBg : palette.headerBg}
-          >
-            <span fg={palette.accent} attributes={highlighted ? TextAttributes.BOLD : undefined}>
-              {highlighted ? marker : rowMarker}
-            </span>
-            <span fg={palette.ink} attributes={highlighted ? TextAttributes.BOLD : undefined}>
-              {item.label}
-            </span>
-            <span fg={palette.inkMuted}>{`  ${item.detail}`}</span>
-            {item.current ? <span fg={palette.success}> current</span> : null}
-          </text>
-        );
-      })}
-      <text wrapMode="none" fg={palette.inkMuted} bg={palette.headerBg}>
-        {legend}
-      </text>
+      {items.map((item, index) => (
+        <PickerRow
+          key={item.key}
+          item={item}
+          highlighted={index === selected}
+          marker={marker}
+          rowMarker={rowMarker}
+          palette={palette}
+        />
+      ))}
+      <PickerLegend text={legend} palette={palette} />
     </Pane>
+  );
+}
+
+/** One choice, cut to the columns the panel gives it. */
+function PickerRow({
+  item,
+  highlighted,
+  marker,
+  rowMarker,
+  palette,
+}: {
+  item: PickerItem;
+  highlighted: boolean;
+  marker: string;
+  rowMarker: string;
+  palette: PickerPalette;
+}) {
+  const columns = useContentColumns();
+  const markerText = highlighted ? marker : rowMarker;
+  const label = truncate(item.label, Math.max(0, columns - displayWidth(markerText)));
+  const room = Math.max(0, columns - displayWidth(markerText) - displayWidth(label));
+  const detail = `  ${item.detail}`;
+  const current = item.current ? " current" : "";
+  let detailText = detail;
+  let currentText = "";
+  if (displayWidth(detail) + displayWidth(current) <= room) {
+    currentText = current;
+  } else if (displayWidth(current) < room) {
+    // The preference in force keeps its marker; the explanation gives the
+    // columns it has left, and ends with an ellipsis where it was cut.
+    detailText = truncate(detail, room - displayWidth(current));
+    currentText = current;
+  } else {
+    detailText = truncate(detail, room);
+  }
+  return (
+    <text wrapMode="none" bg={highlighted ? palette.rowSelectedBg : palette.headerBg}>
+      <span fg={palette.accent} attributes={highlighted ? TextAttributes.BOLD : undefined}>
+        {markerText}
+      </span>
+      <span fg={palette.ink} attributes={highlighted ? TextAttributes.BOLD : undefined}>
+        {label}
+      </span>
+      <span fg={palette.inkMuted}>{detailText}</span>
+      {currentText.length === 0 ? null : <span fg={palette.success}>{currentText}</span>}
+    </text>
+  );
+}
+
+/** The picker's one-line legend, cut to the panel's columns. */
+function PickerLegend({ text, palette }: { text: string; palette: PickerPalette }) {
+  const columns = useContentColumns();
+  return (
+    <text wrapMode="none" fg={palette.inkMuted} bg={palette.headerBg}>
+      {truncate(text, columns)}
+    </text>
   );
 }
