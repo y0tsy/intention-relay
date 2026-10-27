@@ -11,6 +11,7 @@
 
 import assert from "node:assert/strict";
 import test, { mock } from "node:test";
+import { CliRenderEvents } from "@opentui/core";
 import type { TestRendererSetup } from "@opentui/core/testing";
 import { marked } from "marked";
 import type { AppStore } from "../app/store";
@@ -142,6 +143,62 @@ function watchParses(): string[] {
     return parse(source);
   }) as typeof marked.lexer);
   return seen;
+}
+
+/** The geometry one print wrote its chunk at. */
+interface WriteAt {
+  /** The rows the footer had taken when the chunk was written. */
+  readonly footer: number;
+  /** The row the surface stood on when the chunk was written. */
+  readonly offset: number | undefined;
+  /** The mode the renderer still had pending, if any. */
+  readonly pending: unknown;
+  /** The window's own rows. */
+  readonly height: number;
+}
+
+/** Records the geometry of every chunk a print writes from now on. */
+function watchWrites(setup: TestRendererSetup): WriteAt[] {
+  const writes: WriteAt[] = [];
+  setup.renderer.on(CliRenderEvents.EXTERNAL_OUTPUT, () => {
+    const renderer = setup.renderer as unknown as {
+      readonly terminalHeight: number;
+      readonly footerHeight: number;
+      readonly renderOffset?: number;
+      readonly pendingNativeMode?: unknown;
+    };
+    writes.push({
+      footer: renderer.footerHeight,
+      offset: renderer.renderOffset,
+      pending: renderer.pendingNativeMode ?? null,
+      height: renderer.terminalHeight,
+    });
+  });
+  return writes;
+}
+
+/** Returns the rows of the window above the tray, blank rows excluded. */
+function aboveTray(setup: TestRendererSetup): string[] {
+  const lines = paintedLines(setup);
+  const tray = lines.findIndex((line) => line.includes("╭"));
+  assert.ok(tray > 0, "the tray is painted");
+  return lines.slice(0, tray).filter((line) => line.trim() !== "");
+}
+
+/** Asserts that the printed page and the window connect without a bare row. */
+function assertRuleRuns(setup: TestRendererSetup, rows: readonly string[], turn: string): void {
+  assert.deepEqual(
+    rows.filter((line) => !/^\s*│/u.test(line)),
+    [],
+    `${turn}: no printed row is blank without the rule`,
+  );
+  const above = aboveTray(setup);
+  assert.ok(above.length > 0, `${turn}: the window holds rows above the tray`);
+  assert.deepEqual(
+    above.filter((line) => !line.includes("│")),
+    [],
+    `${turn}: every row above the tray carries the rule`,
+  );
 }
 
 test("a keystroke never reaches the printed rows", async (t) => {
@@ -293,32 +350,34 @@ test("every printed row carries the transcript's rule", async () => {
   store.dispatch({ kind: "frame_received", state });
   state.applyFrame({ kind: "status", data: run("completed") });
   store.dispatch({ kind: "frame_received", state });
-  const rows = await printed(setup);
+  const first = await printed(setup);
+  assert.ok(
+    first.some((line) => line.includes("run complete")),
+    "the run line is printed",
+  );
 
   // A row the page did not write is a row of the canvas the print carried with
   // it: it lands in the scrollback as a blank line without the rule, and the
   // reader sees the transcript's rule break after the row it closed with.
-  const bare = rows.filter((line) => !/^\s*│/u.test(line));
-  assert.deepEqual(bare, [], "no printed row is blank without the rule");
-  assert.ok(
-    rows.some((line) => line.includes("run complete")),
-    "the run line is printed",
-  );
+  assertRuleRuns(setup, first, "first turn");
 
-  // The window is the other half of the page: the rows it holds above the tray
-  // stand between the transcript's rule and the tray's, so a row of the window
-  // without the rule is a hole the reader sees through.
-  const lines = paintedLines(setup);
-  console.log(lines.map((l, i) => `${i} |${l}|`).join("\n"));
-  const tray = lines.findIndex((line) => line.includes("╭"));
-  assert.ok(tray > 0, "the tray is painted");
-  const above = lines.slice(0, tray).filter((line) => line.trim() !== "");
-  assert.ok(above.length > 0, "the window holds rows above the tray");
-  assert.deepEqual(
-    above.filter((line) => !line.includes("│")),
-    [],
-    "every row the window holds above the tray carries the rule",
+  // A second turn prints after the first one closed. The footer gives new rows
+  // back, and the page it leaves must meet the tray on the same rule.
+  state.applyFrame({ kind: "content", data: row(3, "user", "and then?") });
+  store.dispatch({ kind: "frame_received", state });
+  state.applyFrame({ kind: "content", data: row(4, "assistant", "It keeps relaying.") });
+  store.dispatch({ kind: "frame_received", state });
+  state.applyFrame({
+    kind: "status",
+    data: run("completed", { run_id: "0b1a2c3d-0000-4000-8000-0000000000a2" }),
+  });
+  store.dispatch({ kind: "frame_received", state });
+  const second = await printed(setup);
+  assert.ok(
+    second.some((line) => line.includes("It keeps relaying.")),
+    "the second turn is printed",
   );
+  assertRuleRuns(setup, second, "second turn");
 
   store.dispose();
   await setup.dispose();
@@ -398,6 +457,96 @@ test("a streamed answer prints once, in the rows its block has", async () => {
     "the answer is written once",
   );
   assert.deepEqual(rows, await committed(), "the streamed rows are the rows its block has");
+});
+
+test("two blocks in a row print without an empty row between them", async () => {
+  const store = offlineStore();
+  const state = openSession(store, {
+    messages: [row(1, "user", "first")],
+    run: run("running"),
+  });
+  const setup = await mount(store, 60, 24);
+  // The opening page is the one this test does not watch: the two prints that
+  // follow are what a chunk written before the footer applied would split.
+  await printed(setup);
+  const writes = watchWrites(setup);
+
+  state.applyFrame({ kind: "content", data: row(2, "assistant", "an earlier answer") });
+  store.dispatch({ kind: "frame_received", state });
+  const first = await printed(setup);
+  state.applyFrame({ kind: "content", data: row(3, "assistant", "a later answer") });
+  store.dispatch({ kind: "frame_received", state });
+  const second = await printed(setup);
+  const rows = [...first, ...second];
+
+  // A write above a footer that still holds the rows scrolls the row the print
+  // stopped on out of the window and leaves a row without the rail behind.
+  assert.deepEqual(
+    rows.filter((line) => !/^\s*│/u.test(line)),
+    [],
+    "no printed row is blank without the rail",
+  );
+  assert.deepEqual(
+    printedLines(rows),
+    ["assistant", "an earlier answer", "", "assistant", "a later answer"],
+    "each block is printed once, separated by the page's own blank row",
+  );
+  assert.ok(writes.length > 0, "the printed blocks were written");
+  for (const write of writes) {
+    assert.equal(write.pending, null, "a chunk is written only after the footer applied");
+    assert.equal(
+      write.offset,
+      write.height - write.footer,
+      "a chunk lands on the row the footer left for it",
+    );
+  }
+
+  store.dispose();
+  await setup.dispose();
+});
+
+test("a print writes every row it measured, visible or scrolled", async () => {
+  const store = offlineStore();
+  const items = Array.from(
+    { length: 40 },
+    (_, index) => `• kept ${String(index + 1).padStart(2, "0")}`,
+  );
+  openSession(store, {
+    messages: [row(1, "assistant", items.join("\n"))],
+    run: run("completed"),
+  });
+  const setup = await mount(store, 60, 16);
+  const writes = watchWrites(setup);
+  const rows: string[] = [];
+  // A window this short cannot hold the block: the footer gives its working
+  // rows back chunk by chunk, and every row written above the tray stays in the
+  // terminal's history.
+  for (let frame = 0; frame < 40; frame += 1) {
+    rows.push(...printedRows(setup));
+    await setup.renderOnce();
+  }
+  rows.push(...printedRows(setup));
+
+  for (const item of items) {
+    const seen = rows.filter((line) => line.includes(item)).length;
+    assert.equal(seen, 1, `"${item}" is written once`);
+  }
+  assert.deepEqual(
+    rows.filter((line) => line.trim() === ""),
+    [],
+    "no chunk leaves a blank row above the page",
+  );
+  for (const write of writes) {
+    assert.equal(write.pending, null, "a chunk is written only after the footer applied");
+    assert.equal(
+      write.offset,
+      write.height - write.footer,
+      "the surface stands where the footer begins",
+    );
+  }
+
+  store.dispose();
+  await setup.dispose();
 });
 
 test("a burst of rows prints every block once, in the order it committed", async () => {

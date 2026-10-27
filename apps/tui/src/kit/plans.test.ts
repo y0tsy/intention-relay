@@ -58,6 +58,34 @@ test("the footer keeps its own rows, whatever has been printed", () => {
   assert.equal(footer.slackRows, 0);
 });
 
+test("the footer asks for the rows it spends and takes the rest from the page", () => {
+  // The renderer reserves exactly the rows the plan asks for: the footer's own
+  // working rows plus the page's slack. Asking for less paints past the region;
+  // asking for more scrolls a printed row out of the terminal.
+  for (const height of [14, 24, 40]) {
+    for (const printed of [0, 1, 7, height, height + 8]) {
+      const plan = footerPlan(80, height, MIN_BLOCK_ROWS, 0, "session", 0, printed);
+      assert.ok(plan.rows >= plan.body, `${height}/${printed}: the rows cover the body`);
+      assert.equal(
+        plan.rows,
+        plan.body + plan.slackRows,
+        `${height}/${printed}: the slack is the difference`,
+      );
+    }
+  }
+});
+
+test("a printed row takes the page's slack and nothing the footer spends", () => {
+  const full = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0, 0);
+  const later = footerPlan(80, 24, MIN_BLOCK_ROWS, 0, "session", 0, 12);
+  assert.equal(later.body, full.body, "the footer's working rows do not follow the print");
+  assert.equal(
+    full.slackRows - later.slackRows,
+    full.rows - later.rows,
+    "the rows the print took are the rows the page gave back",
+  );
+});
+
 test("a short print leaves the window above the footer to the page", () => {
   const empty = footerPlan(80, 30, MIN_BLOCK_ROWS, 0, "session", 0, 0);
   assert.equal(empty.rows, 30, "the window still reaches the terminal's last row");

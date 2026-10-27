@@ -22,12 +22,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { EDGE_ROWS, printRoom } from "../layout/footer-plan";
 import { chunkRows, continues, leadRow, sealedRows } from "./print-plan";
 import type { PrintJob, PrintedBlock, StepPrint } from "./print-types";
-import { pinSurface, readOffset, replayWindow, windowSettled } from "./surface";
+import { pinSurface, replayWindow, requestedRows, windowAtRows } from "./surface";
 
 /** The blocks one print folds, so a burst is printed in bounded surfaces. */
 const FOLD = 8;
 
-/** How many times a print re-pins the surface before it replays the window. */
+/** How many frames a print waits for the region before pinning it. */
 const MAX_PINS = 8;
 
 /** Nothing printed yet. */
@@ -108,10 +108,19 @@ export function usePrintSession<Block extends PrintedBlock>({
   const commitNext = useCallback(
     (current: PrintJob<Block>): void => {
       const rowsAbove = printRoom(renderer.terminalHeight, renderer.footerHeight);
-      const to = Math.min(
-        current.sealed,
-        current.next + chunkRows(current.next, current.sealed, rowsAbove),
-      );
+      // The rows this print already took from the footer are the chunk it is
+      // about to write: taking another row back shrinks the footer and grows
+      // the room the next chunk would measure, so measuring again here would
+      // hand the footer one row per frame and never write. A chunk is measured
+      // once, when the print has no rows in hand.
+      const held = Math.min(Math.max(current.given, current.next), current.sealed);
+      const to =
+        held > current.next
+          ? held
+          : Math.min(
+              current.sealed,
+              current.next + chunkRows(current.next, current.sealed, rowsAbove),
+            );
       if (to <= current.next) {
         // A finished print with nothing left to write is done; a step in flight
         // is only waiting for rows.
@@ -132,10 +141,12 @@ export function usePrintSession<Block extends PrintedBlock>({
         if (current.next > 0) {
           surface.render();
         }
-        // A commit ends on a fresh line. The row after it is the row the edge
-        // starts on, and a cursor left in the middle of the last row writes the
-        // next row at that row's column as soon as the terminal reflowed.
-        surface.commitRows(current.next, to);
+        // A chunk ends on its last row, never on a fresh line. A newline after
+        // the last row sits on the scroll region's bottom margin, scrolls the
+        // region once more, and leaves an empty row between the print and the
+        // footer; the next chunk starts on a new line from the full-width tail
+        // the committed rows leave.
+        surface.commitRows(current.next, to, { trailingNewline: false });
       } catch {
         // The window changed between the render and the write. The print
         // measures itself again and the frames that follow write it at the
@@ -172,7 +183,12 @@ export function usePrintSession<Block extends PrintedBlock>({
         setCurrentJob({ ...current, rows, sealed });
         return;
       }
-      if (windowSettled(renderer)) {
+      // The footer gives the rows back before the print takes them, and the
+      // write waits for the region those rows left to be the region the plan
+      // asked for. A write before that lands above a footer that still holds
+      // the rows, which scrolls the screen and leaves the row the print
+      // stopped on unpainted.
+      if (windowAtRows(renderer, requestedRows())) {
         commitNext(current);
       }
     },
@@ -180,15 +196,18 @@ export function usePrintSession<Block extends PrintedBlock>({
   );
 
   // The renderer moves the surface to where its output started whenever a print
-  // lands or the footer resizes, so the surface is held on the window's last row
-  // for as long as it takes the frame that carries the move to be the last one.
-  // A window that will not settle is replayed once per print rather than pinned
-  // forever.
+  // lands or the footer resizes. The region is the plan's only when that move
+  // has been carried out, so the printer waits for it. A window that will not
+  // take the rows the plan asked for is pinned and replayed once per print
+  // rather than waited on forever.
   useEffect(() => {
     const onFrame = (): void => {
-      const want = Math.max(0, renderer.terminalHeight - renderer.footerHeight);
-      const at = readOffset(renderer);
-      if (at !== null && at !== want) {
+      const current = advancing.current;
+      // The row the region starts on is the row the print's next row goes to.
+      // A write before the plan's rows are the region's rows lands above a
+      // footer that still holds them, scrolls the screen, and leaves the row
+      // the print stopped on as a gap.
+      if (!windowAtRows(renderer, requestedRows())) {
         if (pins.current < MAX_PINS) {
           pins.current += 1;
           pinSurface(renderer);
@@ -198,6 +217,7 @@ export function usePrintSession<Block extends PrintedBlock>({
         if (!replayed.current) {
           replayed.current = true;
           pins.current = 0;
+          pinSurface(renderer);
           replayWindow(renderer);
           renderer.requestRender();
         }
@@ -205,10 +225,9 @@ export function usePrintSession<Block extends PrintedBlock>({
       }
       pins.current = 0;
       replayed.current = false;
-      const current = advancing.current;
       // The window is where it belongs and the footer has taken its rows: the
       // next chunk goes now.
-      if (current !== null && current.next < current.sealed && windowSettled(renderer)) {
+      if (current !== null && current.next < current.sealed) {
         commitNext(current);
       }
     };
@@ -287,7 +306,7 @@ export function usePrintSession<Block extends PrintedBlock>({
         setCurrentJob({ ...current, open: false, sealed: current.rows });
         return;
       }
-      if (windowSettled(renderer)) {
+      if (windowAtRows(renderer, requestedRows())) {
         commitNext(current);
       }
       return;

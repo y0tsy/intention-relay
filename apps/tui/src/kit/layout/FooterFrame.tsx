@@ -11,6 +11,7 @@
 
 import { useRenderer } from "@opentui/react";
 import type { ReactNode } from "react";
+import { requestFooterRows } from "../screen/surface";
 import { ContentColumns } from "./context";
 import {
   CONTENT_INDENT,
@@ -49,12 +50,17 @@ export function FooterFrame({
   header?: ReactNode;
   /** The step in flight's unsealed edge, painted above a session's frame. */
   live?: ReactNode;
-  /** A page that owns the whole footer: the panel, and the rows it paints. */
+  /** A page that owns the whole footer: the panel, and its rows, gap included. */
   page?: { readonly node: ReactNode; readonly rows: number };
   children?: ReactNode;
 }) {
   const renderer = useRenderer();
   const rows = layout.rows;
+  // The rows the plan asks for are published before the renderer is asked for
+  // them: the printer waits for the region to stand at exactly this height, and
+  // the renderer's own height reads the pending frame rather than the applied
+  // one.
+  requestFooterRows(rows);
   // The region is set as the frame is built, not after it: the renderer paints
   // the rows this frame spends, and a region applied after the frame stands the
   // tray too high, leaving the row above it with the paint it had. Setting it
