@@ -136,7 +136,10 @@ export function Footer({
           ? undefined
           : {
               node: <Docked store={store} palette={palette} browser={browser} />,
-              rows: browser.rows,
+              // The page node carries the blank row above the panel itself;
+              // the page branch must not budget the same gap again or the
+              // bottom margin falls off the window.
+              rows: browser.rows + DOCK_GAP_ROWS,
             }
       }
     >

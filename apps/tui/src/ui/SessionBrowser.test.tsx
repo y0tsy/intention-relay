@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { summary } from "../testing/fixtures";
-import { browserColumnWidths, browserPlan, SlotRows } from "../kit";
+import { browserColumnWidths, browserPlan, ContentColumns, SlotRows } from "../kit";
 import { frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { SessionBrowser } from "./SessionBrowser";
@@ -20,18 +20,22 @@ async function lines(
   const frame = await painted(
     <box flexDirection="row">
       <box width={1} />
-      <box width={width - 1}>
+      <box width={width - 2}>
         <SlotRows rows={layout.rows}>
-          <SessionBrowser
-            rows={rows}
-            error={options.error ?? null}
-            selection={options.selection ?? 0}
-            filter={options.filter ?? ""}
-            tab="all"
-            palette={DARK}
-            now={options.now ?? 1_700_000_060}
-            compact={layout.compact}
-          />
+          {/* The dock keeps one column on each side; the panel is the width it
+              was given, not one column wider than its frame. */}
+          <ContentColumns columns={width - 2}>
+            <SessionBrowser
+              rows={rows}
+              error={options.error ?? null}
+              selection={options.selection ?? 0}
+              filter={options.filter ?? ""}
+              tab="all"
+              palette={DARK}
+              now={options.now ?? 1_700_000_060}
+              compact={layout.compact}
+            />
+          </ContentColumns>
         </SlotRows>
       </box>
     </box>,
@@ -123,4 +127,18 @@ test("a narrow panel keeps its counter whole", async () => {
 test("a failure replaces the table with its own line", async () => {
   const painted_ = await lines([], 80, 30, { error: "local_daemon_unavailable: no daemon" });
   assert.match(painted_.join("\n"), /local_daemon_unavailable: no daemon/);
+});
+
+test("a long failure ends inside the panel, with the cut marked", async () => {
+  const error = "local_daemon_connection_unavailable: the local daemon connection is unavailable";
+  for (const width of [80, 46]) {
+    const painted_ = await lines([], width, 30, { error });
+    const line = painted_.find((row) => row.includes("local_daemon_connection_unavailable"));
+    assert.ok(line !== undefined, `${width}: the failure is painted`);
+    // The panel's content is narrower than the window by its margin, frame, and
+    // padding. A cell that measures from the window paints one column past it,
+    // and the clip takes the ellipsis with it.
+    assert.match(line, /…\s*│$/u, `${width}: the cut is marked inside the border`);
+    assert.ok(line.length < width, `${width}: the row fits the window`);
+  }
 });

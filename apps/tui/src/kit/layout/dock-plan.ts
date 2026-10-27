@@ -100,5 +100,5 @@ export function browserDataRows(panelRows: number): number {
 
 /** The outer columns the browser's panel occupies in one window. */
 export function browserPanelColumns(windowColumns: number): number {
-  return Math.max(0, windowColumns - FOOTER_MARGIN);
+  return Math.max(0, windowColumns - FOOTER_MARGIN * 2);
 }
