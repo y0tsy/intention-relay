@@ -10,7 +10,7 @@ members = [
   "crates/intention-client",
   "crates/intention-daemon",
   "crates/intention-test-support",
-  "crates/intention-tui",
+  "crates/intention-cli",
 ]
 default-members = [
   "crates/intention-proto",

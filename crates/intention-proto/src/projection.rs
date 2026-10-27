@@ -11,6 +11,7 @@ use crate::{RunModeDto, RunProjectionDto, WorkspaceRootDto};
 
 /// A safe current projection of one pending user turn.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PendingTurnProjectionDto {
     session_id: SessionId,
     turn_id: TurnId,
@@ -81,6 +82,7 @@ impl PendingTurnProjectionDto {
 
 /// A safe complete public session state projection at one durable event position.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionProjectionDto {
     project_id: ProjectId,
     session_id: SessionId,
@@ -229,6 +231,7 @@ impl SessionProjectionDto {
 /// a creation command name an already-bound root without proposing a second
 /// identity the durable association would reject.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct WorkspaceBindingDto {
     project_id: ProjectId,
     workspace_id: WorkspaceId,
@@ -259,6 +262,7 @@ impl WorkspaceBindingDto {
 
 /// The closed transcript message kind.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum MessageKindDto {
     /// User-authored content admitted as a run message.
@@ -317,6 +321,7 @@ impl MessageKindDto {
 /// a caller commits through this shape and receives the committed
 /// [`MessageProjectionDto`] carrying the identity that commit recorded.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct NewMessageDto {
     session_id: SessionId,
     run_id: Option<RunId>,
@@ -416,6 +421,7 @@ impl NewMessageDto {
 /// event position, no provider resource, and - for a tool row - the typed tool
 /// evidence the row's own commit recorded.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MessageProjectionDto {
     id: MessageId,
     session_id: SessionId,

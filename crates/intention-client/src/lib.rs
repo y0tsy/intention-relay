@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use intention_proto::{
@@ -150,8 +150,16 @@ pub fn daemon_program_beside(executable: &Path) -> DtoResult<String> {
 
 impl DaemonLauncher for ProcessDaemonLauncher {
     fn launch(&self, endpoint: &LocalEndpoint) -> DtoResult<()> {
+        // The daemon's own streams are detached from this process's terminal:
+        // a fullscreen front end owns the alternate screen, so anything the
+        // daemon writes to an inherited standard stream lands on top of a
+        // painted frame and scrolls it. Its diagnostics belong in its own log,
+        // and the client reads the daemon's health over the endpoint instead.
         Command::new(&self.program)
             .arg(endpoint.instance_id())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .map(|_| ())
             .map_err(|_| {

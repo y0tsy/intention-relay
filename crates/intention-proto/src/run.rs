@@ -8,6 +8,7 @@ use crate::{
 
 /// The agent policy active for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RunModeDto {
     /// Research and author a physical plan while ordinary project mutation is denied.
@@ -63,6 +64,7 @@ impl RunModeDto {
 
 /// The durable lifecycle status for a run.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatusDto {
     /// The run is initializing its immutable context.
@@ -166,6 +168,7 @@ pub fn validate_run_status_transition(from: RunStatusDto, to: RunStatusDto) -> D
 /// many committed tool calls the run has not answered yet. `finished_at` is
 /// present exactly when the status is terminal.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RunProjectionDto {
     session_id: SessionId,
     run_id: RunId,

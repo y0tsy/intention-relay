@@ -1,5 +1,12 @@
 [build]
 rustflags = ["-Dwarnings"]
 
+# The TypeScript bindings are generated into the terminal app, and every integer
+# the wire carries is small enough for a JavaScript number: `id` is a correlation
+# counter, `MessageId` is a SQLite row id, and `TimestampDto` is Unix seconds.
+[env]
+TS_RS_EXPORT_DIR = { value = "apps/tui/src/bindings", relative = true }
+TS_RS_LARGE_INT = "number"
+
 [term]
 color = "always"

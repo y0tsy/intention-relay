@@ -1,0 +1,151 @@
+//! The transcript: one committed block per row, the step in flight after them.
+//!
+//! A committed block is printed into the terminal's scrollback and the step in
+//! flight is printed as it streams; both are built from the same components, so
+//! the test paints them in the column the page shows.
+
+import assert from "node:assert/strict";
+import test from "node:test";
+import { row } from "../testing/fixtures";
+import { frameLines, painted } from "../testing/render";
+import { offlineStore, openSession } from "../testing/store";
+import { DARK } from "../theme/palette";
+import { ContentColumns, Stack } from "../kit";
+import { transcriptBlocks } from "../app/transcript";
+import { CommittedBlock, Live } from "./Transcript";
+
+/** Renders one transcript at one width and returns its lines. */
+async function lines(
+  messages: ReturnType<typeof row>[],
+  options: {
+    reasoning?: string;
+    answer?: string;
+    width?: number;
+    height?: number;
+  } = {},
+): Promise<string[]> {
+  const store = offlineStore();
+  openSession(store, {
+    messages,
+    answer: options.answer,
+    reasoning: options.reasoning,
+  });
+  // The page prints the committed rows and the step in flight, so the two views
+  // sit in one column the way the terminal reads.
+  const width = options.width ?? 58;
+  const frame = await painted(
+    <Stack spaced>
+      <ContentColumns columns={width}>
+        <Stack spaced>
+          {transcriptBlocks(messages).map((block) => (
+            <CommittedBlock key={block.key} block={block} palette={DARK} />
+          ))}
+        </Stack>
+      </ContentColumns>
+      <ContentColumns columns={width}>
+        <Live
+          reasoning={store.state.provisionalReasoning}
+          text={store.state.provisionalText}
+          palette={DARK}
+        />
+      </ContentColumns>
+    </Stack>,
+    options.width ?? 60,
+    options.height ?? 40,
+  );
+  store.dispose();
+  return frameLines(frame);
+}
+
+test("a committed turn reads as its label, its reasoning, and its answer", async () => {
+  const painted_ = await lines([
+    row(1, "user", "explain this repository"),
+    { ...row(2, "assistant", "It relays intentions."), reasoning: "they asked" },
+  ]);
+  assert.ok(
+    painted_.some((line) => line === "you"),
+    "the reader's turn opens with its label",
+  );
+  assert.ok(painted_.some((line) => line.includes("explain this repository")));
+  assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
+  assert.ok(
+    painted_.some((line) => line === "assistant"),
+    "the answer carries its label",
+  );
+  assert.ok(painted_.some((line) => line === "It relays intentions."));
+});
+
+test("a committed reasoning prints every row it was given", async () => {
+  const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
+  const printed = await lines([{ ...row(2, "assistant", "an answer"), reasoning }], { height: 40 });
+  assert.ok(printed.some((line) => line.trim() === "thought 20"));
+  assert.ok(!printed.some((line) => /more · click or Ctrl\+E/.test(line)));
+});
+
+test("the step in flight prints every row it streamed", async () => {
+  const reasoning = Array.from({ length: 20 }, (_, index) => `thought ${index + 1}`).join("\n");
+  const streamed = await lines([], { reasoning, answer: "hold on", height: 40 });
+  assert.ok(streamed.some((line) => line.trim() === "thought 20"));
+  assert.ok(!streamed.some((line) => /more · click or Ctrl\+E/.test(line)));
+});
+
+test("the step in flight reads as the reasoning and the answer it becomes", async () => {
+  const painted_ = await lines([], { reasoning: "...", answer: "hold on" });
+  assert.ok(painted_.some((line) => line.startsWith("∴ reasoning")));
+  assert.ok(painted_.some((line) => line === "assistant"));
+  assert.ok(painted_.some((line) => line === "hold on"));
+});
+
+test("a call and its result are one block drawn at the call", async () => {
+  const call = {
+    ...row(3, "tool_call", ""),
+    tool: { row: "call", value: { call_id: "c1", tool_id: "grep", arguments: null } },
+  } as never;
+  const result = {
+    ...row(4, "tool_result", "the pattern matched twice"),
+    tool: {
+      row: "result",
+      value: { call_id: "c1", tool_id: "grep", status: "completed", result: null, metadata: [] },
+    },
+  } as never;
+  const painted_ = await lines([call, result]);
+  assert.equal(
+    painted_.filter((line) => line.includes("▸ grep")).length,
+    1,
+    "the exchange is drawn once, at the call",
+  );
+  assert.ok(painted_.some((line) => line.includes("‣ the pattern matched twice")));
+});
+
+test("an execute result never prints the command's output", async () => {
+  const call = {
+    ...row(3, "tool_call", ""),
+    tool: { row: "call", value: { call_id: "c1", tool_id: "execute", arguments: null } },
+  } as never;
+  const result = {
+    ...row(4, "tool_result", "pong\npong"),
+    tool: {
+      row: "result",
+      value: { call_id: "c1", tool_id: "execute", status: "completed", result: null, metadata: [] },
+    },
+  } as never;
+  const painted_ = await lines([call, result]);
+  assert.ok(!painted_.some((line) => line.includes("pong")), "no byte of the output is shown");
+});
+
+test("a notice stays a plain line, never prose", async () => {
+  const painted_ = await lines([row(1, "notice", "**not** markdown")]);
+  assert.ok(painted_.some((line) => line.startsWith("※ **not** markdown")));
+});
+
+test("the blocks of one turn are separated by exactly one blank row", async () => {
+  const painted_ = await lines([row(1, "user", "hi"), row(2, "assistant", "hello")]);
+  const user = painted_.indexOf("you");
+  const answer = painted_.indexOf("assistant");
+  assert.ok(user >= 0 && answer > user, "the reader's turn opens and the answer follows");
+  assert.deepEqual(
+    painted_.slice(user, answer).filter((line) => line.trim().length === 0),
+    [""],
+    "one blank row, not two",
+  );
+});
