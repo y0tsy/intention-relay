@@ -66,3 +66,19 @@ export function frameLines(frame: string): string[] {
 export function paintedLines(setup: TestRendererSetup): string[] {
   return frameLines(setup.captureCharFrame());
 }
+
+/** Returns the background one cell was painted with. */
+export function cellBackground(
+  frame: ReturnType<TestRendererSetup["captureSpans"]>,
+  x: number,
+  y: number,
+): ReturnType<TestRendererSetup["captureSpans"]>["lines"][number]["spans"][number]["bg"] {
+  let column = 0;
+  for (const span of frame.lines[y]?.spans ?? []) {
+    if (x < column + span.width) {
+      return span.bg;
+    }
+    column += span.width;
+  }
+  throw new Error(`no cell at ${x},${y}`);
+}

@@ -42,6 +42,19 @@ test("inline code stays against its punctuation", async () => {
   assert.ok(!text.includes("widgets ,"), "no gap is left before the comma");
 });
 
+test("a fence closes its rounded frame on every side", async () => {
+  const painted_ = await lines("```ts\nconst x = 1;\n```", 20);
+  assert.match(painted_[0] ?? "", /^╭.*╮$/u);
+  assert.ok(
+    painted_.some((line) => line.includes("const x = 1;")),
+    "the code is painted",
+  );
+  assert.match(painted_.at(-1) ?? "", /^╰.*╯$/u);
+  for (const line of painted_) {
+    assert.ok(line.length <= 20, `"${line}" fits the fence's page`);
+  }
+});
+
 test("a rule spans the region, not three cells", async () => {
   const painted_ = await lines("above\n\n---\n\nbelow", 20);
   assert.ok(painted_.includes("─".repeat(20)), "the divider is the full width");

@@ -77,14 +77,22 @@ export function Pane({
       borderStyle="rounded"
       border={border === true ? true : sides}
       borderColor={borderColor}
-      backgroundColor={background}
       title={title}
       titleColor={titleColor}
       titleAlignment={titleAlignment}
-      paddingLeft={left}
-      paddingRight={right}
     >
-      <ContentColumns columns={content}>{children}</ContentColumns>
+      {/* The fill lives inside the frame, not on the frame's own cells: a
+          background on the bordered box paints the corners square, and a
+          rounded frame that shows four square ears is not a rounded frame. */}
+      <box
+        flexDirection="column"
+        flexGrow={1}
+        backgroundColor={background}
+        paddingLeft={left}
+        paddingRight={right}
+      >
+        <ContentColumns columns={content}>{children}</ContentColumns>
+      </box>
     </box>
   );
 }

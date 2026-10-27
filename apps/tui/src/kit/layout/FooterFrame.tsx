@@ -190,12 +190,25 @@ export function FooterFrame({
           borderStyle="rounded"
           border={["left", "right", "bottom"]}
           borderColor={palette.border}
-          backgroundColor={palette.panel}
           paddingLeft={1}
           paddingRight={1}
         >
-          <box position="absolute" top={0} left={0} width={layout.columns} height={frameRows}>
-            <Surface rows={innerRows} columns={layout.columns} color={palette.panel} />
+          {/* The panel wash stops inside the frame: a Surface as wide as the
+              frame covers the right border, and the frame closes on one side
+              only. The border cells keep the page behind their glyphs, so the
+              rounded bottom corners carry no square panel ears. */}
+          <box
+            position="absolute"
+            top={0}
+            left={0}
+            width={Math.max(0, layout.columns - 2)}
+            height={frameRows}
+          >
+            <Surface
+              rows={innerRows}
+              columns={Math.max(0, layout.columns - 2)}
+              color={palette.panel}
+            />
           </box>
           <ContentColumns columns={layout.contentColumns}>{children}</ContentColumns>
         </box>

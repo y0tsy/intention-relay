@@ -2,7 +2,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { frameLines, painted } from "../testing/render";
+import { testRender } from "@opentui/react/test-utils";
+import { cellBackground, frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { Slot, SlotRows } from "../kit";
 import { Welcome } from "./Welcome";
@@ -71,6 +72,30 @@ test("a wide page offers three command cards", async () => {
   assert.match(text, /choose the palette/);
   assert.match(text, /03/);
   assert.match(text, /No session yet\. Type a prompt, or pick a command\./);
+});
+
+test("a command card keeps its wash inside the rounded border", async () => {
+  const setup = await testRender(
+    <SlotRows rows={30}>
+      <Slot>
+        <Welcome palette={DARK} />
+      </Slot>
+    </SlotRows>,
+    { width: 140, height: 30 },
+  );
+  await setup.renderOnce();
+  const frame = setup.captureSpans();
+  const text = frame.lines.map((line) => line.spans.map((span) => span.text).join(""));
+  const y = text.findIndex((line) => line.includes("╭"));
+  assert.ok(y >= 0, "a card frame is painted");
+  const x = text[y]?.indexOf("╭") ?? -1;
+  assert.ok(x > 0, "the card frame has a left corner");
+  const corner = cellBackground(frame, x, y);
+  const interior = cellBackground(frame, x + 1, y + 1);
+  const page = cellBackground(frame, 0, y);
+  assert.deepEqual(corner, page, "the corner cell stays on the page, not the card");
+  assert.notDeepEqual(interior, corner, "the card wash covers its inside");
+  await setup.dispose();
 });
 
 test("a region too short for the lockup keeps the orientation", async () => {

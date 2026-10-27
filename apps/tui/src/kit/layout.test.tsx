@@ -2,7 +2,8 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { frameLines, painted } from "../testing/render";
+import { testRender } from "@opentui/react/test-utils";
+import { cellBackground, frameLines, painted } from "../testing/render";
 import { DARK } from "../theme/palette";
 import { ContentColumns } from "./layout/context";
 import { Hero } from "./layout/Hero";
@@ -39,6 +40,25 @@ test("a pane hands its content the columns its chrome leaves", async () => {
   for (const line of painted_) {
     assert.ok(line.length <= 12, `"${line}" fits the pane`);
   }
+});
+
+test("a pane keeps its fill inside the rounded frame", async () => {
+  const setup = await testRender(
+    <box width={10} height={5} backgroundColor={DARK.canvas}>
+      <Pane borderColor={DARK.border} background={DARK.panel}>
+        <text>hi</text>
+      </Pane>
+    </box>,
+    { width: 10, height: 5 },
+  );
+  await setup.renderOnce();
+  const frame = setup.captureSpans();
+  const corner = cellBackground(frame, 0, 0);
+  const interior = cellBackground(frame, 1, 1);
+  const page = cellBackground(frame, 0, 4);
+  assert.deepEqual(corner, page, "the corner cell stays on the page, not the pane");
+  assert.notDeepEqual(interior, corner, "the fill covers the pane's inside");
+  await setup.dispose();
 });
 
 test("a pane too narrow for its frame shows its bare rows", async () => {

@@ -15,6 +15,7 @@ import type { Token, Tokens } from "marked";
 import { marked } from "marked";
 import { memo, type ReactNode, useMemo } from "react";
 import { useStaticColumns } from "./layout/context";
+import { Pane } from "./layout/Pane";
 import { Rule } from "./layout/Rule";
 import { Table, type TableColumn } from "./layout/Table";
 import { splitBlocks } from "./markdown-split";
@@ -180,20 +181,17 @@ function block(
       // A fence is one block of the answer, not a quote of it: the panel is the
       // same frame the tool blocks wear, filled with the page's raised wash.
       return (
-        <box
+        <Pane
           key={key}
-          flexDirection="column"
           paddingLeft={2}
           paddingRight={2}
-          borderStyle="rounded"
-          border
           borderColor={palette.border}
-          backgroundColor={palette.codeSurface}
+          background={palette.codeSurface}
         >
           <text wrapMode="word" fg={palette.markdownCode}>
             {code.text}
           </text>
-        </box>
+        </Pane>
       );
     }
     case "blockquote": {
